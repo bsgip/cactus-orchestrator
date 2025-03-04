@@ -1,0 +1,71 @@
+# ServiceAccount for pod creation permissions
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: pod-creator
+  namespace: default
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: pod-creator-role
+  namespace: default
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["create", "get", "list", "delete", "watch"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: pod-creator-binding
+  namespace: default
+subjects:
+  - kind: ServiceAccount
+    name: pod-creator
+    namespace: default
+roleRef:
+  kind: Role
+  name: pod-creator-role
+  apiGroup: rbac.authorization.k8s.io
+
+---
+# Management Pod
+apiVersion: v1
+kind: Pod
+metadata:
+  name: management
+  labels:
+    app: management
+spec:
+  serviceAccountName: pod-creator
+  containers:
+    - name: environment
+      image: ${ORCHESTRATOR_K8S_MANAGER_IMAGE}
+      ports:
+        - containerPort: 8080
+      imagePullPolicy: Always
+  volumes:
+    - name: host-volume
+      hostPath:
+        path: /home/work/git_repos/envoy-test-harness/environment-management/sql-files/
+        type: DirectoryOrCreate
+---
+# TODO: Still unsure how this will be exposed
+# Service to expose the management API
+apiVersion: v1
+kind: Service
+metadata:
+  name: management-service
+  namespace: default
+spec:
+  selector:
+    app: management
+  ports:
+    - protocol: TCP
+      port: 8080
+      targetPort: 8080
+      nodePort: 32080  # Expose on host
+  type: NodePort
