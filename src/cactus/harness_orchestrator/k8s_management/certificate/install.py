@@ -5,7 +5,7 @@ from cryptography import x509
 from cryptography.hazmat.backends import default_backend
 
 
-from csip_aus_client_test_harness.harness_orchestrator.settings import (
+from cactus.harness_orchestrator.settings import (
     TLS_SERVER_SECRET_NAME_FORMAT,
     main_settings,
     v1_core_api,

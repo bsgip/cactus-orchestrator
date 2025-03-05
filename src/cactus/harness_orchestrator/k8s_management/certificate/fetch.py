@@ -7,7 +7,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives.asymmetric import rsa, ed25519
 
-from csip_aus_client_test_harness.harness_orchestrator.settings import (
+from cactus.harness_orchestrator.settings import (
     main_settings,
     v1_core_api,
 )

@@ -1,12 +1,11 @@
-""" Resource construction via cloning of 'template' resources.
-"""
+"""Resource construction via cloning of 'template' resources."""
 
 import logging
 import asyncio
 from kubernetes import client
 from kubernetes.client import V1StatefulSet
 
-from csip_aus_client_test_harness.harness_orchestrator.settings import (
+from cactus.harness_orchestrator.settings import (
     main_settings,
     K8sManagerException,
     v1_app_api,

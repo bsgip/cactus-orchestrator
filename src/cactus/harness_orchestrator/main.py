@@ -2,18 +2,18 @@ from fastapi import FastAPI
 import shortuuid
 from cryptography.hazmat.primitives import serialization
 
-from csip_aus_client_test_harness.harness_orchestrator.k8s_management.certificate.create import generate_client_p12
-from csip_aus_client_test_harness.harness_orchestrator.k8s_management.certificate.fetch import (
+from cactus.harness_orchestrator.k8s_management.certificate.create import generate_client_p12
+from cactus.harness_orchestrator.k8s_management.certificate.fetch import (
     fetch_certificate_key_pair,
 )
-from csip_aus_client_test_harness.harness_orchestrator.schema import StartTestRequest, StartTestResponse
-from csip_aus_client_test_harness.harness_orchestrator.k8s_management.resource import (
+from cactus.harness_orchestrator.schema import StartTestRequest, StartTestResponse
+from cactus.harness_orchestrator.k8s_management.resource import (
     add_ingress_rule,
     clone_service,
     clone_statefulset,
     wait_for_pod,
 )
-from csip_aus_client_test_harness.harness_orchestrator.settings import (
+from cactus.harness_orchestrator.settings import (
     CLONED_RESOURCE_NAME_FORMAT,
     TEST_CLIENT_P12_PASSWORD,
     main_settings,

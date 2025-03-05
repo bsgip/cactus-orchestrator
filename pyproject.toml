@@ -8,7 +8,7 @@ where = ["src"]
 
 [project]
 dependencies = ["kubernetes", "cryptography", "fastapi", "shortuuid"]
-name = "csip-aus-client-test-harness.harness_orchestrator"
+name = "cactus.harness_orchestrator"
 dynamic = ["version"]
 
 [project.optional-dependencies]
@@ -45,4 +45,4 @@ warn_redundant_casts = true
 
 
 [tool.setuptools.dynamic]
-version = { attr = "csip_aus_client_test_harness.harness_orchestrator.__version__" }
+version = { attr = "cactus.harness_orchestrator.__version__" }
