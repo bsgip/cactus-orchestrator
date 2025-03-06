@@ -15,8 +15,10 @@ def generate_client_p12(
     ca_cert: x509.Certificate,
     client_common_name: str,
     p12_password: str,
-) -> bytes:
-    """Generate a signed cert for client in pcks#12 format."""
+) -> tuple[bytes, x509.Certificate]:
+    """Generate a signed cert for client in base64 encoded pcks#12 format.
+    Returns a tuple of (p12 bytes, x509.Certificate).
+    """
     # Generate a new client private key
     client_key: rsa.RSAPrivateKey = rsa.generate_private_key(public_exponent=65537, key_size=2048)
 
@@ -49,4 +51,4 @@ def generate_client_p12(
         encryption_algorithm=serialization.BestAvailableEncryption(p12_password.encode()),
     )
 
-    return pfx_data
+    return pfx_data, client_cert

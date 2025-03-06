@@ -20,3 +20,4 @@ TODO:
 - Consider creating everything from scratch i.e. not using templates.
 - Once use case is clear, consider a more modern+typed k8s client library.
 - We may no longer need StatefulSets and can rely on Pods directly.
+- Consider service mesh for transparent encryption of pod-to-pod comms.

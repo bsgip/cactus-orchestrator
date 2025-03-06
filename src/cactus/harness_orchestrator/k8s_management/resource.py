@@ -79,6 +79,7 @@ def is_container_ready(pod_name: str, container_name: str = "envoy-db") -> bool:
 
 
 async def wait_for_pod(pod_name: str, max_retries: int = 10, wait_interval: int = 5) -> None:
+    # TODO: this should wait for the harness_runner container of the pod to be live
     for attempt in range(max_retries):
         if await asyncio.to_thread(is_container_ready, pod_name):
             return

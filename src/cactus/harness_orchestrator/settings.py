@@ -2,12 +2,15 @@ from kubernetes import config, client
 from pydantic_settings import BaseSettings
 
 
+TEST_CLIENT_P12_PASSWORD = "abc"  # TODO: temporary
+POD_HARNESS_RUNNER_MANAGEMENT_PORT = 31231  # TODO
 POD_FQDN_FORMAT = "{pod_name}.{svc_name}.{namespace}.svc.cluster.local"
 TLS_SERVER_SECRET_NAME_FORMAT = "tls-server-{domain}"
 TLS_CA_SECRET_NAME_FORMAT = "tls-ca-{ingress_name}"
 CLONED_RESOURCE_NAME_FORMAT = "{resource_name}-{uuid}"
+# NOTE: follwing two must be kept similar
 DEFAULT_INGRESS_PATH_FORMAT = "/{svc_name}/(.*)"
-TEST_CLIENT_P12_PASSWORD = "abc"  # TODO: temporary
+TESTING_URL_FORMAT = "https://{testing_fqdn}/{svc_name}"
 
 
 def load_k8s_config():
@@ -42,10 +45,12 @@ class K8sManagerSettings(BaseSettings):
 
     # certificates
     tls_ca_certificate_generic_secret_name: str = (
-        "tls-ca-certificate"  # A Generic type secret. This is CA cert used by ingress
+        "tls-ca-certificate"  # A Generic type secret. This is CA cert used by ingress.
     )
     # A TLS type secret. This is the same CA cert along with its key, to be used for signing.
     tls_ca_tls_secret_name: str = "tls-ca-cert-key-pair"
+    # tls_server_tls_secret_name: str = "tls-server-secret-pair"
+    testing_fqdn: str  # NOTE: we could extract this from the server certs
 
 
 main_settings = K8sManagerSettings()

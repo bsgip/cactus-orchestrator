@@ -1,20 +1,17 @@
-from enum import StrEnum
-
 from pydantic import BaseModel, Secret
 
-
-class CsipAusTestProcedureCodes(StrEnum):
-    ALL01 = "ALL-01"
+from cactus.harness_orchestrator.runner_client import CsipAusTestProcedureCodes
 
 
-class StartTestRequest(BaseModel):
+class SpawnTestRequest(BaseModel):
     code: CsipAusTestProcedureCodes
 
 
 # TODO: what should response be?
-class StartTestResponse(BaseModel):
+class SpawnTestResponse(BaseModel):
     # artefact_download_url: str
     # token: Secret
-    ca_cert: bytes  # PEM encoded
-    client_p12: bytes  # PKCS#12 (PFX) format
+    ca_cert: str  # PEM encoded
+    client_p12: str  # PKCS#12 (PFX) format
     p12_password: Secret
+    test_url: str
