@@ -1,5 +1,5 @@
 import base64
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 import shortuuid
 from cryptography.hazmat.primitives import serialization
 
@@ -67,6 +67,9 @@ async def spawn_test(test: SpawnTestRequest) -> SpawnTestResponse:
         test_code=test.code,
         body=StartTestRequest(client_cert=client_cert.public_bytes(serialization.Encoding.PEM).decode("utf-8")),
     )
+
+    if not success:
+        raise HTTPException(404, "Failed to spawn test.")
 
     # finally, include new service in ingress rule
     add_ingress_rule(new_svc_name)

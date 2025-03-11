@@ -6,14 +6,10 @@ spec:
   selector:
     app: envoy
   ports:
-    - name: db
-      protocol: TCP
-      port: 5432
-      targetPort: 5432
-    - name: envoy
+    - name: runner
       protocol: TCP
       port: 80
-      targetPort: 8000
+      targetPort: 8080
 ---
 apiVersion: apps/v1
 kind: StatefulSet
@@ -38,12 +34,19 @@ spec:
         - name: certificates
           emptyDir: {}
       initContainers:
-      # TODO: harness runner is still WIP.
       - name: harness-runner
         restartPolicy: Always
         image: ${APP_HARNESS_RUNNER_IMAGE}
         ports:
-          - containerPort: 8888
+          - containerPort: 8080
+        env:
+          - name: APP_PORT
+            value: 8080
+          - name: SERVER_URL
+            value: "localhost:8000"
+          - name: DATABASE_URL
+            value: "postgresql+psycopg://test_user:test_pwd@localhost/test_db"
+
       containers:
         - name: rabbit-mq
           image: rabbitmq:3-management

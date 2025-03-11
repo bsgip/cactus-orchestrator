@@ -1,9 +1,12 @@
-FROM python:3.11
+FROM python:3.12
 
-RUN pip install fastapi sqlalchemy psycopg2 kubernetes uvicorn shortuuid
 
-ENV hi=1011
-COPY ./manage_api.py /
-COPY ./sql-files/migrate.sql /
+# Copy src
+COPY ./src /app/src
+COPY ./pyproject.toml /app/pyproject.toml
 
-CMD ["uvicorn", "--host", "0.0.0.0", "--port", "8080", "manage_api:app"]
+# Install deps
+RUN pip install --no-cache-dir /app
+
+# Entrypoint
+CMD ["uvicorn", "--host", "0.0.0.0", "--port", "8080", "--workers", "1", "harness_orchestrator.main:app"]
