@@ -1,12 +1,12 @@
 FROM python:3.12
-
+WORKDIR /app/
 
 # Copy src
 COPY ./src /app/src
 COPY ./pyproject.toml /app/pyproject.toml
 
 # Install deps
-RUN pip install --no-cache-dir /app
+RUN pip install --no-cache-dir /app && pip install --no-cache-dir uvicorn
 
 # Entrypoint
-CMD ["uvicorn", "--host", "0.0.0.0", "--port", "8080", "--workers", "1", "harness_orchestrator.main:app"]
+CMD ["uvicorn", "--host", "0.0.0.0", "--port", "8080", "--workers", "1", "cactus.harness_orchestrator.main:app"]

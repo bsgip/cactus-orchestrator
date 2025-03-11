@@ -7,7 +7,7 @@ build-backend = "setuptools.build_meta"
 where = ["src"]
 
 [project]
-dependencies = ["kubernetes", "cryptography", "fastapi", "shortuuid"]
+dependencies = ["kubernetes", "cryptography", "fastapi", "shortuuid", "pydantic-settings", "httpx"]
 name = "cactus.harness_orchestrator"
 dynamic = ["version"]
 

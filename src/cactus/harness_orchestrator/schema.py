@@ -13,5 +13,5 @@ class SpawnTestResponse(BaseModel):
     # token: Secret
     ca_cert: str  # PEM encoded
     client_p12: str  # PKCS#12 (PFX) format
-    p12_password: Secret
+    p12_password: Secret[str]
     test_url: str
