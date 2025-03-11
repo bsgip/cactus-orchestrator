@@ -1,5 +1,9 @@
-FROM python:3.12
+FROM python:3.12-slim
 WORKDIR /app/
+
+# python conf
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
 
 # Copy src
 COPY ./src /app/src
