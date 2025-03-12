@@ -1,4 +1,5 @@
 import base64
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 import shortuuid
 from cryptography.hazmat.primitives import serialization
@@ -41,12 +42,12 @@ async def spawn_test(test: SpawnTestRequest) -> SpawnTestResponse:
     """
     # new resource ids
     uuid: str = shortuuid.uuid().lower()  # This uuid is referenced in all new resource ids
-    new_svc_name = CLONED_RESOURCE_NAME_FORMAT.format(resource_id=main_settings.template_service_name, uuid=uuid)
-    new_app_label = CLONED_RESOURCE_NAME_FORMAT.format(resource_id=main_settings.template_app_name, uuid=uuid)
-    new_statefulset_name = CLONED_RESOURCE_NAME_FORMAT.format(resource_id=main_settings.template_app_name, uuid=uuid)
+    new_svc_name = CLONED_RESOURCE_NAME_FORMAT.format(resource_name=main_settings.template_service_name, uuid=uuid)
+    new_app_label = CLONED_RESOURCE_NAME_FORMAT.format(resource_name=main_settings.template_app_name, uuid=uuid)
+    new_statefulset_name = CLONED_RESOURCE_NAME_FORMAT.format(resource_name=main_settings.template_app_name, uuid=uuid)
 
     # duplicate resources
-    clone_service(main_settings.template_statefulset_name, new_svc_name, new_app_label)
+    clone_service(new_svc_name, new_app_label)
     pod_name = clone_statefulset(new_statefulset_name, new_svc_name, new_app_label)
     pod_fqdn = POD_FQDN_FORMAT.format(
         pod_name=pod_name, svc_name=new_svc_name, namespace=main_settings.testing_namespace
@@ -58,7 +59,7 @@ async def spawn_test(test: SpawnTestRequest) -> SpawnTestResponse:
     # create client certificate
     ca_cert, ca_key = fetch_certificate_key_pair(main_settings.tls_ca_tls_secret_name)
     client_p12, client_cert = generate_client_p12(
-        ca_cert=ca_key, ca_key=ca_key, client_common_name=uuid, p12_password=TEST_CLIENT_P12_PASSWORD
+        ca_cert=ca_cert, ca_key=ca_key, client_common_name=uuid, p12_password=TEST_CLIENT_P12_PASSWORD
     )
 
     # inject initial state

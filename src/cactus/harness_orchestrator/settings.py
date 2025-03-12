@@ -24,13 +24,6 @@ def load_k8s_config():
 class K8sManagerException(Exception): ...  # noqa: E701
 
 
-#  Kubernetes API clients
-v1_core_api = client.CoreV1Api()
-v1_app_api = client.AppsV1Api()
-v1_net_api = client.NetworkingV1Api()
-api_client = client.ApiClient()
-
-
 class K8sManagerSettings(BaseSettings):
     # management
     management_namespace: str = "management"
@@ -54,3 +47,11 @@ class K8sManagerSettings(BaseSettings):
 
 
 main_settings = K8sManagerSettings()
+
+
+#  Kubernetes API clients
+load_k8s_config()  # NOTE: This needs to be called before instantiating any of the k8s clients
+v1_core_api = client.CoreV1Api()
+v1_app_api = client.AppsV1Api()
+v1_net_api = client.NetworkingV1Api()
+api_client = client.ApiClient()

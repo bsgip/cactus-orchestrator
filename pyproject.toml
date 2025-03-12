@@ -7,7 +7,14 @@ build-backend = "setuptools.build_meta"
 where = ["src"]
 
 [project]
-dependencies = ["kubernetes", "cryptography", "fastapi", "shortuuid", "pydantic-settings", "httpx"]
+dependencies = [
+    "kubernetes",
+    "cryptography",
+    "fastapi",
+    "shortuuid",
+    "pydantic-settings",
+    "httpx",
+]
 name = "cactus.harness_orchestrator"
 dynamic = ["version"]
 
@@ -21,7 +28,7 @@ dev = [
     "black",
     "coverage",
 ]
-test = ["pytest"]
+test = ["pytest", "pytest-env"]
 
 [tool.black]
 line-length = 120
@@ -29,7 +36,7 @@ line-length = 120
 [tool.pytest.ini_options]
 pythonpath = ["src/"]
 testpaths = "tests"
-
+env = ["D:TESTING_FQDN=testfqdn"]
 
 [tool.bandit]
 exclude_dirs = ["tests"]
