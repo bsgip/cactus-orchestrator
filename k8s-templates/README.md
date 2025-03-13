@@ -17,6 +17,8 @@ TODO
 microk8s enable ingress
 
 microk8s enable dns
+
+microk8s enable metallb # Set a single unused static IP on request TODO: provide more details
 ```
 3. We make two namespaces (1) for test pods (2) for management pods:
 ```

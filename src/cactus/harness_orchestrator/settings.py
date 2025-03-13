@@ -3,8 +3,8 @@ from pydantic_settings import BaseSettings
 
 
 TEST_CLIENT_P12_PASSWORD = "abc"  # TODO: temporary
-POD_HARNESS_RUNNER_MANAGEMENT_PORT = 31231  # TODO
-POD_FQDN_FORMAT = "{pod_name}.{svc_name}.{namespace}.svc.cluster.local"
+POD_FQDN_FORMAT = "{pod_name}.{svc_name}.{namespace}.svc.cluster.local"  # TODO: use svc instead.
+POD_HARNESS_RUNNER_MANAGEMENT_PORT = 8080  # TODO: tbd
 TLS_SERVER_SECRET_NAME_FORMAT = "tls-server-{domain}"
 TLS_CA_SECRET_NAME_FORMAT = "tls-ca-{ingress_name}"
 CLONED_RESOURCE_NAME_FORMAT = "{resource_name}-{uuid}"
