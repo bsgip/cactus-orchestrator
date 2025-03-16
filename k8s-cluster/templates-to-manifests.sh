@@ -21,29 +21,25 @@ if [ -n "$ENV_FILE" ] && [ -f "$ENV_FILE" ]; then
 fi
 
 # Copy directory structure
-find $SRC_DIR/* -type d | xargs mkdir -p
-rsync -a -f '+ */' -f '- *' "$SRC_DIR/" "$DEST_DIR/"
+cp -ra $SRC_DIR $DEST_DIR
 
 # Find and process files
-find "$SRC_DIR" -name "*.yaml" -type f | while read -r file; do
-    dest_file="$DEST_DIR${file#$SRC_DIR}"
-    cp "$file" "$dest_file"
-
+find "$DEST_DIR" -name "*.yaml" -type f | while read -r file; do
     # Warn about any unset variables
-    missing_vars=$(grep -o '\${[^}]*}' "$dest_file" | tr -d '${}' | sort -u | while read -r var; do
+    missing_vars=$(grep -o '\${[^}]*}' "$file" | tr -d '${}' | sort -u | while read -r var; do
         if [ -z "$(printenv "$var")" ]; then
             echo "$var"
         fi
     done)
 
     if [ -n "$missing_vars" ]; then
-        echo "Warning: The following variables in $dest_file are unset and will not be substituted:"
+        echo "Warning: The following variables in $file are unset and will not be substituted:"
         echo "$missing_vars"
     fi
 
     # Replace environment variables
-    envsubst < "$dest_file" > "$dest_file.tmp"
-    mv "$dest_file.tmp" "$dest_file"
+    envsubst < "$file" > "$file.tmp"
+    mv "$file.tmp" "$file"
 done
 
 echo "Environment variable substitution complete in ${DEST_DIR}."
