@@ -44,7 +44,9 @@ async def spawn_test(test: SpawnTestRequest) -> SpawnTestResponse:
     uuid: str = shortuuid.uuid().lower()  # This uuid is referenced in all new resource ids
     new_svc_name = CLONED_RESOURCE_NAME_FORMAT.format(resource_name=main_settings.template_service_name, uuid=uuid)
     new_app_label = CLONED_RESOURCE_NAME_FORMAT.format(resource_name=main_settings.template_app_name, uuid=uuid)
-    new_statefulset_name = CLONED_RESOURCE_NAME_FORMAT.format(resource_name=main_settings.template_app_name, uuid=uuid)
+    new_statefulset_name = CLONED_RESOURCE_NAME_FORMAT.format(
+        resource_name=main_settings.template_statefulset_name, uuid=uuid
+    )
 
     # duplicate resources
     clone_service(new_svc_name, new_app_label)

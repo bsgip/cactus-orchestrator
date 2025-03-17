@@ -24,7 +24,6 @@ spec:
   minReadySeconds: 10
   template:
     metadata:
-      # name: envoy-pod
       labels:
         app: envoy
     spec:

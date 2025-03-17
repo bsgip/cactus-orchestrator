@@ -29,8 +29,8 @@ class K8sManagerSettings(BaseSettings):
     management_namespace: str = "management"
 
     # testing
-    testing_namespace: str = "test_pods"
-    testing_ingress_name: str = "test-pods-ingress"
+    testing_namespace: str = "testing"
+    testing_ingress_name: str = "testing-ingress"
     envoy_service_port: int = 80
     template_service_name: str = "envoy-svc"
     template_app_name: str = "envoy"
