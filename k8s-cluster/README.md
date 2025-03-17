@@ -19,7 +19,7 @@ complete -o default -F __start_kubectl k8s
 ```
 microk8s enable ingress dns
 ```
-6. Enable the load balancer addon: `microk8s enable metallb`. It will request an ip-range for the load balancer, we should only need one. Give it the free static IP you want to expose for as for your FQDN.
+6. Enable the load balancer addon: `microk8s enable metallb`. It will ask for an IP range for the load balancer - since we only need one, assign a free static IP that you want to expose for your FQDN.
 
 ## (2) Preparing k8s manifests
 microk8s/kubernetes has no out-of-the-box utility for configurable yaml manifests. We instead use a custom script which relies on `envsubst` to substitute variables.
@@ -35,7 +35,7 @@ TESTING_FQDN='<subdomain>.<domain>.<tld>'
 USER_FQDN='<subdomain>.<domain>.<tld>'
 ```
 
-2. The `templates-to-manifests.sh' script is provided to copy the deploy-template directory and apply environment variables to the k8s manifests templates. Script usage:
+2. The `templates-to-manifests.sh` script copies the `deploy-template` directory and applies environment variables to the Kubernetes manifest templates. Usage:
 ```
 ./templates-to-manfests.sh ./deploy-template /home/k8suser/k8s-cluster/deploy/ /home/k8suser/k8s-cluster/.env
 ```
@@ -48,19 +48,18 @@ USER_FQDN='<subdomain>.<domain>.<tld>'
 microk8s kubectl create namespace testing
 microk8s kubectl create namespace management
 ```
-3. Define management service account in management namespace. This has permissions to create and destroy resources, will be used my are
-harness-orchestrator/management pods.
+3. Create a management service account in the `management` namespace. This account has permissions to create and destroy resources and is used by the harness-orchestrator/management pods.
 ```
 microk8s apply -f management-service-account.yaml -n management
 ```
 4. Add private image registry to each namespace (kubectl approach):
-(1) testing namespace
+(1) `testing` namespace:
 ```
 microk8s kubectl create secret docker-registry acr-token --docker-server=<somereg.io> --docker-username="<token-name>" --docker-password="<token-pwd>" --namespace testing
 
 microk8s kubectl patch serviceaccount default -p '{"imagePullSecrets": [{"name": "acr-token"}]}' --namespace <some-namespace>
 ```
-(2) management namespace. NOTE: difference is service account name
+(2) `management` namespace (NOTE: The only difference here is the service account name.):
 ```
 microk8s kubectl create secret docker-registry acr-token --docker-server=<somereg.io> --docker-username="<token-name>" --docker-password="<token-pwd>" --namespace management
 
@@ -73,7 +72,9 @@ microk8s kubectl apply -f ./ingress/testing-ingress.yml -n testing
 # TODO: microk8s kubectl apply -f ./ingress/user-interface-ingress.yml -n ?
 ```
 
-6. Add custom CA secrets. The CA needs two secrets (1) for use by Ingress which only holdes the CA cert (2) is the CA cert and key, used for signing client certs.
+6. Add custom CA secrets in the `testing` namespace. We need needs two secrets:
+ 1. For Ingress (contains the CA cert only).
+ 2. For signing client certificates (contains both the CA certificate and key).
 ```
 k8s create secret generic -n testing tls-ca-certificate --from-file=ca.crt=<path-to-ca.crt>
 k8s create secret tls tls-ca-cert-key-pair -n testing --cert <path-to-ca.crt> --key <path-to-unencrypted-ca.key>
@@ -92,12 +93,7 @@ ingress/install-server-certs.sh --cert </path/to/cert.crt> --key </path/to/key.k
 microk8s kubectl apply -f harness-orchestrator -n management
 ```
 
-2. We currently create 'template' resources that represent the envoy test environments. These are cloned on request for a client test environment to be created. Lets create these template resources:
+2. Currently, we create 'template' resources that represent a complete envoy test environments. These are cloned when a client requests a new test environment. Create the template resources with:
 ```
 microk8s kubectl apply -f envoy-environment -n testing
 ```
-
-
-
-
-
