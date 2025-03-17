@@ -24,7 +24,6 @@ spec:
   minReadySeconds: 10
   template:
     metadata:
-      # name: envoy-pod
       labels:
         app: envoy
     spec:
@@ -40,8 +39,8 @@ spec:
         ports:
           - containerPort: 8080
         env:
-          - name: APP_PORT
-            value: 8080
+          # - name: APP_PORT # TODO: harness-runner needs to coerce this to int.
+          #   value: "8080"
           - name: SERVER_URL
             value: "localhost:8000"
           - name: DATABASE_URL

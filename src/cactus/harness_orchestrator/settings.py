@@ -3,8 +3,8 @@ from pydantic_settings import BaseSettings
 
 
 TEST_CLIENT_P12_PASSWORD = "abc"  # TODO: temporary
-POD_HARNESS_RUNNER_MANAGEMENT_PORT = 31231  # TODO
-POD_FQDN_FORMAT = "{pod_name}.{svc_name}.{namespace}.svc.cluster.local"
+POD_FQDN_FORMAT = "{pod_name}.{svc_name}.{namespace}.svc.cluster.local"  # TODO: use svc instead.
+POD_HARNESS_RUNNER_MANAGEMENT_PORT = 8080  # TODO: tbd
 TLS_SERVER_SECRET_NAME_FORMAT = "tls-server-{domain}"
 TLS_CA_SECRET_NAME_FORMAT = "tls-ca-{ingress_name}"
 CLONED_RESOURCE_NAME_FORMAT = "{resource_name}-{uuid}"
@@ -24,20 +24,13 @@ def load_k8s_config():
 class K8sManagerException(Exception): ...  # noqa: E701
 
 
-#  Kubernetes API clients
-v1_core_api = client.CoreV1Api()
-v1_app_api = client.AppsV1Api()
-v1_net_api = client.NetworkingV1Api()
-api_client = client.ApiClient()
-
-
 class K8sManagerSettings(BaseSettings):
     # management
     management_namespace: str = "management"
 
     # testing
-    testing_namespace: str = "test_pods"
-    testing_ingress_name: str = "test-pods-ingress"
+    testing_namespace: str = "testing"
+    testing_ingress_name: str = "testing-ingress"
     envoy_service_port: int = 80
     template_service_name: str = "envoy-svc"
     template_app_name: str = "envoy"
@@ -54,3 +47,11 @@ class K8sManagerSettings(BaseSettings):
 
 
 main_settings = K8sManagerSettings()
+
+
+#  Kubernetes API clients
+load_k8s_config()  # NOTE: This needs to be called before instantiating any of the k8s clients
+v1_core_api = client.CoreV1Api()
+v1_app_api = client.AppsV1Api()
+v1_net_api = client.NetworkingV1Api()
+api_client = client.ApiClient()

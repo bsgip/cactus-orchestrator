@@ -26,12 +26,15 @@ class HarnessRunnerAsyncClient:
     async def post_start_test(self, test_code: CsipAusTestProcedureCodes, body: StartTestRequest) -> bool:
         # TODO: logging, retries, exception handling
         try:
-            _ = await httpx.post(
-                self.url + "/start",
-                json=body.model_dump_json(),
-                params=httpx.QueryParams({"test": test_code.value, "lfdi": generate_lfdi_from_pem(body.client_cert)}),
-                timeout=30,
-            )
+            async with httpx.AsyncClient() as client:
+                _ = await client.post(
+                    self.url.join("/start"),
+                    json=body.model_dump_json(),
+                    params=httpx.QueryParams(
+                        {"test": test_code.value, "lfdi": generate_lfdi_from_pem(body.client_cert)}
+                    ),
+                    timeout=30,
+                )
         except httpx.TimeoutException:
             return False
         return True

@@ -57,7 +57,7 @@ def clone_statefulset(new_set_name: str, new_service_name: str, new_app_label: s
 
     v1_app_api.create_namespaced_stateful_set(
         body=new_set,
-        namespace=main_settings.testing_namespacemain_settings.testing_namespace,
+        namespace=main_settings.testing_namespace,
     )
 
     logger.info(f"New StatefulSet {new_set_name} created successfully!")
