@@ -1,3 +1,4 @@
+import inspect
 from unittest.mock import MagicMock
 from datetime import datetime, timedelta, timezone
 import base64
@@ -47,3 +48,17 @@ def mock_k8s_tls_secret(ca_cert_key_pair):
         ).decode(),
     }
     return secret_mock
+
+
+@pytest.fixture
+def generate_k8s_class_instance():
+    def func(t: type, **kwargs):
+        def get_init_params(t):
+            for i in inspect.signature(t.__init__).parameters.keys():
+                if i != "self":
+                    yield i
+
+        members = {k: MagicMock() for k in get_init_params(t)} | kwargs
+        return t(**members)
+
+    return func

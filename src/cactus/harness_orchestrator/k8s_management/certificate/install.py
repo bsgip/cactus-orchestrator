@@ -28,7 +28,8 @@ def extract_domain_from_cert(cert_data: bytes) -> str:
         pass  # SAN not found, fallback to CN
 
     # Fallback to CN
-    return cert.subject.get_attributes_for_oid(x509.NameOID.COMMON_NAME)[0].value
+    attr = cert.subject.get_attributes_for_oid(x509.NameOID.COMMON_NAME)[0].value
+    return attr.decode() if isinstance(attr, bytes) else attr
 
 
 def create_or_update_k8s_tls_secret(
@@ -57,7 +58,7 @@ def create_or_update_k8s_tls_secret(
             raise RuntimeError(f"Failed to create/update TLS secret: {exc}")
 
 
-def enable_mtls_on_ingress(*, ingress_name: str, ca_secret_name: str, namespace: str):
+def enable_mtls_on_ingress(*, ingress_name: str, ca_secret_name: str, namespace: str) -> None:
     """Patch an Ingress resource to enable client certificate validation using CA cert."""
     # Fetch existing Ingress
     ingress = v1_net_api.read_namespaced_ingress(ingress_name, namespace)
@@ -80,7 +81,9 @@ def enable_mtls_on_ingress(*, ingress_name: str, ca_secret_name: str, namespace:
     print(f"Ingress '{ingress_name}' updated with mTLS settings.")
 
 
-def install_server_certificate(cert_data: bytes, key_data: bytes, ingress_name: str, namespace: str | None = None):
+def install_server_certificate(
+    cert_data: bytes, key_data: bytes, ingress_name: str, namespace: str | None = None
+) -> None:
     """Creates a TLS secret and updates the Ingress with it."""
     namespace = namespace or main_settings.testing_namespace
 
