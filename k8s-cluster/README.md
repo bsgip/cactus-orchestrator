@@ -2,6 +2,7 @@
 TODO:
 - Anything related to the Harness UI is yet to be decided
 - Better namespace names
+- Namespace for templates + guard against delete
 
 ## (1) Cluster creation
 Getting started (Ubuntu 24.04):
