@@ -5,13 +5,14 @@ from cryptography.x509.oid import NameOID
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives.serialization import pkcs12
+from cryptography.hazmat.primitives.asymmetric.types import CertificateIssuerPrivateKeyTypes
 
 
 VALIDITY_DAYS = 10
 
 
 def generate_client_p12(
-    ca_key: rsa.RSAPrivateKey,
+    ca_key: CertificateIssuerPrivateKeyTypes,
     ca_cert: x509.Certificate,
     client_common_name: str,
     p12_password: str,

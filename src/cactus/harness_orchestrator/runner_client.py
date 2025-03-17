@@ -1,4 +1,5 @@
 # TODO: this is currently just a stub / example
+import logging
 import base64
 from enum import StrEnum
 
@@ -6,6 +7,12 @@ import hashlib
 import urllib
 import httpx
 from pydantic import BaseModel
+
+
+logger = logging.getLogger(__name__)
+
+
+class RunnerClientException(Exception): ...
 
 
 class CsipAusTestProcedureCodes(StrEnum):
@@ -23,9 +30,9 @@ class HarnessRunnerAsyncClient:
     def __init__(self, pod_fqdn: str, runner_port: int):
         self.url = httpx.URL("//" + pod_fqdn.lstrip("/"), scheme="http", port=runner_port)
 
-    async def post_start_test(self, test_code: CsipAusTestProcedureCodes, body: StartTestRequest) -> bool:
-        # TODO: logging, retries, exception handling
+    async def post_start_test(self, test_code: CsipAusTestProcedureCodes, body: StartTestRequest) -> None:
         try:
+            # TODO: logging, retries, exception handling
             async with httpx.AsyncClient() as client:
                 _ = await client.post(
                     self.url.join("/start"),
@@ -35,9 +42,13 @@ class HarnessRunnerAsyncClient:
                     ),
                     timeout=30,
                 )
-        except httpx.TimeoutException:
-            return False
-        return True
+        except httpx.TimeoutException as exc:
+            logger.debug(exc)
+            raise RunnerClientException("Unexpected failed while starting test.")
+
+    async def post_finalize_test(self) -> None:
+        # TODO:  None
+        ...
 
 
 def generate_lfdi_from_pem(cert_pem: str) -> str:

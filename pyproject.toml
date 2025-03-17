@@ -27,6 +27,7 @@ dev = [
     "types-tzlocal",
     "black",
     "coverage",
+    "kubernetes-stubs",
 ]
 test = ["pytest", "pytest-env"]
 
