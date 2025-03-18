@@ -54,13 +54,14 @@ microk8s kubectl create namespace management
 microk8s apply -f management-service-account.yaml -n management
 ```
 4. Add private image registry to each namespace (kubectl approach):
-(1) `testing` namespace:
+
+(a) `testing` namespace:
 ```
 microk8s kubectl create secret docker-registry acr-token --docker-server=<somereg.io> --docker-username="<token-name>" --docker-password="<token-pwd>" --namespace testing
 
 microk8s kubectl patch serviceaccount default -p '{"imagePullSecrets": [{"name": "acr-token"}]}' --namespace <some-namespace>
 ```
-(2) `management` namespace (NOTE: The only difference here is the service account name.):
+(b) `management` namespace (NOTE: The only difference here is the service account name.):
 ```
 microk8s kubectl create secret docker-registry acr-token --docker-server=<somereg.io> --docker-username="<token-name>" --docker-password="<token-pwd>" --namespace management
 
@@ -89,6 +90,11 @@ ingress/install-server-certs.sh --cert </path/to/cert.crt> --key </path/to/key.k
 # TODO: for user-interface ingress
 ```
 ## K8s resource setup (./app-setup)
+0. Create app secrets.
+```
+# This secret is the connection string the harness-orchestrator uses to connect to the db. NOTE: Alembic scripts are provided for running migrations under project-root/alembic/.
+kubectl create secret generic orchestrator-secrets --from-literal=ORCHESTRATOR_DATABASE_URL='<python-sqlalchemy-connstr>'
+```
 1. We create the harness-orchestrator service. This manages the on-demand creation and deletion of the full envoy 'test environment' stack.
 ```
 microk8s kubectl apply -f harness-orchestrator -n management

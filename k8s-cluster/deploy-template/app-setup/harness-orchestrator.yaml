@@ -16,6 +16,11 @@ spec:
       env:
         - name: TESTING_FQDN
           value: ${TESTING_FQDN}
+        - name: ORCHESTRATOR_DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: orchestrator-db-secret
+              key: ORCHESTRATOR_DATABASE_URL
 ---
 # TODO: Still unsure how this will be exposed
 # Service to expose the management API

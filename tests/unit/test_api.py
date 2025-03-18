@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 
 from cactus.harness_orchestrator.main import app
 from cactus.harness_orchestrator.schema import SpawnTestRequest, SpawnTestResponse, CsipAusTestProcedureCodes
-from cactus.harness_orchestrator.settings import K8sManagerException
+from cactus.harness_orchestrator.settings import HarnessOrchestratorException
 
 
 @pytest.fixture
@@ -59,7 +59,7 @@ def test_post_spawn_test_fails(client):
     # Arrange
     from cactus.harness_orchestrator.main import clone_statefulset, teardown_teststack
 
-    clone_statefulset.side_effect = K8sManagerException("fail")
+    clone_statefulset.side_effect = HarnessOrchestratorException("fail")
 
     # Act
     req = SpawnTestRequest(code=CsipAusTestProcedureCodes.ALL01)

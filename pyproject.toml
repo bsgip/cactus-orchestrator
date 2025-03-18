@@ -14,6 +14,8 @@ dependencies = [
     "shortuuid",
     "pydantic-settings",
     "httpx",
+    "python-jose[cryptography]",
+    "fastapi-cache2",
 ]
 name = "cactus.harness_orchestrator"
 dynamic = ["version"]
@@ -28,6 +30,7 @@ dev = [
     "black",
     "coverage",
     "kubernetes-stubs",
+    "types-python-jose",
 ]
 test = ["pytest", "pytest-env"]
 
@@ -37,7 +40,13 @@ line-length = 120
 [tool.pytest.ini_options]
 pythonpath = ["src/"]
 testpaths = "tests"
-env = ["D:TESTING_FQDN=testfqdn"]
+env = [
+    "D:TESTING_FQDN=testfqdn",
+    "D:ORCHESTRATOR_DATABASE_URL=postgresql://fake:fake@fake/fake",
+    "D:JWTAUTH_JWKS_URL=https://jwks.com/jwks",
+    "D:JWTAUTH_ISSUER=https://issuer.com",
+    "D:JWTAUTH_AUDIENCE=cactus-orchestrator",
+]
 
 [tool.bandit]
 exclude_dirs = ["tests"]

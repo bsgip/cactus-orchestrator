@@ -1,6 +1,6 @@
 from kubernetes import config, client
 from pydantic_settings import BaseSettings
-from pydantic import SecretStr
+from pydantic import SecretStr, HttpUrl, PostgresDsn
 
 TEST_CLIENT_P12_PASSWORD = SecretStr("abc")  # TODO: temporary
 POD_FQDN_FORMAT = "{pod_name}.{svc_name}.{namespace}.svc.cluster.local"  # TODO: use svc instead.
@@ -24,12 +24,13 @@ def load_k8s_config() -> None:
         config.load_kube_config()  # If running locally
 
 
-class K8sManagerException(Exception): ...  # noqa: E701
+class HarnessOrchestratorException(Exception): ...  # noqa: E701
 
 
-class K8sManagerSettings(BaseSettings):
+class HarnessOrchestratorSettings(BaseSettings):
     # management
     management_namespace: str = "management"
+    orchestrator_database_url: PostgresDsn
 
     # testing
     testing_namespace: str = "testing"
@@ -49,7 +50,13 @@ class K8sManagerSettings(BaseSettings):
     testing_fqdn: str  # NOTE: we could extract this from the server certs
 
 
-main_settings = K8sManagerSettings()
+class JWTAuthSettings(BaseSettings):
+    jwtauth_jwks_url: HttpUrl
+    jwtauth_issuer: HttpUrl
+    jwtauth_audience: str
+
+
+main_settings = HarnessOrchestratorSettings()
 
 
 #  Kubernetes API clients

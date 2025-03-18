@@ -3,7 +3,7 @@ from unittest.mock import patch
 from kubernetes.client.exceptions import ApiException
 
 from cactus.harness_orchestrator.k8s_management.resource import async_k8s_api_retry, get_resource_names
-from cactus.harness_orchestrator.settings import K8sManagerException
+from cactus.harness_orchestrator.settings import HarnessOrchestratorException
 
 
 @pytest.mark.asyncio
@@ -57,7 +57,7 @@ async def test_async_k8s_api_retry_exceeds_retries():
     async def sample_function():
         raise ApiException(status=500, reason="Internal Server Error")
 
-    with pytest.raises(K8sManagerException, match="Failed action: sample_function"):
+    with pytest.raises(HarnessOrchestratorException, match="Failed action: sample_function"):
         await sample_function()
 
 
