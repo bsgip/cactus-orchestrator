@@ -16,7 +16,7 @@ def client() -> Generator[TestClient, None, None]:
 
 
 @patch.multiple(
-    "cactus.harness_orchestrator.main",
+    "cactus.harness_orchestrator.api.user",
     HarnessRunnerAsyncClient=Mock(),
     clone_statefulset=AsyncMock(),
     fetch_certificate_key_pair=Mock(),
@@ -27,7 +27,11 @@ def client() -> Generator[TestClient, None, None]:
 def test_post_spawn_test_basic(client, ca_cert_key_pair):
     """Just a simple test, with all k8s functions stubbed, to catch anything silly in the handler"""
     # Arrange
-    from cactus.harness_orchestrator.main import HarnessRunnerAsyncClient, clone_statefulset, fetch_certificate_key_pair
+    from cactus.harness_orchestrator.api.user import (
+        HarnessRunnerAsyncClient,
+        clone_statefulset,
+        fetch_certificate_key_pair,
+    )
 
     HarnessRunnerAsyncClient().post_start_test = AsyncMock()
     clone_statefulset.return_value = "pod_name"
@@ -45,7 +49,7 @@ def test_post_spawn_test_basic(client, ca_cert_key_pair):
 
 
 @patch.multiple(
-    "cactus.harness_orchestrator.main",
+    "cactus.harness_orchestrator.api.user",
     HarnessRunnerAsyncClient=Mock(),
     clone_statefulset=AsyncMock(),
     fetch_certificate_key_pair=Mock(),
@@ -57,7 +61,7 @@ def test_post_spawn_test_basic(client, ca_cert_key_pair):
 def test_post_spawn_test_fails(client):
     """Basic test to check teardown on failure"""
     # Arrange
-    from cactus.harness_orchestrator.main import clone_statefulset, teardown_teststack
+    from cactus.harness_orchestrator.api.user import clone_statefulset, teardown_teststack
 
     clone_statefulset.side_effect = HarnessOrchestratorException("fail")
 
@@ -71,7 +75,7 @@ def test_post_spawn_test_fails(client):
 
 
 @patch.multiple(
-    "cactus.harness_orchestrator.main",
+    "cactus.harness_orchestrator.api.user",
     HarnessRunnerAsyncClient=Mock(),
     delete_statefulset=AsyncMock(),
     delete_service=AsyncMock(),
@@ -80,7 +84,7 @@ def test_post_spawn_test_fails(client):
 def test_post_finalize_basic(client):
     """Just a simple test, with all k8s functions stubbed, to catch anything silly in the handler"""
     # Arrange
-    from cactus.harness_orchestrator.main import HarnessRunnerAsyncClient
+    from cactus.harness_orchestrator.api.user import HarnessRunnerAsyncClient
 
     HarnessRunnerAsyncClient().post_finalize_test = AsyncMock()
 

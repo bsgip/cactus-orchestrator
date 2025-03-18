@@ -114,7 +114,7 @@ async def test_verify_jwt(mock_httpx_client_cls, jwt_validator, jwks_response_st
     jwt_validator._settings.jwtauth_issuer = "auth-server"
 
     # Act
-    res = await jwt_validator.verify_jwt(token)
+    res = await jwt_validator._verify_jwt(token)
 
     # Assert
     assert isinstance(res, JWTClaims)
