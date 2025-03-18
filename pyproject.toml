@@ -16,6 +16,7 @@ dependencies = [
     "httpx",
     "python-jose[cryptography]",
     "fastapi-cache2",
+    "fastapi-async-sqlalchemy"
 ]
 name = "cactus.harness_orchestrator"
 dynamic = ["version"]

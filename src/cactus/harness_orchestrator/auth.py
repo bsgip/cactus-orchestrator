@@ -13,6 +13,7 @@ import httpx
 from jose import jwt
 from cryptography.hazmat.primitives import serialization
 
+from cactus.harness_orchestrator.schema import UserContext
 from cactus.harness_orchestrator.settings import JWTAuthSettings
 
 security = HTTPBearer()
@@ -125,10 +126,11 @@ class JWTValidator:
 
         async def _verify_and_check_scopes(
             auth: HTTPAuthorizationCredentials = Security(security),
-        ) -> JWTClaims:
+        ) -> UserContext:
             token = auth.credentials
             jwt_claims = await self._verify_jwt(token)
-            return self._check_scopes(required_scopes, jwt_claims)
+            validated = self._check_scopes(required_scopes, jwt_claims)
+            return UserContext(subject_id=validated.sub, issuer_id=validated.iss)
 
         return _verify_and_check_scopes
 

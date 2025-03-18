@@ -1,18 +1,22 @@
+from datetime import datetime, timezone
 import logging
 import base64
 from http import HTTPStatus
 
 from fastapi import HTTPException, APIRouter, Depends
 import shortuuid
+from cryptography import x509
 from cryptography.hazmat.primitives import serialization
+from fastapi_async_sqlalchemy import db
 
+
+from cactus.harness_orchestrator.api.crud import get_user_certificate_x509_der
 from cactus.harness_orchestrator.k8s_management.certificate.create import generate_client_p12
-from cactus.harness_orchestrator.k8s_management.certificate.fetch import (
-    fetch_certificate_key_pair,
-)
+from cactus.harness_orchestrator.k8s_management.certificate.fetch import fetch_certificate_key_pair
 from cactus.harness_orchestrator.k8s_management.resource import get_resource_names
+from cactus.harness_orchestrator.model import User
 from cactus.harness_orchestrator.runner_client import HarnessRunnerAsyncClient, RunnerClientException, StartTestRequest
-from cactus.harness_orchestrator.schema import FinalizeTestResponse, SpawnTestRequest, SpawnTestResponse
+from cactus.harness_orchestrator.schema import FinalizeTestResponse, SpawnTestRequest, SpawnTestResponse, UserContext
 from cactus.harness_orchestrator.k8s_management.resource.create import (
     add_ingress_rule,
     clone_service,
@@ -31,6 +35,7 @@ from cactus.harness_orchestrator.settings import (
     HarnessOrchestratorException,
     main_settings,
 )
+from cactus.harness_orchestrator.auth import jwt_validator, CactusAuthScopes
 
 
 logger = logging.getLogger(__name__)
@@ -39,18 +44,42 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def create_client_cert_binary(user_context: UserContext) -> tuple[bytes, bytes]:
+    # create client certificate
+    ca_cert, ca_key = fetch_certificate_key_pair(main_settings.tls_ca_tls_secret_name)
+    client_p12, client_cert = generate_client_p12(
+        ca_cert=ca_cert,
+        ca_key=ca_key,
+        client_common_name=user_context.subject_id,
+        p12_password=TEST_CLIENT_P12_PASSWORD.get_secret_value(),
+    )
+    return client_p12, client_cert.public_bytes(encoding=serialization.Encoding.DER)
+
+
 # NOTE: Client cert generation could potentially be part of user sign-up process instead.
 # I suspect a new one per test will be onerous.
 # TODO: Returning uuid for now, will swap to table sequence pkey later.
 @router.post("/run", status_code=HTTPStatus.CREATED)
-async def spawn_teststack(test: SpawnTestRequest) -> SpawnTestResponse:
+async def spawn_teststack(
+    test: SpawnTestRequest,
+    user_context: UserContext = Depends(jwt_validator.verify_jwt_and_check_scopes(CactusAuthScopes.user_all)),
+) -> SpawnTestResponse:
     """This endpoint setups a test procedure as requested by client.
     Steps are:
         (1) Create a service/statefulset representing the isolated envoy test environment.
-        (2) Create a fresh client certificate signed by the CA cert/key in the K8s secret store.
-        (3) Init any state in the envoy environment.
-        (4) Update the ingress with a path to the envoy environment.
+        (2) Init any state in the envoy environment.
+        (3) Update the ingress with a path to the envoy environment.
     """
+    # get client cert
+    certificate_x509_der = await get_user_certificate_x509_der(db.session, user_context)
+    client_cert = x509.load_der_x509_certificate(certificate_x509_der)
+
+    if client_cert.not_valid_after_utc < datetime.now(timezone.utc):
+        raise HTTPException(
+            HTTPStatus.CONFLICT,
+            detail="Your certificate has expired. Please regenerate your certificate and try again.",
+        )
+
     # new resource ids
     uuid: str = shortuuid.uuid().lower()  # This uuid is referenced in all new resource ids
     new_svc_name, new_statefulset_name, new_app_label, pod_name, pod_fqdn = get_resource_names(uuid)
@@ -61,15 +90,6 @@ async def spawn_teststack(test: SpawnTestRequest) -> SpawnTestResponse:
 
         # wait for statefulset's pod
         await wait_for_pod(pod_name)
-
-        # create client certificate
-        ca_cert, ca_key = fetch_certificate_key_pair(main_settings.tls_ca_tls_secret_name)
-        client_p12, client_cert = generate_client_p12(
-            ca_cert=ca_cert,
-            ca_key=ca_key,
-            client_common_name=uuid,
-            p12_password=TEST_CLIENT_P12_PASSWORD.get_secret_value(),
-        )
 
         # inject initial state
         run_cl = HarnessRunnerAsyncClient(pod_fqdn, POD_HARNESS_RUNNER_MANAGEMENT_PORT)
@@ -87,9 +107,6 @@ async def spawn_teststack(test: SpawnTestRequest) -> SpawnTestResponse:
         raise HTTPException(HTTPStatus.INTERNAL_SERVER_ERROR, detail="Internal Server Error.")
 
     return SpawnTestResponse(
-        ca_cert=ca_cert.public_bytes(serialization.Encoding.PEM).decode("utf-8"),
-        client_p12=base64.b64encode(client_p12).decode("utf-8"),
-        p12_password=TEST_CLIENT_P12_PASSWORD,
         test_url=TESTING_URL_FORMAT.format(testing_fqdn=main_settings.testing_fqdn, svc_name=new_svc_name),
         run_id=uuid,
     )
