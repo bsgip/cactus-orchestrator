@@ -51,17 +51,28 @@ class HarnessOrchestratorSettings(BaseSettings):
 
 
 class JWTAuthSettings(BaseSettings):
-    jwtauth_jwks_url: HttpUrl
-    jwtauth_issuer: HttpUrl
+    jwtauth_jwks_url: str
+    jwtauth_issuer: str
     jwtauth_audience: str
 
 
 main_settings = HarnessOrchestratorSettings()
 
+v1_core_api = None
+v1_app_api = None
+v1_net_api = None
+api_client = None
 
-#  Kubernetes API clients
-load_k8s_config()  # NOTE: This needs to be called before instantiating any of the k8s clients
-v1_core_api = client.CoreV1Api()
-v1_app_api = client.AppsV1Api()
-v1_net_api = client.NetworkingV1Api()
-api_client = client.ApiClient()
+
+def init_k8s_config():
+    #  Kubernetes API clients
+    load_k8s_config()  # NOTE: This needs to be called before instantiating any of the k8s clients
+    global v1_core_api
+    global v1_app_api
+    global v1_net_api
+    global api_client
+
+    v1_core_api = client.CoreV1Api()
+    v1_app_api = client.AppsV1Api()
+    v1_net_api = client.NetworkingV1Api()
+    api_client = client.ApiClient()

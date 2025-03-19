@@ -31,3 +31,8 @@ class UserContext(BaseModel):
 
     subject_id: str
     issuer_id: str
+
+
+class UserResponse(BaseModel):
+    certificate_p12_b64: str
+    password: SecretStr | None

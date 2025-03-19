@@ -16,7 +16,8 @@ dependencies = [
     "httpx",
     "python-jose[cryptography]",
     "fastapi-cache2",
-    "fastapi-async-sqlalchemy"
+    "fastapi-async-sqlalchemy",
+    "asyncpg",
 ]
 name = "cactus.harness_orchestrator"
 dynamic = ["version"]
@@ -33,7 +34,14 @@ dev = [
     "kubernetes-stubs",
     "types-python-jose",
 ]
-test = ["pytest", "pytest-env"]
+test = [
+    "pytest",
+    "pytest-env",
+    "pytest-postgresql",
+    "psycopg",
+    "assertical",
+    "pytest-asyncio",
+]
 
 [tool.black]
 line-length = 120
@@ -43,7 +51,7 @@ pythonpath = ["src/"]
 testpaths = "tests"
 env = [
     "D:TESTING_FQDN=testfqdn",
-    "D:ORCHESTRATOR_DATABASE_URL=postgresql://fake:fake@fake/fake",
+    "D:ORCHESTRATOR_DATABASE_URL=postgresql+asyncpg://fake:fake@fake/fake",
     "D:JWTAUTH_JWKS_URL=https://jwks.com/jwks",
     "D:JWTAUTH_ISSUER=https://issuer.com",
     "D:JWTAUTH_AUDIENCE=cactus-orchestrator",

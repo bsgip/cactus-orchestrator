@@ -19,7 +19,7 @@ from cactus.harness_orchestrator.settings import JWTAuthSettings
 security = HTTPBearer()
 
 
-class CactusAuthScopes(StrEnum):
+class AuthScopes(StrEnum):
     user_all = "user:all"
     admin_all = "admin:all"
 
