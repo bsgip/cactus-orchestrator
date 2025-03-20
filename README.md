@@ -15,9 +15,9 @@ mTLS Ingress Certifcates:
 - Server cert/key pair: Signed by above, these are stored in a single tls secret and referenced in Ingress spec.
 - Client cert/key pair: Created and signed on the fly as part of requests to the management API.
 
-TODO:
-- Keeping things simple with template manifests, but consider Helm or Kustomize.
+TODO/NOTES:
 - Consider creating everything from scratch i.e. not using templates.
 - Once use case is clear, consider a more modern+typed k8s client library.
 - We may no longer need StatefulSets and can rely on Pods directly.
 - Consider service mesh for transparent encryption of pod-to-pod comms.
+- Background task for teardown on long idle.

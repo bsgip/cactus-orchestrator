@@ -1,6 +1,6 @@
 from kubernetes import config, client
 from pydantic_settings import BaseSettings
-from pydantic import SecretStr
+from pydantic import SecretStr, HttpUrl, PostgresDsn
 
 TEST_CLIENT_P12_PASSWORD = SecretStr("abc")  # TODO: temporary
 POD_FQDN_FORMAT = "{pod_name}.{svc_name}.{namespace}.svc.cluster.local"  # TODO: use svc instead.
@@ -24,12 +24,13 @@ def load_k8s_config() -> None:
         config.load_kube_config()  # If running locally
 
 
-class K8sManagerException(Exception): ...  # noqa: E701
+class HarnessOrchestratorException(Exception): ...  # noqa: E701
 
 
-class K8sManagerSettings(BaseSettings):
+class HarnessOrchestratorSettings(BaseSettings):
     # management
     management_namespace: str = "management"
+    orchestrator_database_url: PostgresDsn
 
     # testing
     testing_namespace: str = "testing"
@@ -49,12 +50,29 @@ class K8sManagerSettings(BaseSettings):
     testing_fqdn: str  # NOTE: we could extract this from the server certs
 
 
-main_settings = K8sManagerSettings()
+class JWTAuthSettings(BaseSettings):
+    jwtauth_jwks_url: str
+    jwtauth_issuer: str
+    jwtauth_audience: str
 
 
-#  Kubernetes API clients
-load_k8s_config()  # NOTE: This needs to be called before instantiating any of the k8s clients
-v1_core_api = client.CoreV1Api()
-v1_app_api = client.AppsV1Api()
-v1_net_api = client.NetworkingV1Api()
-api_client = client.ApiClient()
+main_settings = HarnessOrchestratorSettings()
+
+v1_core_api = None
+v1_app_api = None
+v1_net_api = None
+api_client = None
+
+
+def init_k8s_config():
+    #  Kubernetes API clients
+    load_k8s_config()  # NOTE: This needs to be called before instantiating any of the k8s clients
+    global v1_core_api
+    global v1_app_api
+    global v1_net_api
+    global api_client
+
+    v1_core_api = client.CoreV1Api()
+    v1_app_api = client.AppsV1Api()
+    v1_net_api = client.NetworkingV1Api()
+    api_client = client.ApiClient()

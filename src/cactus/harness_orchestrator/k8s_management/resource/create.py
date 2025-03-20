@@ -7,7 +7,7 @@ from kubernetes.client import V1StatefulSet
 
 from cactus.harness_orchestrator.k8s_management.resource import async_k8s_api_retry
 from cactus.harness_orchestrator.settings import (
-    K8sManagerException,
+    HarnessOrchestratorException,
     main_settings,
     v1_app_api,
     v1_core_api,
@@ -84,10 +84,10 @@ async def is_container_ready(pod_name: str, container_name: str = "envoy-db") ->
 @async_k8s_api_retry()
 async def wait_for_pod(pod_name: str) -> None:
     # TODO: this should wait for the harness_runner container of the pod to be live
-    res = await asyncio.to_thread(is_container_ready, pod_name)
+    res = await is_container_ready(pod_name)
 
     if res is False:
-        raise K8sManagerException(f"{pod_name} failed to start.")
+        raise HarnessOrchestratorException(f"{pod_name} failed to start.")
 
 
 @async_k8s_api_retry()

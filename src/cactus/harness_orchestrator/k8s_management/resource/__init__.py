@@ -5,7 +5,7 @@ from typing import Awaitable, Callable
 
 from kubernetes.client.exceptions import ApiException
 
-from cactus.harness_orchestrator.settings import K8sManagerException, main_settings
+from cactus.harness_orchestrator.settings import HarnessOrchestratorException, main_settings
 from cactus.harness_orchestrator.settings import (
     CLONED_RESOURCE_NAME_FORMAT,
     POD_FQDN_FORMAT,
@@ -33,7 +33,7 @@ def async_k8s_api_retry[**P, T](
                     if attempt < retries - 1:
                         await asyncio.sleep(delay)
                     elif not fail_silently:
-                        raise K8sManagerException(
+                        raise HarnessOrchestratorException(
                             f"Failed action: {func.__name__}. Last API error: {exc.status} {exc.reason}"
                         )
                     else:
