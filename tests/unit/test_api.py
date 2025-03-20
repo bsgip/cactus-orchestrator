@@ -5,13 +5,13 @@ import pytest
 
 from fastapi.testclient import TestClient
 
-from cactus.harness_orchestrator.main import app
-from cactus.harness_orchestrator.schema import (
+from cactus_orchestrator.main import app
+from cactus_orchestrator.schema import (
     SpawnTestRequest,
     SpawnTestResponse,
     CsipAusTestProcedureCodes,
 )
-from cactus.harness_orchestrator.settings import HarnessOrchestratorException
+from cactus_orchestrator.settings import HarnessOrchestratorException
 
 
 @pytest.fixture
@@ -19,8 +19,9 @@ def client() -> Generator[TestClient, None, None]:
     yield TestClient(app)
 
 
+@pytest.mark.patch_jwk_cache
 @patch.multiple(
-    "cactus.harness_orchestrator.api.user",
+    "cactus_orchestrator.api.user",
     HarnessRunnerAsyncClient=Mock(),
     clone_statefulset=AsyncMock(),
     fetch_certificate_key_pair=Mock(),
@@ -32,7 +33,7 @@ def client() -> Generator[TestClient, None, None]:
 def test_post_spawn_test_basic(client, valid_user_p12_and_der, valid_user_jwt):
     """Just a simple test, with all k8s functions stubbed, to catch anything silly in the handler"""
     # Arrange
-    from cactus.harness_orchestrator.api.user import (
+    from cactus_orchestrator.api.user import (
         HarnessRunnerAsyncClient,
         clone_statefulset,
         get_user_certificate_x509_der,
@@ -52,8 +53,9 @@ def test_post_spawn_test_basic(client, valid_user_p12_and_der, valid_user_jwt):
     assert os.environ["TESTING_FQDN"] in resmdl.test_url
 
 
+@pytest.mark.patch_jwk_cache
 @patch.multiple(
-    "cactus.harness_orchestrator.api.user",
+    "cactus_orchestrator.api.user",
     HarnessRunnerAsyncClient=Mock(),
     clone_statefulset=AsyncMock(),
     fetch_certificate_key_pair=Mock(),
@@ -66,7 +68,7 @@ def test_post_spawn_test_basic(client, valid_user_p12_and_der, valid_user_jwt):
 def test_post_spawn_test_fails(client, valid_user_jwt, valid_user_p12_and_der):
     """Basic test to check teardown on failure"""
     # Arrange
-    from cactus.harness_orchestrator.api.user import (
+    from cactus_orchestrator.api.user import (
         clone_statefulset,
         teardown_teststack,
         get_user_certificate_x509_der,

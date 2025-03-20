@@ -2,8 +2,8 @@ import pytest
 from unittest.mock import patch
 from kubernetes.client.exceptions import ApiException
 
-from cactus.harness_orchestrator.k8s_management.resource import async_k8s_api_retry, get_resource_names
-from cactus.harness_orchestrator.settings import HarnessOrchestratorException
+from cactus_orchestrator.k8s.resource import async_k8s_api_retry, get_resource_names
+from cactus_orchestrator.settings import HarnessOrchestratorException
 
 
 @pytest.mark.asyncio
@@ -85,7 +85,7 @@ async def test_async_k8s_api_retry_fail_silently():
     assert result is None
 
 
-@patch("cactus.harness_orchestrator.k8s_management.resource.main_settings")
+@patch("cactus_orchestrator.k8s.resource.main_settings")
 def test_get_resource_names(mock_settings):
     """Test get_resource_names function."""
     mock_settings.testing_namespace = "test-ns"

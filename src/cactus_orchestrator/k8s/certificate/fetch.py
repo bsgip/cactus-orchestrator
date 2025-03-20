@@ -7,7 +7,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives.asymmetric.types import CertificateIssuerPrivateKeyTypes
 
-from cactus.harness_orchestrator.settings import (
+from cactus_orchestrator.settings import (
     main_settings,
     v1_core_api,
 )

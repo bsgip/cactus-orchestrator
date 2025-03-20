@@ -1,20 +1,20 @@
 import base64
 from enum import StrEnum
 import json
-from typing import Awaitable
+from typing import Any, Callable, Coroutine, cast
 
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509 import load_der_x509_certificate
 from pydantic import BaseModel
-from fastapi_cache.decorator import cache
 from fastapi import Security
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 import httpx
 from jose import jwt
 from cryptography.hazmat.primitives import serialization
 
-from cactus.harness_orchestrator.schema import UserContext
-from cactus.harness_orchestrator.settings import JWTAuthSettings
+from cactus_orchestrator.cache import AsyncCache, ExpiringValue
+from cactus_orchestrator.schema import UserContext
+from cactus_orchestrator.settings import JWTAuthSettings
 
 security = HTTPBearer()
 
@@ -30,30 +30,29 @@ class JWTClaims(BaseModel):
     iss: str  # issuer
     exp: int  # expiry (unix epoch)
     iat: int  # issued at (unix epoch)
-    scopes: set[str | None] = {}  # list of strings or empty
+    scopes: set[str | None]  # set of strings or empty
 
 
-class CactusAuthException(Exception): ...  # noqa: E701
+class JWTAuthException(Exception): ...  # noqa: E701
 
 
 class JWTValidator:
-    def __init__(self):
-        self._settings = JWTAuthSettings()
+    def __init__(self) -> None:
+        self._settings = JWTAuthSettings()  # type: ignore  [call-arg]
+        self._rsa_jwk_cache = AsyncCache(self._update_rsa_jwk_cache, force_update_delay_seconds=10)
 
-    # TODO: better policy
-    @cache(expire=3600)
-    async def _fetch_rsa_jwks(self, jwks_url: str) -> dict[str, str]:
-        """Fetch JWK (RSA public key only) from the auth server.
+    async def _update_rsa_jwk_cache(self, _: Any) -> dict[str, ExpiringValue[str]]:
+        """Fetchs a single JWK (RSA public key only) from the auth server.
 
         Returns:
             Dictionary of PEM-encoded RSAPublicKeys, keyed by KID (key identifier)
         """
         try:
             async with httpx.AsyncClient() as client:
-                response = await client.get(jwks_url)
+                response = await client.get(self._settings.jwks_url)
                 response.raise_for_status()
         except httpx.HTTPError as e:
-            raise CactusAuthException(detail=f"Failed to fetch JWKS: {str(e)}")
+            raise JWTAuthException(f"Failed to fetch JWKS: {str(e)}")
 
         jwks = response.json().get("keys", [])
         for key in jwks:
@@ -65,8 +64,8 @@ class JWTValidator:
                 ).decode(
                     "utf-8"
                 )  # NOTE: deserialising here fore cache
-                return {key["kid"]: pem_key}
-        raise CactusAuthException("No RSAPublicKey found.")
+                return {key["kid"]: ExpiringValue(None, pem_key)}
+        raise JWTAuthException("No RSAPublicKey found.")
 
     def _deserialise_rsa_jwk(self, jwk: dict[str, str]) -> rsa.RSAPublicKey:
         """We either get base64 url-encoded n/e and convert into an RSAPublicKey
@@ -81,7 +80,8 @@ class JWTValidator:
         elif "x5c" in jwk:
             cert_der = base64.b64decode(jwk["x5c"][0])
             cert = load_der_x509_certificate(cert_der)
-            return cert.public_key()
+            return cast(rsa.RSAPublicKey, cert.public_key())
+        raise JWTAuthException("JWK has invalid Form.")
 
     def _extract_kid_from_jwt(self, token: str) -> str:
         """Extract 'kid' from the JWT header."""
@@ -92,13 +92,13 @@ class JWTValidator:
 
     async def get_pubkey(self, kid: str) -> rsa.RSAPublicKey:
         """Get pubkey with using key-id"""
-        rsa_keys = await self._fetch_rsa_jwks(self._settings.jwtauth_jwks_url)
-        rsa_pkey = rsa_keys.get(kid)
+        rsa_keys = await self._rsa_jwk_cache.get_value(None, kid)
+        rsa_pkey = rsa_keys.get(kid)  # type: ignore
 
         if rsa_pkey is None:
             raise ValueError(f"No matching key-id '{kid}' found in JWKs.")
 
-        return serialization.load_pem_public_key(rsa_pkey.encode("utf-8"))
+        return cast(rsa.RSAPublicKey, serialization.load_pem_public_key(rsa_pkey.encode("utf-8")))
 
     async def _verify_jwt(self, token: str) -> JWTClaims:
         """Extract and verify JWT from Authorization header."""
@@ -107,10 +107,12 @@ class JWTValidator:
         public_key = await self.get_pubkey(kid)
         payload = jwt.decode(
             token,
-            public_key,
+            public_key.public_bytes(
+                encoding=serialization.Encoding.PEM, format=serialization.PublicFormat.SubjectPublicKeyInfo
+            ),
             algorithms=["RS256"],
-            audience=self._settings.jwtauth_audience,
-            issuer=self._settings.jwtauth_issuer,
+            audience=self._settings.audience,
+            issuer=self._settings.issuer,
         )
 
         scopes = set(payload.pop("scopes", "").split())  # supposed to be space separated string of scopes
@@ -118,10 +120,12 @@ class JWTValidator:
 
     def _check_scopes(self, required_scopes: set[str], jwt_claims: JWTClaims) -> JWTClaims:
         if not (required_scopes & jwt_claims.scopes):
-            raise CactusAuthException("Insufficient scope permissions")
+            raise JWTAuthException("Insufficient scope permissions")
         return jwt_claims
 
-    def verify_jwt_and_check_scopes(self, required_scopes: set[str]) -> Awaitable:
+    def verify_jwt_and_check_scopes(
+        self, required_scopes: set[str]
+    ) -> Callable[[HTTPAuthorizationCredentials], Coroutine[Any, Any, UserContext]]:
         """Wrap this method in Depends e.g. Depends(jwt_validator.verify_jwt_and_check_scopes({"scope1"}))"""
 
         async def _verify_and_check_scopes(

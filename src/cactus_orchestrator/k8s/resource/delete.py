@@ -4,8 +4,8 @@ from threading import Thread
 
 from http import HTTPStatus
 
-from cactus.harness_orchestrator.k8s_management.resource import async_k8s_api_retry
-from cactus.harness_orchestrator.settings import (
+from cactus_orchestrator.k8s.resource import async_k8s_api_retry
+from cactus_orchestrator.settings import (
     v1_core_api,
     v1_app_api,
     v1_net_api,
@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 
 @async_k8s_api_retry(ignore_status_code=HTTPStatus.NOT_FOUND, fail_silently=True)
-async def delete_service(svc_name: str, namespace: str | None = None):
+async def delete_service(svc_name: str, namespace: str | None = None) -> None:
     namespace = namespace or main_settings.testing_namespace
     res: Thread = v1_core_api.delete_collection_namespaced_service(svc_name, namespace=namespace, async_req=True)
 
@@ -27,7 +27,7 @@ async def delete_service(svc_name: str, namespace: str | None = None):
 
 
 @async_k8s_api_retry(ignore_status_code=HTTPStatus.NOT_FOUND, fail_silently=True)
-async def delete_statefulset(statefulset_name: str, namespace: str | None = None):
+async def delete_statefulset(statefulset_name: str, namespace: str | None = None) -> None:
     namespace = namespace or main_settings.testing_namespace
     res: Thread = v1_app_api.delete_namespaced_stateful_set(statefulset_name, namespace=namespace, async_req=True)
 
@@ -36,7 +36,7 @@ async def delete_statefulset(statefulset_name: str, namespace: str | None = None
 
 
 @async_k8s_api_retry()
-async def remove_ingress_rule(svc_name: str, namespace: str | None = None):
+async def remove_ingress_rule(svc_name: str, namespace: str | None = None) -> None:
     namespace = namespace or main_settings.testing_namespace
 
     # Construct the path to remove (same format used in add_ingress_rule)

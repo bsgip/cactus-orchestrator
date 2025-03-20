@@ -5,8 +5,8 @@ import asyncio
 from kubernetes import client
 from kubernetes.client import V1StatefulSet
 
-from cactus.harness_orchestrator.k8s_management.resource import async_k8s_api_retry
-from cactus.harness_orchestrator.settings import (
+from cactus_orchestrator.k8s.resource import async_k8s_api_retry
+from cactus_orchestrator.settings import (
     HarnessOrchestratorException,
     main_settings,
     v1_app_api,

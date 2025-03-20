@@ -5,8 +5,8 @@ from typing import Awaitable, Callable
 
 from kubernetes.client.exceptions import ApiException
 
-from cactus.harness_orchestrator.settings import HarnessOrchestratorException, main_settings
-from cactus.harness_orchestrator.settings import (
+from cactus_orchestrator.settings import HarnessOrchestratorException, main_settings
+from cactus_orchestrator.settings import (
     CLONED_RESOURCE_NAME_FORMAT,
     POD_FQDN_FORMAT,
     STATEFULSET_POD_NAME_FORMAT,

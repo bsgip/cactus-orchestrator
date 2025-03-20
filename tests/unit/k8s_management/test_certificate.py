@@ -4,8 +4,8 @@ import pytest
 from cryptography import x509
 from cryptography.hazmat.primitives.asymmetric import rsa
 
-from cactus.harness_orchestrator.k8s_management.certificate.create import generate_client_p12
-from cactus.harness_orchestrator.k8s_management.certificate.fetch import (
+from cactus_orchestrator.k8s.certificate.create import generate_client_p12
+from cactus_orchestrator.k8s.certificate.fetch import (
     fetch_certificate_key_pair,
 )
 
@@ -41,7 +41,7 @@ def test_generate_client_p12_invalid_password(ca_cert_key_pair):
         generate_client_p12(ca_key, ca_cert, client_common_name, p12_password)
 
 
-@patch("cactus.harness_orchestrator.k8s_management.certificate.fetch.v1_core_api")
+@patch("cactus_orchestrator.k8s.certificate.fetch.v1_core_api")
 def test_fetch_certificate_key_pair(mock_v1_core_api, mock_k8s_tls_secret):
     """Test fetching a certificate and key from a mock Kubernetes secret."""
 

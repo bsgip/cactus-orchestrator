@@ -6,14 +6,8 @@ import json
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives.serialization import load_pem_public_key, Encoding, PrivateFormat, NoEncryption
 from jose import jwt
-from fastapi_cache import FastAPICache
-from fastapi_cache.backends.inmemory import InMemoryBackend
 
-
-from cactus.harness_orchestrator.auth import JWTValidator, JWTClaims, CactusAuthException
-
-# init for tests
-FastAPICache.init(InMemoryBackend())
+from cactus_orchestrator.auth import JWTValidator, JWTClaims, JWTAuthException
 
 
 @pytest.fixture
@@ -27,17 +21,13 @@ def jwks_response_stub():
     public_key = private_key.public_key()
     kid = "test-kid"
     public_numbers = public_key.public_numbers()
-    jwks = {
-        "keys": [
-            {
-                "kty": "RSA",
-                "kid": kid,
-                "n": base64.urlsafe_b64encode(public_numbers.n.to_bytes(256, "big")).decode("utf-8").rstrip("="),
-                "e": base64.urlsafe_b64encode(public_numbers.e.to_bytes(3, "big")).decode("utf-8").rstrip("="),
-            }
-        ]
+    rsa_jwk = {
+        "kty": "RSA",
+        "kid": kid,
+        "n": base64.urlsafe_b64encode(public_numbers.n.to_bytes(256, "big")).decode("utf-8").rstrip("="),
+        "e": base64.urlsafe_b64encode(public_numbers.e.to_bytes(3, "big")).decode("utf-8").rstrip("="),
     }
-    return kid, jwks, private_key
+    return kid, rsa_jwk, private_key
 
 
 def test_extract_kid_from_jwt(jwt_validator):
@@ -54,7 +44,7 @@ def test_extract_kid_from_jwt(jwt_validator):
 
 
 @pytest.mark.asyncio
-@patch("cactus.harness_orchestrator.auth.httpx.AsyncClient")
+@patch("cactus_orchestrator.auth.httpx.AsyncClient")
 async def test_fetch_rsa_jwks(mock_httpx_client_cls, jwt_validator, jwks_response_stub):
     # Arrange
     kid, jwks, _ = jwks_response_stub
@@ -64,7 +54,7 @@ async def test_fetch_rsa_jwks(mock_httpx_client_cls, jwt_validator, jwks_respons
     mock_httpx_client_inst.get.return_value.json.return_value = jwks
 
     # Act
-    res = await jwt_validator._fetch_rsa_jwks("http://fake-jwks-url")
+    res = await jwt_validator._rsa_jwk_cache.get_value(kid)
 
     # Assert
     assert kid in res
@@ -72,7 +62,7 @@ async def test_fetch_rsa_jwks(mock_httpx_client_cls, jwt_validator, jwks_respons
 
 
 @pytest.mark.asyncio
-@patch("cactus.harness_orchestrator.auth.httpx.AsyncClient")
+@patch("cactus_orchestrator.auth.httpx.AsyncClient")
 async def test_get_pubkey(mock_httpx_client_cls, jwt_validator, jwks_response_stub):
     # Arrange
     kid, jwks, _ = jwks_response_stub
@@ -89,7 +79,7 @@ async def test_get_pubkey(mock_httpx_client_cls, jwt_validator, jwks_response_st
 
 
 @pytest.mark.asyncio
-@patch("cactus.harness_orchestrator.auth.httpx.AsyncClient")
+@patch("cactus_orchestrator.auth.httpx.AsyncClient")
 async def test_verify_jwt(mock_httpx_client_cls, jwt_validator, jwks_response_stub):
     # Arrange
     kid, jwks, private_key = jwks_response_stub
@@ -99,7 +89,7 @@ async def test_verify_jwt(mock_httpx_client_cls, jwt_validator, jwks_response_st
     mock_httpx_client_inst.get.return_value.json.return_value = jwks
     claims = {
         "sub": "user123",
-        "aud": "cactus-orchestrator",
+        "aud": "cactus_orchestrator",
         "iss": "auth-server",
         "exp": 9999999999,
         "iat": 1700000000,
@@ -127,7 +117,7 @@ async def test_check_scopes_success(jwt_validator):
     # Arrange
     claims = JWTClaims(
         sub="user123",
-        aud="cactus-orchestrator",
+        aud="cactus_orchestrator",
         iss="auth-server",
         exp=9999999999,
         iat=1700000000,
@@ -145,11 +135,11 @@ async def test_check_scopes_success(jwt_validator):
 async def test_check_scopes_fail(jwt_validator):
     claims = JWTClaims(
         sub="user123",
-        aud="cactus-orchestrator",
+        aud="cactus_orchestrator",
         iss="auth-server",
         exp=9999999999,
         iat=1700000000,
         scopes={"user:all"},
     )
-    with pytest.raises(CactusAuthException, match="Insufficient scope permissions"):
+    with pytest.raises(JWTAuthException, match="Insufficient scope permissions"):
         jwt_validator._check_scopes({"admin:all"}, claims)

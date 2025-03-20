@@ -6,8 +6,6 @@ from unittest.mock import MagicMock, patch
 import base64
 from typing import Generator
 
-from fastapi_cache import FastAPICache
-from fastapi_cache.backends.inmemory import InMemoryBackend
 from jose import jwt
 from kubernetes.client import V1Secret
 from cryptography.hazmat.primitives import serialization
@@ -17,15 +15,15 @@ from cryptography.x509.oid import NameOID
 from sqlalchemy import Connection, NullPool, create_engine
 
 
-from cactus.harness_orchestrator.k8s_management.certificate.create import generate_client_p12
-from cactus.harness_orchestrator.model import Base
-from cactus.harness_orchestrator.auth import jwt_validator
+from cactus_orchestrator.k8s.certificate.create import generate_client_p12
+from cactus_orchestrator.model import Base
+from cactus_orchestrator.auth import jwt_validator
 
 
 # pytest startup / shutdown configs
 def pytest_configure():
     """Monkey patch load_k8s_config at pytest startup (before discovery)."""
-    patcher = patch("cactus.harness_orchestrator.settings.load_k8s_config", return_value=None)
+    patcher = patch("cactus_orchestrator.settings.load_k8s_config", return_value=None)
     patcher.start()  # Start the patch immediately
     pytest._load_k8s_config_patcher = patcher  # Store it so we can stop it later
 
@@ -63,22 +61,24 @@ def valid_user_p12_and_der(ca_cert_key_pair) -> tuple[bytes, bytes]:
 @pytest.fixture(scope="session")
 def mock_jwt_validator_jwks_cache(ca_cert_key_pair) -> dict[str, str]:
     # init for tests
-    FastAPICache.init(InMemoryBackend())
-
     _, ca_key = ca_cert_key_pair
 
     public_key = ca_key.public_key()
     return {
-        "test-key-id": public_key.public_bytes(
+        "test-kid": public_key.public_bytes(
             encoding=serialization.Encoding.PEM, format=serialization.PublicFormat.SubjectPublicKeyInfo
         ).decode("utf-8")
     }
 
 
 @pytest.fixture(scope="session", autouse=True)
-def patch_jwt_validator(mock_jwt_validator_jwks_cache):
-
-    with patch.object(jwt_validator, "_fetch_rsa_jwks", return_value=mock_jwt_validator_jwks_cache):
+def patch_jwk_cache(request, mock_jwt_validator_jwks_cache):
+    if request.node.get_closest_marker("patch_jwk_cache"):
+        with patch.object(
+            jwt_validator._rsa_jwk_cache, "get_value", return_value=list(mock_jwt_validator_jwks_cache.values()[0])
+        ):
+            yield
+    else:
         yield
 
 
