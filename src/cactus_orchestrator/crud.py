@@ -6,7 +6,9 @@ from cactus_orchestrator.model import User, UserUniqueConstraintName
 from cactus_orchestrator.schema import UserContext
 
 
-async def add_user(session: AsyncSession, user_context: UserContext, client_p12: bytes, client_x509_der: bytes) -> User:
+async def insert_user(
+    session: AsyncSession, user_context: UserContext, client_p12: bytes, client_x509_der: bytes
+) -> User:
 
     user = User(
         subject_id=user_context.subject_id,
@@ -20,7 +22,7 @@ async def add_user(session: AsyncSession, user_context: UserContext, client_p12:
     return user
 
 
-async def add_or_update_user(
+async def upsert_user(
     session: AsyncSession, user_context: UserContext, client_p12: bytes, client_x509_der: bytes
 ) -> int | None:
     """We have to use sqlalchemy-core with postgres dialect for upserts"""
@@ -44,7 +46,7 @@ async def add_or_update_user(
     return resp.scalar_one_or_none()
 
 
-async def get_user(session: AsyncSession, user_context: UserContext) -> User | None:
+async def select_user(session: AsyncSession, user_context: UserContext) -> User | None:
 
     stmt = select(User).where(
         and_(User.subject_id == user_context.subject_id, User.issuer_id == user_context.issuer_id)
@@ -53,7 +55,7 @@ async def get_user(session: AsyncSession, user_context: UserContext) -> User | N
     return res.scalar_one_or_none()
 
 
-async def get_user_certificate_x509_der(session: AsyncSession, user_context: UserContext) -> bytes | None:
+async def select_user_certificate_x509_der(session: AsyncSession, user_context: UserContext) -> bytes | None:
     stmt = select(User.certificate_x509_der).where(
         and_(User.subject_id == user_context.subject_id, User.issuer_id == user_context.issuer_id)
     )

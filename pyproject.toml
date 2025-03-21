@@ -18,6 +18,7 @@ dependencies = [
     "python-jose[cryptography]",
     "fastapi-async-sqlalchemy",
     "asyncpg",
+    "cactus-test-definitions @ git+ssh://git@github.com/bsgip/cactus-test-definitions.git",
 ]
 name = "cactus-orchestrator"
 dynamic = ["version"]
