@@ -7,6 +7,7 @@ build-backend = "setuptools.build_meta"
 where = ["src"]
 
 [project]
+requires-python = ">= 3.12"
 dependencies = [
     "kubernetes",
     "cryptography",
@@ -15,11 +16,10 @@ dependencies = [
     "pydantic-settings",
     "httpx",
     "python-jose[cryptography]",
-    "fastapi-cache2",
     "fastapi-async-sqlalchemy",
     "asyncpg",
 ]
-name = "cactus.harness_orchestrator"
+name = "cactus-orchestrator"
 dynamic = ["version"]
 
 [project.optional-dependencies]
@@ -54,14 +54,17 @@ env = [
     "D:ORCHESTRATOR_DATABASE_URL=postgresql+asyncpg://fake:fake@fake/fake",
     "D:JWTAUTH_JWKS_URL=https://jwks.com/jwks",
     "D:JWTAUTH_ISSUER=https://issuer.com",
-    "D:JWTAUTH_AUDIENCE=cactus-orchestrator",
+    "D:JWTAUTH_AUDIENCE=cactus_orchestrator",
+]
+markers = [
+    "patch_jwk_cache: marks tests where the jwk cache needs to be patched",
 ]
 
 [tool.bandit]
 exclude_dirs = ["tests"]
 
 [tool.mypy]
-exclude = ["tests"]
+exclude = ["tests", "alembic"]
 check_untyped_defs = true
 disallow_incomplete_defs = true
 disallow_untyped_decorators = true
@@ -69,6 +72,5 @@ disallow_untyped_defs = true
 namespace_packages = true
 warn_redundant_casts = true
 
-
 [tool.setuptools.dynamic]
-version = { attr = "cactus.harness_orchestrator.__version__" }
+version = { attr = "cactus_orchestrator.__version__" }

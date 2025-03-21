@@ -1,16 +1,11 @@
+# mypy: ignore-errors
 import base64
 
-from kubernetes import client
 from cryptography import x509
 from cryptography.hazmat.backends import default_backend
+from kubernetes import client
 
-
-from cactus.harness_orchestrator.settings import (
-    TLS_SERVER_SECRET_NAME_FORMAT,
-    main_settings,
-    v1_core_api,
-    v1_net_api,
-)
+from cactus_orchestrator.settings import TLS_SERVER_SECRET_NAME_FORMAT, main_settings, v1_core_api, v1_net_api
 
 
 def extract_domain_from_cert(cert_data: bytes) -> str:
@@ -34,7 +29,7 @@ def extract_domain_from_cert(cert_data: bytes) -> str:
 
 def create_or_update_k8s_tls_secret(
     *, secret_name: str, cert_data: bytes, namespace: str, key_data: bytes | None = None
-) -> str:
+) -> None:
     """Creates or updates a Kubernetes TLS secret."""
 
     data = {"tls.crt": base64.b64encode(cert_data).decode()}

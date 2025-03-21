@@ -1,6 +1,6 @@
 from pydantic import BaseModel, SecretStr, field_serializer
 
-from cactus.harness_orchestrator.runner_client import CsipAusTestProcedureCodes
+from cactus_orchestrator.runner_client import CsipAusTestProcedureCodes
 
 
 class SpawnTestRequest(BaseModel):
@@ -23,7 +23,7 @@ class SpawnTestResponse(BaseModel):
 
 
 # TODO:
-class FinalizeTestResponse(BaseModel): ...
+class FinalizeTestResponse(BaseModel): ...  # noqa: E701
 
 
 class UserContext(BaseModel):
@@ -36,3 +36,7 @@ class UserContext(BaseModel):
 class UserResponse(BaseModel):
     certificate_p12_b64: str
     password: SecretStr | None
+
+    @field_serializer("password", when_used="json")
+    def dump_secret(self, v: SecretStr) -> str:
+        return v.get_secret_value()

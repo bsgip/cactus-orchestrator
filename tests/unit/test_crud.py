@@ -1,14 +1,13 @@
 import pytest
-
+from assertical.fixtures.postgres import generate_async_session
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization
-from assertical.fixtures.postgres import generate_async_session
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
-from cactus.harness_orchestrator.api.crud import add_user, add_or_update_user, get_user, get_user_certificate_x509_der
-from cactus.harness_orchestrator.k8s_management.certificate.create import generate_client_p12
-from cactus.harness_orchestrator.schema import UserContext
+from cactus_orchestrator.api.crud import add_or_update_user, add_user, get_user, get_user_certificate_x509_der
+from cactus_orchestrator.k8s.certificate.create import generate_client_p12
+from cactus_orchestrator.schema import UserContext
 
 
 @pytest.mark.asyncio

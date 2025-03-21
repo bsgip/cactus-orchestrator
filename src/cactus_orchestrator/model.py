@@ -1,4 +1,4 @@
-from sqlalchemy import String, LargeBinary, UniqueConstraint
+from sqlalchemy import LargeBinary, String, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 

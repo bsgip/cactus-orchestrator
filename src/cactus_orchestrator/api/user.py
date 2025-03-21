@@ -1,47 +1,32 @@
-from datetime import datetime, timezone
+import base64
 import logging
+from datetime import datetime, timezone
 from http import HTTPStatus
+from typing import Annotated
 
-from fastapi import HTTPException, APIRouter, Depends
 import shortuuid
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi_async_sqlalchemy import db
 from sqlalchemy.exc import IntegrityError
 
-from cactus.harness_orchestrator.api.crud import add_or_update_user, add_user, get_user_certificate_x509_der
-from cactus.harness_orchestrator.k8s_management.certificate.create import generate_client_p12
-from cactus.harness_orchestrator.k8s_management.certificate.fetch import fetch_certificate_key_pair
-from cactus.harness_orchestrator.k8s_management.resource import get_resource_names
-from cactus.harness_orchestrator.model import User
-from cactus.harness_orchestrator.runner_client import HarnessRunnerAsyncClient, RunnerClientException, StartTestRequest
-from cactus.harness_orchestrator.schema import (
-    FinalizeTestResponse,
-    SpawnTestRequest,
-    SpawnTestResponse,
-    UserContext,
-    UserResponse,
-)
-from cactus.harness_orchestrator.k8s_management.resource.create import (
-    add_ingress_rule,
-    clone_service,
-    clone_statefulset,
-    wait_for_pod,
-)
-from cactus.harness_orchestrator.k8s_management.resource.delete import (
-    remove_ingress_rule,
-    delete_service,
-    delete_statefulset,
-)
-from cactus.harness_orchestrator.settings import (
+from cactus_orchestrator.api.crud import add_or_update_user, add_user, get_user_certificate_x509_der
+from cactus_orchestrator.auth import AuthScopes, jwt_validator
+from cactus_orchestrator.k8s.certificate.create import generate_client_p12
+from cactus_orchestrator.k8s.certificate.fetch import fetch_certificate_key_pair
+from cactus_orchestrator.k8s.resource import get_resource_names
+from cactus_orchestrator.k8s.resource.create import add_ingress_rule, clone_service, clone_statefulset, wait_for_pod
+from cactus_orchestrator.k8s.resource.delete import delete_service, delete_statefulset, remove_ingress_rule
+from cactus_orchestrator.runner_client import HarnessRunnerAsyncClient, RunnerClientException, StartTestRequest
+from cactus_orchestrator.schema import SpawnTestRequest, SpawnTestResponse, UserContext, UserResponse
+from cactus_orchestrator.settings import (
     POD_HARNESS_RUNNER_MANAGEMENT_PORT,
     TEST_CLIENT_P12_PASSWORD,
     TESTING_URL_FORMAT,
     HarnessOrchestratorException,
     main_settings,
 )
-from cactus.harness_orchestrator.auth import jwt_validator, AuthScopes
-
 
 logger = logging.getLogger(__name__)
 
@@ -67,7 +52,7 @@ def create_client_cert_binary(user_context: UserContext) -> tuple[bytes, bytes]:
 @router.post("/run", status_code=HTTPStatus.CREATED)
 async def spawn_teststack(
     test: SpawnTestRequest,
-    user_context: UserContext = Depends(jwt_validator.verify_jwt_and_check_scopes({AuthScopes.user_all})),
+    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_scopes({AuthScopes.user_all}))],
 ) -> SpawnTestResponse:
     """This endpoint setups a test procedure as requested by client.
     Steps are:
@@ -134,7 +119,7 @@ async def teardown_teststack(svc_name: str, statefulset_name: str) -> None:
 
 @router.post("/user", status_code=HTTPStatus.CREATED)
 async def create_new_user(
-    user_context: UserContext = Depends(jwt_validator.verify_jwt_and_check_scopes(AuthScopes.user_all)),
+    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_scopes({AuthScopes.user_all}))],
 ) -> UserResponse:
     # create certs
     client_p12, client_x509_der = create_client_cert_binary(user_context)
@@ -146,16 +131,22 @@ async def create_new_user(
         logger.debug(exc)
         raise HTTPException(status_code=HTTPStatus.CONFLICT, detail="user exists.")
 
-    return UserResponse(certificate_p12_b64=client_p12, password=TEST_CLIENT_P12_PASSWORD.get_secret_value())
+    return UserResponse(
+        certificate_p12_b64=base64.b64encode(client_p12).decode("utf-8"),
+        password=TEST_CLIENT_P12_PASSWORD,
+    )
 
 
 @router.patch("/user", status_code=HTTPStatus.CREATED)
 async def update_existing_user_certificate(
-    user_context: UserContext = Depends(jwt_validator.verify_jwt_and_check_scopes(AuthScopes.user_all)),
+    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_scopes({AuthScopes.user_all}))],
 ) -> UserResponse:
     # create certs
     client_p12, client_x509_der = create_client_cert_binary(user_context)
 
     _ = await add_or_update_user(db.session, user_context, client_p12, client_x509_der)
 
-    return UserResponse(certificate_p12_b64=client_p12, password=TEST_CLIENT_P12_PASSWORD.get_secret_value())
+    return UserResponse(
+        certificate_p12_b64=base64.b64encode(client_p12).decode("utf-8"),
+        password=TEST_CLIENT_P12_PASSWORD,
+    )

@@ -4,8 +4,8 @@ from sqlalchemy import engine_from_config
 from sqlalchemy import pool
 from alembic import context
 
-from cactus.harness_orchestrator.settings import main_settings
-from cactus.harness_orchestrator import model
+from cactus_orchestrator.settings import main_settings
+from cactus_orchestrator import model
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
