@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, Generic, Optional, TypeVar
 
-
 logger = logging.getLogger(__name__)
 
 K = TypeVar("K")

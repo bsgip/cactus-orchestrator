@@ -1,17 +1,13 @@
 from unittest.mock import patch
-import pytest
 
+import pytest
 from cryptography import x509
+from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.primitives.serialization import pkcs12
 
 from cactus_orchestrator.k8s.certificate.create import generate_client_p12
-from cactus_orchestrator.k8s.certificate.fetch import (
-    fetch_certificate_key_pair,
-)
-
-
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.serialization import pkcs12
+from cactus_orchestrator.k8s.certificate.fetch import fetch_certificate_key_pair
 
 
 def test_generate_client_p12(ca_cert_key_pair):

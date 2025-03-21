@@ -23,7 +23,7 @@ class SpawnTestResponse(BaseModel):
 
 
 # TODO:
-class FinalizeTestResponse(BaseModel): ...
+class FinalizeTestResponse(BaseModel): ...  # noqa: E701
 
 
 class UserContext(BaseModel):

@@ -1,18 +1,17 @@
 # TODO: this is currently just a stub / example
-import logging
 import base64
+import hashlib
+import logging
+import urllib
 from enum import StrEnum
 
-import hashlib
-import urllib
 import httpx
 from pydantic import BaseModel
-
 
 logger = logging.getLogger(__name__)
 
 
-class RunnerClientException(Exception): ...
+class RunnerClientException(Exception): ...  # noqa: E701
 
 
 class CsipAusTestProcedureCodes(StrEnum):

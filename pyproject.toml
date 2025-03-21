@@ -72,6 +72,5 @@ disallow_untyped_defs = true
 namespace_packages = true
 warn_redundant_casts = true
 
-
 [tool.setuptools.dynamic]
 version = { attr = "cactus_orchestrator.__version__" }

@@ -1,16 +1,16 @@
 import base64
-from enum import StrEnum
 import json
+from enum import StrEnum
 from typing import Any, Callable, Coroutine, cast
 
+import httpx
+from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509 import load_der_x509_certificate
-from pydantic import BaseModel
 from fastapi import Security
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-import httpx
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import jwt
-from cryptography.hazmat.primitives import serialization
+from pydantic import BaseModel
 
 from cactus_orchestrator.cache import AsyncCache, ExpiringValue
 from cactus_orchestrator.schema import UserContext
@@ -92,8 +92,7 @@ class JWTValidator:
 
     async def get_pubkey(self, kid: str) -> rsa.RSAPublicKey:
         """Get pubkey with using key-id"""
-        rsa_keys = await self._rsa_jwk_cache.get_value(None, kid)
-        rsa_pkey = rsa_keys.get(kid)  # type: ignore
+        rsa_pkey = await self._rsa_jwk_cache.get_value(None, kid)
 
         if rsa_pkey is None:
             raise ValueError(f"No matching key-id '{kid}' found in JWKs.")

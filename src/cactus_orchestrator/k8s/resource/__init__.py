@@ -1,34 +1,36 @@
-import logging
 import asyncio
+import logging
 from functools import wraps
 from typing import Awaitable, Callable
 
 from kubernetes.client.exceptions import ApiException
 
-from cactus_orchestrator.settings import HarnessOrchestratorException, main_settings
 from cactus_orchestrator.settings import (
     CLONED_RESOURCE_NAME_FORMAT,
     POD_FQDN_FORMAT,
     STATEFULSET_POD_NAME_FORMAT,
+    HarnessOrchestratorException,
+    main_settings,
 )
 
 logger = logging.getLogger(__name__)
 
 
-# TODO: too much going on?
 def async_k8s_api_retry[**P, T](
     retries: int = 3, delay: int = 2, ignore_status_code: int | None = None, fail_silently: bool = False
 ) -> Callable[[Callable[P, Awaitable[T | None]]], Callable[P, Awaitable[T | None]]]:
+    """Used to wrap any of the async k8s api requests with retry functionality."""
+
     def decorator(func: Callable[P, Awaitable[T | None]]) -> Callable[P, Awaitable[T | None]]:
         @wraps(func)
-        async def async_retry(*args: P.args, **kwargs: P.kwargs) -> None:
+        async def async_retry(*args: P.args, **kwargs: P.kwargs) -> T | None:
             for attempt in range(retries):
                 try:
                     return await func(*args, **kwargs)
                 except ApiException as exc:
                     if ignore_status_code is not None:
                         if exc.status == ignore_status_code:
-                            return
+                            return None
                     logger.debug(f"[Attempt {attempt+1}] Kubernetes API error: {exc.status} {exc.reason}")
                     if attempt < retries - 1:
                         await asyncio.sleep(delay)
@@ -38,7 +40,8 @@ def async_k8s_api_retry[**P, T](
                         )
                     else:
                         logger.info(f"Call to {func.__name__} failing silently")
-                        return
+                        return None
+            return None
 
         return async_retry
 

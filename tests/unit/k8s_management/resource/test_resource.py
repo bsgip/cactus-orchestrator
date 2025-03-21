@@ -5,19 +5,15 @@ from unittest.mock import patch
 import pytest
 from kubernetes import client
 
-from cactus_orchestrator.settings import DEFAULT_INGRESS_PATH_FORMAT
 from cactus_orchestrator.k8s.resource.create import (
+    add_ingress_rule,
     clone_service,
     clone_statefulset,
     is_container_ready,
     wait_for_pod,
-    add_ingress_rule,
 )
-from cactus_orchestrator.k8s.resource.delete import (
-    remove_ingress_rule,
-    delete_service,
-    delete_statefulset,
-)
+from cactus_orchestrator.k8s.resource.delete import delete_service, delete_statefulset, remove_ingress_rule
+from cactus_orchestrator.settings import DEFAULT_INGRESS_PATH_FORMAT
 
 
 class MockThread:
@@ -148,13 +144,13 @@ async def test_add_ingress_rule(mock_v1_net_api):
 async def test_delete_service(mock_v1_core_api):
     """Test deleting a Kubernetes Service."""
     # Arrange
-    mock_v1_core_api.delete_collection_namespaced_service.return_value = MockThread(None)
+    mock_v1_core_api.delete_namespaced_service.return_value = MockThread(None)
 
     # Act
     await delete_service("test-service")
 
     # Assert
-    mock_v1_core_api.delete_collection_namespaced_service.assert_called_once()
+    mock_v1_core_api.delete_namespaced_service.assert_called_once()
 
 
 @pytest.mark.asyncio

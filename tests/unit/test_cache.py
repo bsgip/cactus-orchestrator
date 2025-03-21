@@ -48,7 +48,7 @@ def test_expiring_value(delta_now: Optional[timedelta], expired: bool):
     assert ExpiringValue(expiry, 123).is_expired() == expired
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_initial_clear():
     """Tests that clearing an empty cache does nothing"""
     mock_update_fn = mock.Mock()
@@ -59,7 +59,7 @@ async def test_initial_clear():
     assert c._cache == {}
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_update_result_ignore_expiry_cached():
     updated_cache = {
         "key1": ExpiringValue(make_delta_now(timedelta(hours=5)), "val1"),
@@ -101,7 +101,7 @@ async def test_update_result_ignore_expiry_cached():
     mock_update_fn.assert_called_with(update_arg)
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_update_result_cached():
     updated_cache = {
         "key1": ExpiringValue(make_delta_now(timedelta(hours=5)), "val1"),
@@ -138,7 +138,7 @@ async def test_update_result_cached():
     assert mock_update_fn.call_count == 3, "Call count shouldn't have changed from before"
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_update_raise_error():
     """Tests that updates that raise an error dont invalidate the old cache"""
     updated_cache = {
@@ -169,7 +169,7 @@ async def test_update_raise_error():
     assert mock_update_fn.call_count == 2, "Call count shouldn't have changed from before"
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_force_update():
     """Tests that force_update persists in the face of errors being raised and waits the suitable amount of time"""
     updated_cache = {
@@ -213,7 +213,7 @@ async def test_force_update():
     assert mock_update_fn.call_count == 4, "This must be unchanged after the get_value calls (i.e - the cache is used)"
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_get_value_sync():
     """Validates that running the sync method triggers a background task to execute"""
     updated_cache = {

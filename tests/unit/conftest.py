@@ -1,23 +1,20 @@
-import os
-import pytest
-import inspect
-from datetime import datetime, timedelta, timezone
-from unittest.mock import MagicMock, patch
 import base64
-from typing import Generator
+import inspect
+import os
+from datetime import datetime, timedelta, timezone
+from typing import Any, Generator
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
+import pytest
+from cryptography import x509
+from cryptography.hazmat.primitives import asymmetric, hashes, serialization
+from cryptography.x509.oid import NameOID
 from jose import jwt
 from kubernetes.client import V1Secret
-from cryptography.hazmat.primitives import serialization
-from cryptography import x509
-from cryptography.hazmat.primitives import hashes, asymmetric
-from cryptography.x509.oid import NameOID
 from sqlalchemy import Connection, NullPool, create_engine
-
 
 from cactus_orchestrator.k8s.certificate.create import generate_client_p12
 from cactus_orchestrator.model import Base
-from cactus_orchestrator.auth import jwt_validator
 
 
 # pytest startup / shutdown configs
@@ -59,6 +56,27 @@ def valid_user_p12_and_der(ca_cert_key_pair) -> tuple[bytes, bytes]:
 
 
 @pytest.fixture(scope="session")
+def kid_and_jwks_stub(ca_cert_key_pair) -> tuple[str, dict[str, list[str, Any]]]:
+    # init for tests
+    _, ca_key = ca_cert_key_pair
+
+    public_key = ca_key.public_key()
+    kid = "test-kid"
+    public_numbers = public_key.public_numbers()
+    jwks = {
+        "keys": [
+            {
+                "kty": "RSA",
+                "kid": kid,
+                "n": base64.urlsafe_b64encode(public_numbers.n.to_bytes(256, "big")).decode("utf-8").rstrip("="),
+                "e": base64.urlsafe_b64encode(public_numbers.e.to_bytes(3, "big")).decode("utf-8").rstrip("="),
+            }
+        ]
+    }
+    return kid, jwks
+
+
+@pytest.fixture(scope="session")
 def mock_jwt_validator_jwks_cache(ca_cert_key_pair) -> dict[str, str]:
     # init for tests
     _, ca_key = ca_cert_key_pair
@@ -72,13 +90,13 @@ def mock_jwt_validator_jwks_cache(ca_cert_key_pair) -> dict[str, str]:
 
 
 @pytest.fixture(scope="session", autouse=True)
-def patch_jwk_cache(request, mock_jwt_validator_jwks_cache):
-    if request.node.get_closest_marker("patch_jwk_cache"):
-        with patch.object(
-            jwt_validator._rsa_jwk_cache, "get_value", return_value=list(mock_jwt_validator_jwks_cache.values()[0])
-        ):
-            yield
-    else:
+def patch_jwks_request(kid_and_jwks_stub):
+    _, jwks = kid_and_jwks_stub
+    with patch("cactus_orchestrator.auth.httpx.AsyncClient") as mock_httpx_client_cls:
+        mock_httpx_client_inst = AsyncMock()
+        mock_httpx_client_cls.return_value.__aenter__.return_value = mock_httpx_client_inst
+        mock_httpx_client_inst.get = AsyncMock(return_value=Mock())
+        mock_httpx_client_inst.get.return_value.json.return_value = jwks
         yield
 
 

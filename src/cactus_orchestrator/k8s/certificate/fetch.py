@@ -1,16 +1,16 @@
 import base64
+from typing import get_args
 
-
-from kubernetes import client
 from cryptography import x509
-from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.backends import default_backend
+from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.types import CertificateIssuerPrivateKeyTypes
+from kubernetes import client
 
-from cactus_orchestrator.settings import (
-    main_settings,
-    v1_core_api,
-)
+from cactus_orchestrator.settings import HarnessOrchestratorException, main_settings
+
+# k8s clients
+v1_core_api = client.CoreV1Api()
 
 
 class SecretString:
@@ -48,6 +48,9 @@ def fetch_certificate_key_pair(
     # Read secret
     secret: client.V1Secret = v1_core_api.read_namespaced_secret(secret_name, namespace=namespace)
 
+    if secret is None or secret.data is None:
+        raise HarnessOrchestratorException(f"secret {secret_name} not found in namespace {namespace}")
+
     # Decode b64 encoded cert and key
     crt_bytes = base64.b64decode(secret.data["tls.crt"])
     key_bytes = base64.b64decode(secret.data["tls.key"])
@@ -56,8 +59,11 @@ def fetch_certificate_key_pair(
     certificate = x509.load_pem_x509_certificate(crt_bytes, default_backend())
     private_key = serialization.load_pem_private_key(
         key_bytes,
-        password=passphrase_secret.encode() if passphrase_secret else None,
+        password=passphrase_secret.reveal().encode() if passphrase_secret else None,
         backend=default_backend(),
     )
 
-    return certificate, private_key
+    if not isinstance(private_key, tuple(get_args(CertificateIssuerPrivateKeyTypes))):
+        raise TypeError(f"Invalid private key type for {secret_name}")
+
+    return certificate, private_key  # type: ignore

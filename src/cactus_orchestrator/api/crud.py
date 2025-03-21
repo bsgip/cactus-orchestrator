@@ -1,6 +1,6 @@
 from sqlalchemy import and_, select
-from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from cactus_orchestrator.model import User, UserUniqueConstraintName
 from cactus_orchestrator.schema import UserContext

@@ -1,6 +1,6 @@
-from kubernetes import config, client
+from kubernetes import config
+from pydantic import PostgresDsn, SecretStr
 from pydantic_settings import BaseSettings
-from pydantic import SecretStr, HttpUrl, PostgresDsn
 
 TEST_CLIENT_P12_PASSWORD = SecretStr("abc")  # TODO: temporary
 POD_FQDN_FORMAT = "{pod_name}.{svc_name}.{namespace}.svc.cluster.local"  # TODO: use svc instead.
@@ -19,9 +19,9 @@ STATEFULSET_POD_NAME_FORMAT = (
 def load_k8s_config() -> None:
     """Loads the Kubernetes configuration."""
     try:
-        config.load_incluster_config()  # If running inside a cluster
-    except config.ConfigException:
-        config.load_kube_config()  # If running locally
+        config.incluster_config.load_incluster_config()  # If running inside a cluster
+    except config.config_exception.ConfigException:
+        config.kube_config.load_kube_config()  # If running locally
 
 
 class HarnessOrchestratorException(Exception): ...  # noqa: E701
@@ -60,11 +60,3 @@ class JWTAuthSettings(BaseSettings):
 
 
 main_settings = HarnessOrchestratorSettings()  # type: ignore  [call-arg]
-
-
-# load k8s config and init clients
-load_k8s_config()  # NOTE: This needs to be called before instantiating any of the k8s clients
-v1_core_api = client.CoreV1Api()
-v1_app_api = client.AppsV1Api()
-v1_net_api = client.NetworkingV1Api()
-api_client = client.api_client.ApiClient()

@@ -1,38 +1,25 @@
 import base64
-from datetime import datetime, timezone
 import logging
+from datetime import datetime, timezone
 from http import HTTPStatus
 from typing import Annotated
 
-from fastapi import HTTPException, APIRouter, Depends
 import shortuuid
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi_async_sqlalchemy import db
 from sqlalchemy.exc import IntegrityError
 
 from cactus_orchestrator.api.crud import add_or_update_user, add_user, get_user_certificate_x509_der
+from cactus_orchestrator.auth import AuthScopes, jwt_validator
 from cactus_orchestrator.k8s.certificate.create import generate_client_p12
 from cactus_orchestrator.k8s.certificate.fetch import fetch_certificate_key_pair
 from cactus_orchestrator.k8s.resource import get_resource_names
+from cactus_orchestrator.k8s.resource.create import add_ingress_rule, clone_service, clone_statefulset, wait_for_pod
+from cactus_orchestrator.k8s.resource.delete import delete_service, delete_statefulset, remove_ingress_rule
 from cactus_orchestrator.runner_client import HarnessRunnerAsyncClient, RunnerClientException, StartTestRequest
-from cactus_orchestrator.schema import (
-    SpawnTestRequest,
-    SpawnTestResponse,
-    UserContext,
-    UserResponse,
-)
-from cactus_orchestrator.k8s.resource.create import (
-    add_ingress_rule,
-    clone_service,
-    clone_statefulset,
-    wait_for_pod,
-)
-from cactus_orchestrator.k8s.resource.delete import (
-    remove_ingress_rule,
-    delete_service,
-    delete_statefulset,
-)
+from cactus_orchestrator.schema import SpawnTestRequest, SpawnTestResponse, UserContext, UserResponse
 from cactus_orchestrator.settings import (
     POD_HARNESS_RUNNER_MANAGEMENT_PORT,
     TEST_CLIENT_P12_PASSWORD,
@@ -40,8 +27,6 @@ from cactus_orchestrator.settings import (
     HarnessOrchestratorException,
     main_settings,
 )
-from cactus_orchestrator.auth import jwt_validator, AuthScopes
-
 
 logger = logging.getLogger(__name__)
 

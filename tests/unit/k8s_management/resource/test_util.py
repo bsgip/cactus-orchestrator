@@ -1,5 +1,6 @@
-import pytest
 from unittest.mock import patch
+
+import pytest
 from kubernetes.client.exceptions import ApiException
 
 from cactus_orchestrator.k8s.resource import async_k8s_api_retry, get_resource_names
