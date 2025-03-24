@@ -1,4 +1,4 @@
-from sqlalchemy import and_, select
+from sqlalchemy import and_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -20,6 +20,33 @@ async def insert_user(
     session.add(user)
     await session.flush()
     return user
+
+
+async def update_user(
+    session: AsyncSession, user_context: UserContext, client_p12: bytes, client_x509_der: bytes
+) -> int | None:
+    """Update an existing user's certificate. Returns user_id if successful, None if user does not exist."""
+
+    stmt = (
+        update(User)
+        .where(
+            (User.subject_id == user_context.subject_id) &
+            (User.issuer_id == user_context.issuer_id)
+        )
+        .values(
+            certificate_x509_der=client_x509_der,
+            certificate_p12_bundle=client_p12,
+        )
+        .returning(User.user_id)
+    )
+
+    resp = await session.execute(stmt)
+    user_id = resp.scalar_one_or_none()
+
+    if user_id:
+        await session.commit()
+
+    return user_id
 
 
 async def upsert_user(

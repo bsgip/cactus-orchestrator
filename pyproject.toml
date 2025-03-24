@@ -19,6 +19,7 @@ dependencies = [
     "fastapi-async-sqlalchemy",
     "asyncpg",
     "cactus-test-definitions @ git+ssh://git@github.com/bsgip/cactus-test-definitions.git",
+    "fastapi-pagination",
 ]
 name = "cactus-orchestrator"
 dynamic = ["version"]

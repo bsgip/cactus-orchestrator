@@ -29,9 +29,6 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-# NOTE: Client cert generation could potentially be part of user sign-up process instead.
-# I suspect a new one per test will be onerous.
-# TODO: Returning uuid for now, will swap to table sequence pkey later.
 @router.post("/run", status_code=HTTPStatus.CREATED)
 async def spawn_teststack(
     test: SpawnTestRequest,

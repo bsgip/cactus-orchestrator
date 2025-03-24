@@ -9,7 +9,7 @@ from fastapi_async_sqlalchemy import db
 from sqlalchemy.exc import IntegrityError
 
 from cactus_orchestrator.auth import AuthScopes, jwt_validator
-from cactus_orchestrator.crud import insert_user, select_user, upsert_user
+from cactus_orchestrator.crud import insert_user, select_user, update_user
 from cactus_orchestrator.k8s.certificate.create import generate_client_p12
 from cactus_orchestrator.k8s.certificate.fetch import fetch_certificate_key_pair
 from cactus_orchestrator.schema import UserContext, UserResponse
@@ -23,7 +23,7 @@ router = APIRouter()
 
 def create_client_cert_binary(user_context: UserContext) -> tuple[bytes, bytes]:
     # create client certificate
-    ca_cert, ca_key = fetch_certificate_key_pair(main_settings.tls_ca_tls_secret_name)
+    ca_cert, ca_key = fetch_certificate_key_pair(main_settings.tls_ca_tls_secret_name)  # TODO: cache this
     client_p12, client_cert = generate_client_p12(
         ca_cert=ca_cert,
         ca_key=ca_key,
@@ -54,14 +54,14 @@ async def create_new_user(
     )
 
 
-@router.patch("/user", status_code=HTTPStatus.CREATED)
+@router.patch("/user", status_code=HTTPStatus.OK)
 async def update_existing_user_certificate(
     user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_scopes({AuthScopes.user_all}))],
 ) -> UserResponse:
     # create certs
     client_p12, client_x509_der = create_client_cert_binary(user_context)
 
-    user_id = await upsert_user(db.session, user_context, client_p12, client_x509_der)
+    user_id = await update_user(db.session, user_context, client_p12, client_x509_der)
 
     if user_id is None:
         raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="User does not exists. Please register.")
