@@ -5,7 +5,7 @@ from cryptography.hazmat.primitives import serialization
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
-from cactus_orchestrator.api.crud import add_or_update_user, add_user, get_user, get_user_certificate_x509_der
+from cactus_orchestrator.crud import upsert_user, insert_user
 from cactus_orchestrator.k8s.certificate.create import generate_client_p12
 from cactus_orchestrator.schema import UserContext
 
@@ -21,7 +21,7 @@ async def test_add_user(pg_empty_conn, ca_cert_key_pair):
 
     # Act
     async with generate_async_session(pg_empty_conn.connection) as s:
-        user = await add_user(s, uc, cl_p12, cl_der)
+        user = await insert_user(s, uc, cl_p12, cl_der)
 
     # Assert
     assert user.user_id == 1
@@ -41,12 +41,12 @@ async def test_add_or_update_user_unique_constraint(pg_empty_conn, ca_cert_key_p
     uc = UserContext(subject_id="a", issuer_id="a")
 
     async with generate_async_session(pg_empty_conn.connection) as s:
-        _ = await add_user(s, uc, cl_p12, cl_der)
+        _ = await insert_user(s, uc, cl_p12, cl_der)
         await s.commit()
 
     with pytest.raises(IntegrityError):
         async with generate_async_session(pg_empty_conn.connection) as s:
-            _ = await add_user(s, uc, cl_p12, cl_der)
+            _ = await insert_user(s, uc, cl_p12, cl_der)
             await s.commit()
 
 
@@ -60,14 +60,14 @@ async def test_add_or_update_user(pg_empty_conn, ca_cert_key_pair):
     uc = UserContext(subject_id="a", issuer_id="a")
 
     async with generate_async_session(pg_empty_conn.connection) as s:
-        _ = await add_user(s, uc, cl_p12, cl_der)
+        _ = await insert_user(s, uc, cl_p12, cl_der)
         await s.commit()
 
     cl_p12, cl_x509 = generate_client_p12(ca_key, ca_cert, "test1", "abc")
     cl_der = cl_x509.public_bytes(encoding=serialization.Encoding.DER)
     # Act
     async with generate_async_session(pg_empty_conn.connection) as s:
-        await add_or_update_user(s, uc, cl_p12, cl_der)
+        await upsert_user(s, uc, cl_p12, cl_der)
         await s.commit()
     # Assert
     cert_x509_der = pg_empty_conn.execute(text("select certificate_x509_der from users;")).fetchone()[0]

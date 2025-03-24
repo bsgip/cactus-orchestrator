@@ -28,7 +28,9 @@ class User(Base):
 
     # NOTE: We assume these are unique, too big to enfoce
     certificate_p12_bundle: Mapped[bytes] = mapped_column(LargeBinary, nullable=False, unique=False)  # p12
-    certificate_x509_der: Mapped[bytes] = mapped_column(LargeBinary, nullable=False, unique=False)  # x509 DER-encoded
+    certificate_x509_der: Mapped[bytes] = mapped_column(
+        LargeBinary, nullable=False, unique=False, deferred=True
+    )  # x509 DER-encoded
 
 
 # TODO: Run, RunStatus, anything else?
