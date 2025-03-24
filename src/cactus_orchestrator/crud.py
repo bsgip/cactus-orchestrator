@@ -1,3 +1,4 @@
+from datetime import datetime
 from sqlalchemy import and_, select, update
 from sqlalchemy.orm import undefer
 from sqlalchemy.dialects.postgresql import insert
@@ -95,3 +96,24 @@ async def insert_run_for_user(session: AsyncSession, user_id: int, teststack_id:
     session.add(run)
     await session.flush()
     return run.run_id
+
+
+async def select_user_runs(
+    session: AsyncSession, user_id: int, finalised: bool | None, created_at_gte: datetime | None
+) -> list[Run | None]:
+    # runs statement
+    stmt = select(Run).where(Run.user_id == user_id)
+    filters = []
+    if created_at_gte is not None:
+        filters.append(Run.created_at >= created_at_gte)
+
+    if finalised is True:
+        filters.append(Run.finalised_at.isnot(None))
+    elif finalised is False:
+        filters.append(Run.finalised_at.is_(None))
+
+    if filters:
+        stmt = stmt.where(and_(*filters))
+
+    res = await session.execute(stmt)
+    return list(res.scalars().all())

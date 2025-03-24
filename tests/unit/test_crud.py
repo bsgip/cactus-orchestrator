@@ -1,3 +1,5 @@
+from datetime import datetime, timedelta, timezone
+
 import pytest
 from assertical.fixtures.postgres import generate_async_session
 from cryptography import x509
@@ -5,7 +7,7 @@ from cryptography.hazmat.primitives import serialization
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
-from cactus_orchestrator.crud import upsert_user, insert_user
+from cactus_orchestrator.crud import select_user_runs, upsert_user, insert_user
 from cactus_orchestrator.k8s.certificate.create import generate_client_p12
 from cactus_orchestrator.schema import UserContext
 
@@ -73,3 +75,150 @@ async def test_add_or_update_user(pg_empty_conn, ca_cert_key_pair):
     cert_x509_der = pg_empty_conn.execute(text("select certificate_x509_der from user_;")).fetchone()[0]
     cert_x509 = x509.load_der_x509_certificate(cert_x509_der)
     assert cert_x509.subject.get_attributes_for_oid(x509.NameOID.COMMON_NAME)[0].value == "test1"
+
+
+@pytest.mark.asyncio
+async def test_select_user_runs_all(pg_empty_conn):
+    """Test fetching all runs for a user (no filters)."""
+    # Arrange
+    pg_empty_conn.execute(
+        text(
+            """
+                INSERT INTO user_ (subject_id, issuer_id, certificate_p12_bundle, certificate_x509_der)
+                VALUES ('user1', 'issuer1', E'\\x', E'\\x')
+            """
+        )
+    )
+    pg_empty_conn.execute(
+        text(
+            """
+            INSERT INTO run (user_id, teststack_id, testprocedure_id, finalised_at)
+            VALUES (
+                1, 'teststack1', 'testproc1', NULL
+            ),
+            (
+                1, 'teststack2', 'testproc1', NOW()
+            )
+        """
+        )
+    )
+    pg_empty_conn.commit()
+
+    # Act
+    async with generate_async_session(pg_empty_conn.connection) as session:
+
+        runs = await select_user_runs(session, 1, finalised=None, created_at_gte=None)
+
+    # Assert
+    assert len(runs) == 2
+
+
+@pytest.mark.asyncio
+async def test_select_user_runs_finalised_only(pg_empty_conn):
+    """Test fetching only finalised runs."""
+    # Arrange
+    pg_empty_conn.execute(
+        text(
+            """
+                INSERT INTO user_ (subject_id, issuer_id, certificate_p12_bundle, certificate_x509_der)
+                VALUES ('user1', 'issuer1', E'\\x', E'\\x')
+            """
+        )
+    )
+    pg_empty_conn.execute(
+        text(
+            """
+            INSERT INTO run (user_id, teststack_id, testprocedure_id, finalised_at)
+            VALUES (
+                1, 'teststack1', 'testproc1', NULL
+            ),
+            (
+                1, 'teststack2', 'testproc1', NOW()
+            )
+        """
+        )
+    )
+    pg_empty_conn.commit()
+
+    # Act
+    async with generate_async_session(pg_empty_conn.connection) as session:
+        runs = await select_user_runs(session, 1, finalised=True, created_at_gte=None)
+
+    # Assert
+    assert len(runs) == 1
+    assert runs[0].finalised_at is not None
+
+
+@pytest.mark.asyncio
+async def test_select_user_runs_unfinalised_only(pg_empty_conn):
+    """Test fetching only unfinalised runs."""
+    # Arrange
+    pg_empty_conn.execute(
+        text(
+            """
+                INSERT INTO user_ (subject_id, issuer_id, certificate_p12_bundle, certificate_x509_der)
+                VALUES ('user1', 'issuer1', E'\\x', E'\\x')
+            """
+        )
+    )
+    pg_empty_conn.execute(
+        text(
+            """
+            INSERT INTO run (user_id, teststack_id, testprocedure_id, finalised_at)
+            VALUES (
+                1, 'teststack1', 'testproc1', NULL
+            ),
+            (
+                1, 'teststack2', 'testproc1', NOW()
+            )
+        """
+        )
+    )
+    pg_empty_conn.commit()
+
+    # Act
+    async with generate_async_session(pg_empty_conn.connection) as session:
+
+        runs = await select_user_runs(session, 1, finalised=False, created_at_gte=None)
+
+    # Assert
+    assert len(runs) == 1
+    assert runs[0].finalised_at is None
+
+
+@pytest.mark.asyncio
+async def test_select_user_runs_created_at_filter(pg_empty_conn):
+    """Test filtering runs by creation date."""
+    # Arrange
+    pg_empty_conn.execute(
+        text(
+            """
+                INSERT INTO user_ (subject_id, issuer_id, certificate_p12_bundle, certificate_x509_der)
+                VALUES ('user1', 'issuer1', E'\\x', E'\\x')
+            """
+        )
+    )
+    pg_empty_conn.execute(
+        text(
+            """
+            INSERT INTO run (user_id, teststack_id, testprocedure_id, created_at)
+            VALUES (
+                1, 'teststack1', 'testproc1', '2024-01-01T00:00:00+00:00'
+            ),
+            (
+                1, 'teststack2', 'testproc1', '2024-01-02T00:00:00+00:00'
+            )
+        """
+        )
+    )
+    pg_empty_conn.commit()
+
+    # Act
+    async with generate_async_session(pg_empty_conn.connection) as session:
+
+        runs = await select_user_runs(
+            session, 1, finalised=None, created_at_gte=datetime(2024, 1, 1, 12, tzinfo=timezone.utc)
+        )
+
+    # Assert
+    assert len(runs) == 1

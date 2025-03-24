@@ -20,12 +20,12 @@ disable_installed_extensions_check()
 
 def map_from_definitions_to_responses(definitions: TestProcedures) -> list[TestProcedureResponse]:
     responses = []
-    id_ = []
+    test_procedure_ids = []
     for k, v in definitions.test_procedures.items():
-        if k in id_:
+        if k in test_procedure_ids:
             continue
-        responses.append(TestProcedureResponse(id=k, description=v.description, category=v.category))
-        id_.append(k)
+        responses.append(TestProcedureResponse(test_procedure_id=k, description=v.description, category=v.category))
+        test_procedure_ids.append(k)
     return responses
 
 

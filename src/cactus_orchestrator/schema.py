@@ -1,16 +1,23 @@
-from pydantic import BaseModel, Field, SecretStr, field_serializer
+from pydantic import BaseModel, SecretStr, field_serializer
 
 from cactus_orchestrator.runner_client import CsipAusTestProcedureCodes
 
 
-class SpawnTestRequest(BaseModel):
-    code: CsipAusTestProcedureCodes
+class SpawnTestProcedureRequest(BaseModel):
+    test_procedure_id: CsipAusTestProcedureCodes
 
 
 # TODO: what should response be?
-class SpawnTestResponse(BaseModel):
+class SpawnTestProcedureResponse(BaseModel):
+    run_id: int
     test_url: str
-    run_id: str
+
+
+class RunStatusResponse(BaseModel):
+    run_id: int
+    test_procedure_id: str
+    test_url: str
+    finalised: bool
 
 
 # TODO:
@@ -35,6 +42,6 @@ class UserResponse(BaseModel):
 
 
 class TestProcedureResponse(BaseModel):
-    id_: str = Field(alias="id")
+    test_procedure_id: CsipAusTestProcedureCodes
     description: str
     category: str

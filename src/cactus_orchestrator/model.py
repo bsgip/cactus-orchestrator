@@ -40,7 +40,7 @@ class User(Base):
 
 class Run(Base):
     __tablename__ = "run"
-    __table_args__ = Index("testprocedure_id_created_at_idx", "testprocedure_id", "created_at")
+    __table_args__ = (Index("testprocedure_id_created_at_idx", "testprocedure_id", "created_at"),)
 
     run_id: Mapped[int] = mapped_column(name="id", primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("user_.id"))
@@ -50,7 +50,7 @@ class Run(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     runfile_id: Mapped[int] = mapped_column(ForeignKey("runfile.id"), nullable=True)
-    finalised_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finalised_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, default=None)
     run_file: Mapped["RunFile"] = relationship(lazy="raise")
 
 

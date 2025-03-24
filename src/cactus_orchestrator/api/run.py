@@ -1,22 +1,36 @@
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from http import HTTPStatus
 from typing import Annotated
 
+from fastapi_pagination import Page, paginate
 import shortuuid
+from sqlalchemy.ext.asyncio import AsyncSession
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi_async_sqlalchemy import db
 
 from cactus_orchestrator.auth import AuthScopes, jwt_validator
-from cactus_orchestrator.crud import insert_run_for_user, select_user_certificate_x509_der
+from cactus_orchestrator.crud import (
+    insert_run_for_user,
+    select_user,
+    select_user_certificate_x509_der,
+    select_user_runs,
+)
 from cactus_orchestrator.k8s.resource import get_resource_names
 from cactus_orchestrator.k8s.resource.create import add_ingress_rule, clone_service, clone_statefulset, wait_for_pod
 from cactus_orchestrator.k8s.resource.delete import delete_service, delete_statefulset, remove_ingress_rule
+from cactus_orchestrator.model import Run, User
 from cactus_orchestrator.runner_client import HarnessRunnerAsyncClient, RunnerClientException, StartTestRequest
-from cactus_orchestrator.schema import SpawnTestRequest, SpawnTestResponse, UserContext
+from cactus_orchestrator.schema import (
+    RunStatusResponse,
+    SpawnTestProcedureRequest,
+    SpawnTestProcedureResponse,
+    UserContext,
+)
 from cactus_orchestrator.settings import (
+    CLONED_RESOURCE_NAME_FORMAT,
     POD_HARNESS_RUNNER_MANAGEMENT_PORT,
     TESTING_URL_FORMAT,
     HarnessOrchestratorException,
@@ -29,11 +43,50 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def map_run_to_run_response(run: Run) -> RunStatusResponse:
+    svc_name = CLONED_RESOURCE_NAME_FORMAT.format(
+        resource_name=main_settings.template_service_name, uuid=run.teststack_id
+    )
+    return RunStatusResponse(
+        run_id=run.run_id,
+        test_procedure_id=run.testprocedure_id,
+        test_url=TESTING_URL_FORMAT.format(testing_fqdn=main_settings.testing_fqdn, svc_name=svc_name),
+        finalised=True if run.finalised_at is not None else False,
+    )
+
+
+async def select_user_or_raise(session: AsyncSession, user_context: UserContext) -> User:
+    user = await select_user(session, user_context)
+
+    if user is None:
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="User does not exists. Please register.")
+    return user
+
+
+@router.get("/run", status_code=HTTPStatus.OK)
+async def get_runs_paginated(
+    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_scopes({AuthScopes.user_all}))],
+    finalised: bool = Query(default=True),
+    created_after: datetime = Query(default=datetime.now(tz=timezone.utc) - timedelta(days=7)),
+) -> Page[RunStatusResponse]:
+    # get user
+    user = await select_user_or_raise(db.session, user_context)
+
+    # get runs
+    runs = await select_user_runs(db.session, user.user_id, finalised=finalised, created_at_gte=created_after)
+
+    if runs:
+        resp = [map_run_to_run_response(run) for run in runs if run]
+    else:
+        resp = []
+    return paginate(resp)
+
+
 @router.post("/run", status_code=HTTPStatus.CREATED)
 async def spawn_teststack(
-    test: SpawnTestRequest,
+    test: SpawnTestProcedureRequest,
     user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_scopes({AuthScopes.user_all}))],
-) -> SpawnTestResponse:
+) -> SpawnTestProcedureResponse:
     """This endpoint setups a test procedure as requested by client.
     Steps are:
         (1) Create a service/statefulset representing the isolated envoy test environment.
@@ -41,11 +94,11 @@ async def spawn_teststack(
         (3) Update the ingress with a path to the envoy environment.
     """
     # get user
+    user = await select_user_or_raise(db.session, user_context)
 
-    # get client cert
+    # get client cert # TODO: make more robust
     certificate_x509_der = await select_user_certificate_x509_der(db.session, user_context)
 
-    # TODO: make more robust
     if certificate_x509_der is None:
         raise HTTPException(HTTPStatus.CONFLICT, detail="User has not been registered. Register user and try again.")
 
@@ -58,8 +111,8 @@ async def spawn_teststack(
         )
 
     # new resource ids
-    uuid: str = shortuuid.uuid().lower()  # This uuid is referenced in all new resource ids
-    new_svc_name, new_statefulset_name, new_app_label, pod_name, pod_fqdn = get_resource_names(uuid)
+    teststack_id: str = shortuuid.uuid().lower()  # This uuid is referenced in all new resource ids
+    new_svc_name, new_statefulset_name, new_app_label, pod_name, pod_fqdn = get_resource_names(teststack_id)
     try:
         # duplicate resources
         await clone_statefulset(new_statefulset_name, new_svc_name, new_app_label)
@@ -71,7 +124,7 @@ async def spawn_teststack(
         # inject initial state
         run_cl = HarnessRunnerAsyncClient(pod_fqdn, POD_HARNESS_RUNNER_MANAGEMENT_PORT)
         await run_cl.post_start_test(
-            test_code=test.code,
+            test_code=test.test_procedure_id,
             body=StartTestRequest(client_cert=client_cert.public_bytes(serialization.Encoding.PEM).decode("utf-8")),
         )
 
@@ -84,11 +137,12 @@ async def spawn_teststack(
         raise HTTPException(HTTPStatus.INTERNAL_SERVER_ERROR, detail="Internal Server Error.")
 
     # track in DB
-    run_id = await insert_run_for_user(db.session, u)
+    run_id = await insert_run_for_user(db.session, user.user_id, teststack_id, test.test_procedure_id)
+    db.session.commit()
 
-    return SpawnTestResponse(
-        test_url=TESTING_URL_FORMAT.format(testing_fqdn=main_settings.testing_fqdn, svc_name=new_svc_name),
+    return SpawnTestProcedureResponse(
         run_id=run_id,
+        test_url=TESTING_URL_FORMAT.format(testing_fqdn=main_settings.testing_fqdn, svc_name=new_svc_name),
     )
 
 
