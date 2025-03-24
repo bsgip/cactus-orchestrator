@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi_async_sqlalchemy import db
 
 from cactus_orchestrator.auth import AuthScopes, jwt_validator
-from cactus_orchestrator.crud import select_user_certificate_x509_der
+from cactus_orchestrator.crud import insert_run_for_user, select_user_certificate_x509_der
 from cactus_orchestrator.k8s.resource import get_resource_names
 from cactus_orchestrator.k8s.resource.create import add_ingress_rule, clone_service, clone_statefulset, wait_for_pod
 from cactus_orchestrator.k8s.resource.delete import delete_service, delete_statefulset, remove_ingress_rule
@@ -40,6 +40,8 @@ async def spawn_teststack(
         (2) Init any state in the envoy environment.
         (3) Update the ingress with a path to the envoy environment.
     """
+    # get user
+
     # get client cert
     certificate_x509_der = await select_user_certificate_x509_der(db.session, user_context)
 
@@ -81,9 +83,12 @@ async def spawn_teststack(
         await teardown_teststack(new_svc_name, new_statefulset_name)
         raise HTTPException(HTTPStatus.INTERNAL_SERVER_ERROR, detail="Internal Server Error.")
 
+    # track in DB
+    run_id = await insert_run_for_user(db.session, u)
+
     return SpawnTestResponse(
         test_url=TESTING_URL_FORMAT.format(testing_fqdn=main_settings.testing_fqdn, svc_name=new_svc_name),
-        run_id=uuid,
+        run_id=run_id,
     )
 
 

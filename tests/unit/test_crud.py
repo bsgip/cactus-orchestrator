@@ -70,6 +70,6 @@ async def test_add_or_update_user(pg_empty_conn, ca_cert_key_pair):
         await upsert_user(s, uc, cl_p12, cl_der)
         await s.commit()
     # Assert
-    cert_x509_der = pg_empty_conn.execute(text("select certificate_x509_der from users;")).fetchone()[0]
+    cert_x509_der = pg_empty_conn.execute(text("select certificate_x509_der from user_;")).fetchone()[0]
     cert_x509 = x509.load_der_x509_certificate(cert_x509_der)
     assert cert_x509.subject.get_attributes_for_oid(x509.NameOID.COMMON_NAME)[0].value == "test1"

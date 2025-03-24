@@ -1,8 +1,9 @@
 from sqlalchemy import and_, select, update
+from sqlalchemy.orm import undefer
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from cactus_orchestrator.model import User, UserUniqueConstraintName
+from cactus_orchestrator.model import User, UserUniqueConstraintName, Run
 from cactus_orchestrator.schema import UserContext
 
 
@@ -29,10 +30,7 @@ async def update_user(
 
     stmt = (
         update(User)
-        .where(
-            (User.subject_id == user_context.subject_id) &
-            (User.issuer_id == user_context.issuer_id)
-        )
+        .where((User.subject_id == user_context.subject_id) & (User.issuer_id == user_context.issuer_id))
         .values(
             certificate_x509_der=client_x509_der,
             certificate_p12_bundle=client_p12,
@@ -75,8 +73,10 @@ async def upsert_user(
 
 async def select_user(session: AsyncSession, user_context: UserContext) -> User | None:
 
-    stmt = select(User).where(
-        and_(User.subject_id == user_context.subject_id, User.issuer_id == user_context.issuer_id)
+    stmt = (
+        select(User)
+        .where(and_(User.subject_id == user_context.subject_id, User.issuer_id == user_context.issuer_id))
+        .options(undefer(User.certificate_p12_bundle))
     )
     res = await session.execute(stmt)
     return res.scalar_one_or_none()
@@ -88,3 +88,10 @@ async def select_user_certificate_x509_der(session: AsyncSession, user_context: 
     )
     res = await session.execute(stmt)
     return res.scalar_one_or_none()
+
+
+async def insert_run_for_user(session: AsyncSession, user_id: int, teststack_id: str, testprocedure_id: str) -> int:
+    run = Run(user_id=user_id, teststack_id=teststack_id, testprocedure_id=testprocedure_id)
+    session.add(run)
+    await session.flush()
+    return run.run_id
