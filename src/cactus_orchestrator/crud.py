@@ -1,12 +1,11 @@
 from datetime import datetime
+
 from sqlalchemy import and_, select, update
-from sqlalchemy.orm import undefer
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import undefer
 
-from cactus_orchestrator.model import RunArtifact, User, UserUniqueConstraintName, Run, FinalisationStatus
-
-FinalisationStatus
+from cactus_orchestrator.model import FinalisationStatus, Run, RunArtifact, User, UserUniqueConstraintName
 from cactus_orchestrator.schema import UserContext
 
 

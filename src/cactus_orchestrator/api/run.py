@@ -3,15 +3,15 @@ from datetime import datetime, timedelta, timezone
 from http import HTTPStatus
 from typing import Annotated
 
-from fastapi_pagination import Page, paginate
 import shortuuid
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.exc import NoResultFound
+from cactus_runner.client import ClientSession, RunnerClient, RunnerClientException
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi_async_sqlalchemy import db
-from cactus_runner.client import RunnerClient, ClientSession, RunnerClientException
+from fastapi_pagination import Page, paginate
+from sqlalchemy.exc import NoResultFound
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from cactus_orchestrator.auth import AuthScopes, jwt_validator
 from cactus_orchestrator.crud import (
@@ -26,13 +26,8 @@ from cactus_orchestrator.crud import (
 from cactus_orchestrator.k8s.resource import get_resource_names
 from cactus_orchestrator.k8s.resource.create import add_ingress_rule, clone_service, clone_statefulset, wait_for_pod
 from cactus_orchestrator.k8s.resource.delete import delete_service, delete_statefulset, remove_ingress_rule
-from cactus_orchestrator.model import Run, User, FinalisationStatus
-from cactus_orchestrator.schema import (
-    RunResponse,
-    StartRunRequest,
-    StartRunResponse,
-    UserContext,
-)
+from cactus_orchestrator.model import FinalisationStatus, Run, User
+from cactus_orchestrator.schema import RunResponse, StartRunRequest, StartRunResponse, UserContext
 from cactus_orchestrator.settings import (
     CLONED_RESOURCE_NAME_FORMAT,
     POD_HARNESS_RUNNER_MANAGEMENT_PORT,
