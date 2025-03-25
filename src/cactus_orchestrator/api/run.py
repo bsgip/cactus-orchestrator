@@ -22,9 +22,14 @@ from cactus_orchestrator.k8s.resource import get_resource_names
 from cactus_orchestrator.k8s.resource.create import add_ingress_rule, clone_service, clone_statefulset, wait_for_pod
 from cactus_orchestrator.k8s.resource.delete import delete_service, delete_statefulset, remove_ingress_rule
 from cactus_orchestrator.model import Run, User
-from cactus_orchestrator.runner_client import HarnessRunnerAsyncClient, RunnerClientException, StartTestRequest
+from cactus_orchestrator.runner_client import (
+    CsipAusTestProcedureCodes,
+    HarnessRunnerAsyncClient,
+    RunnerClientException,
+    StartTestRequest,
+)
 from cactus_orchestrator.schema import (
-    RunStatusResponse,
+    RunResponse,
     SpawnTestProcedureRequest,
     SpawnTestProcedureResponse,
     UserContext,
@@ -43,11 +48,11 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-def map_run_to_run_response(run: Run) -> RunStatusResponse:
+def map_run_to_run_response(run: Run) -> RunResponse:
     svc_name = CLONED_RESOURCE_NAME_FORMAT.format(
         resource_name=main_settings.template_service_name, uuid=run.teststack_id
     )
-    return RunStatusResponse(
+    return RunResponse(
         run_id=run.run_id,
         test_procedure_id=run.testprocedure_id,
         test_url=TESTING_URL_FORMAT.format(testing_fqdn=main_settings.testing_fqdn, svc_name=svc_name),
@@ -68,7 +73,7 @@ async def get_runs_paginated(
     user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_scopes({AuthScopes.user_all}))],
     finalised: bool = Query(default=True),
     created_after: datetime = Query(default=datetime.now(tz=timezone.utc) - timedelta(days=7)),
-) -> Page[RunStatusResponse]:
+) -> Page[RunResponse]:
     # get user
     user = await select_user_or_raise(db.session, user_context)
 
@@ -138,7 +143,7 @@ async def spawn_teststack(
 
     # track in DB
     run_id = await insert_run_for_user(db.session, user.user_id, teststack_id, test.test_procedure_id)
-    db.session.commit()
+    await db.session.commit()
 
     return SpawnTestProcedureResponse(
         run_id=run_id,

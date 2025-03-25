@@ -13,7 +13,7 @@ class SpawnTestProcedureResponse(BaseModel):
     test_url: str
 
 
-class RunStatusResponse(BaseModel):
+class RunResponse(BaseModel):
     run_id: int
     test_procedure_id: str
     test_url: str
