@@ -8,7 +8,7 @@ from fastapi_utils.tasks import repeat_every
 from fastapi_async_sqlalchemy import db
 from cactus_runner.client import ClientSession, RunnerClient
 
-from cactus_orchestrator.crud import select_nonfinalised_runs, update_run_finalisation_status
+from cactus_orchestrator.crud import select_nonfinalised_runs
 from cactus_orchestrator.k8s.resource import get_resource_names
 from cactus_orchestrator.model import FinalisationStatus
 from cactus_orchestrator.settings import POD_HARNESS_RUNNER_MANAGEMENT_PORT, RUNNER_POD_URL, main_settings

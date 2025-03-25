@@ -10,12 +10,15 @@ from sqlalchemy.exc import IntegrityError
 from cactus_orchestrator.crud import (
     insert_run_for_user,
     select_nonfinalised_runs,
+    select_user_run,
     select_user_runs,
     update_run_finalisation_status,
+    update_run_with_runartifact_and_finalise,
     upsert_user,
     insert_user,
 )
 from cactus_orchestrator.k8s.certificate.create import generate_client_p12
+from cactus_orchestrator.model import FinalisationStatus, Run
 from cactus_orchestrator.schema import UserContext
 
 
@@ -319,3 +322,82 @@ async def test_update_run_finalisation_status(pg_empty_conn):
     result = pg_empty_conn.execute(text("SELECT finalisation_status, finalised_at FROM run")).fetchone()
     assert result[0] == 1
     assert result[1] is not None
+
+
+@pytest.mark.asyncio
+async def test_select_user_run(pg_empty_conn):
+    """Test selecting a run for a given user."""
+    # Arrange
+    pg_empty_conn.execute(
+        text(
+            """
+            INSERT INTO user_ (subject_id, issuer_id, certificate_p12_bundle, certificate_x509_der)
+            VALUES ('user1', 'issuer1', E'\\x', E'\\x')
+            """
+        )
+    )
+    pg_empty_conn.execute(
+        text(
+            """
+            INSERT INTO run (user_id, teststack_id, testprocedure_id, finalisation_status)
+            VALUES (1, 'teststack1', 'testproc1', 0)
+            """
+        )
+    )
+    pg_empty_conn.commit()
+
+    # Act
+    async with generate_async_session(pg_empty_conn.connection) as session:
+        run = await select_user_run(session, 1, 1)
+
+    # Assert
+    assert run is not None
+    assert run.user_id == 1
+    assert run.run_id == 1
+
+
+@pytest.mark.asyncio
+async def test_update_run_with_runartifact_and_finalise(pg_empty_conn):
+    """Test updating a run with a run artifact and finalisation status."""
+    # Arrange
+    run = Run(user_id=1, teststack_id="teststack1", testprocedure_id="ALL01", finalisation_status=0)
+    finalised_at = datetime(2025, 1, 1, tzinfo=timezone.utc)
+    pg_empty_conn.execute(
+        text(
+            """
+            INSERT INTO user_ (subject_id, issuer_id, certificate_p12_bundle, certificate_x509_der)
+            VALUES ('user1', 'issuer1', E'\\x', E'\\x')
+            """
+        )
+    )
+    pg_empty_conn.execute(
+        text(
+            f"""
+            INSERT INTO run (user_id, teststack_id, testprocedure_id, finalisation_status)
+            VALUES ({run.user_id}, '{run.teststack_id}', '{run.testprocedure_id}', {run.finalisation_status})
+            """
+        )
+    )
+    pg_empty_conn.execute(
+        text(
+            """
+            INSERT INTO run_artifact (compression, file_data)
+            VALUES ('gzip', E'\\x');
+            """
+        )
+    )
+    pg_empty_conn.commit()
+
+    # Act
+    async with generate_async_session(pg_empty_conn.connection) as session:
+        run = await select_user_run(session, 1, 1)
+        await update_run_with_runartifact_and_finalise(session, run, 1, FinalisationStatus.by_client, finalised_at)
+        await session.commit()
+
+    # Assert
+    result = pg_empty_conn.execute(
+        text("SELECT run_artifact_id, finalisation_status, finalised_at FROM run")
+    ).fetchone()
+    assert result[0] == 1
+    assert result[1] == FinalisationStatus.by_client.value
+    assert result[2] == finalised_at

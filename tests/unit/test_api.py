@@ -11,8 +11,9 @@ from sqlalchemy.exc import IntegrityError
 from fastapi_pagination import set_params, Params
 from cactus_test_definitions import TestProcedureId
 
+from cactus_orchestrator.api.run import finalise_run, teardown_teststack
 from cactus_orchestrator.main import app
-from cactus_orchestrator.model import Run, User
+from cactus_orchestrator.model import FinalisationStatus, Run, RunArtifact, User
 from cactus_orchestrator.schema import (
     StartRunRequest,
     StartRunResponse,
@@ -321,3 +322,59 @@ def test_get_runs_paginated(client, valid_user_jwt):
     assert data["items"][0]["run_id"] == 1
     select_user.assert_called_once()
     select_user_runs.assert_called_once()
+
+
+@pytest.mark.asyncio
+@patch("cactus_orchestrator.api.run.remove_ingress_rule")
+@patch("cactus_orchestrator.api.run.delete_service")
+@patch("cactus_orchestrator.api.run.delete_statefulset")
+async def test_teardown_teststack(mock_delete_statefulset, mock_delete_service, mock_remove_ingress_rule):
+    # Act
+    await teardown_teststack("test-service", "test-statefulset")
+
+    # Assert
+    mock_remove_ingress_rule.assert_called_once_with("test-service")
+    mock_delete_service.assert_called_once_with("test-service")
+    mock_delete_statefulset.assert_called_once_with("test-statefulset")
+
+
+@pytest.mark.asyncio
+@patch("cactus_orchestrator.api.run.RunnerClient.finalize")
+@patch("cactus_orchestrator.api.run.create_runartifact")
+@patch("cactus_orchestrator.api.run.update_run_with_runartifact_and_finalise")
+async def test_finalise_run_creates_run_artifact_and_updates_run(
+    mock_update_run_with_runartifact_and_finalise, mock_create_runartifact, mock_finalize
+):
+    # Arrange
+    mock_finalize.return_value = "file_data"  # TODO: this should be bytes, fix in client
+    mock_create_runartifact.return_value = RunArtifact(run_artifact_id=1)
+
+    # Act
+    run = Run(teststack_id=1)
+    await finalise_run(run, "http://mockurl", Mock(), FinalisationStatus.by_client, datetime.now(timezone.utc))
+
+    # Assert
+    mock_finalize.assert_called_once()
+    mock_create_runartifact.assert_called_once()
+    mock_update_run_with_runartifact_and_finalise.assert_called_once()
+
+
+@pytest.mark.asyncio
+@patch("cactus_orchestrator.api.run.select_user_or_raise")
+@patch("cactus_orchestrator.api.run.select_user_run")
+@patch("cactus_orchestrator.api.run.finalise_run")
+@patch("cactus_orchestrator.api.run.teardown_teststack")
+async def test_finalise_run_and_teardown_teststack_success(
+    mock_teardown_teststack, mock_finalise_run, mock_select_user_run, mock_select_user_or_raise, client, valid_user_jwt
+):
+    # Arrange
+    mock_select_user_or_raise.return_value = User(user_id=1)
+    mock_select_user_run.return_value = Run(teststack_id=1)
+
+    # Act
+    response = client.post("/run/1/finalise", headers={"Authorization": f"Bearer {valid_user_jwt}"})
+
+    # Assert
+    mock_finalise_run.assert_called_once()
+    mock_teardown_teststack.assert_called_once()
+    assert response.status_code == 200
