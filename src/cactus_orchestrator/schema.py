@@ -3,23 +3,21 @@ from pydantic import BaseModel, SecretStr, field_serializer
 from cactus_orchestrator.runner_client import CsipAusTestProcedureCodes
 
 
-class SpawnTestRequest(BaseModel):
-    code: CsipAusTestProcedureCodes
+class SpawnTestProcedureRequest(BaseModel):
+    test_procedure_id: CsipAusTestProcedureCodes
 
 
 # TODO: what should response be?
-class SpawnTestResponse(BaseModel):
-    # artefact_download_url: str
-    # token: Secret
-    # ca_cert: str  # PEM encoded
-    # client_p12: str  # PKCS#12 (PFX) format
-    # p12_password: SecretStr
+class SpawnTestProcedureResponse(BaseModel):
+    run_id: int
     test_url: str
-    run_id: str
 
-    # @field_serializer("p12_password", when_used="json")
-    # def dump_secret(self, v: SecretStr) -> str:
-    #     return v.get_secret_value()
+
+class RunResponse(BaseModel):
+    run_id: int
+    test_procedure_id: str
+    test_url: str
+    finalised: bool
 
 
 # TODO:
@@ -44,6 +42,6 @@ class UserResponse(BaseModel):
 
 
 class TestProcedureResponse(BaseModel):
-    code: str
+    test_procedure_id: CsipAusTestProcedureCodes
     description: str
     category: str

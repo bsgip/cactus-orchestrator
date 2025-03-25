@@ -17,19 +17,20 @@ router = APIRouter()
 
 disable_installed_extensions_check()
 
-def map_from_definitions_to_responses(definitions: TestProcedures) -> tuple[list[TestProcedureResponse], list[str]]:
+
+def map_from_definitions_to_responses(definitions: TestProcedures) -> list[TestProcedureResponse]:
     responses = []
-    codes = []
+    test_procedure_ids = []
     for k, v in definitions.test_procedures.items():
-        if k in codes:
-            raise ValueError(f"Duplicate test procedure code: {k}")
-        responses.append(TestProcedureResponse(code=k, description=v.description, category=v.category))
-        codes.append(k)
-    return responses, codes
+        if k in test_procedure_ids:
+            continue
+        responses.append(TestProcedureResponse(test_procedure_id=k, description=v.description, category=v.category))
+        test_procedure_ids.append(k)
+    return responses
 
 
 # Test procedures
-test_procedure_responses, available_codes = map_from_definitions_to_responses(TestProcedureConfig.from_resource())
+test_procedure_responses = map_from_definitions_to_responses(TestProcedureConfig.from_resource())
 
 
 @router.get("/procedure", status_code=HTTPStatus.OK)

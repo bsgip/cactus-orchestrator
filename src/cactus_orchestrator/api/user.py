@@ -47,6 +47,7 @@ async def create_new_user(
         logger.debug(exc)
         raise HTTPException(status_code=HTTPStatus.CONFLICT, detail="User already exists.")
 
+    await db.session.commit()
     return UserResponse(
         user_id=user.user_id,
         certificate_p12_b64=base64.b64encode(client_p12).decode("utf-8"),
@@ -66,6 +67,7 @@ async def update_existing_user_certificate(
     if user_id is None:
         raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="User does not exists. Please register.")
 
+    await db.session.commit()
     return UserResponse(
         user_id=user_id,
         certificate_p12_b64=base64.b64encode(client_p12).decode("utf-8"),
