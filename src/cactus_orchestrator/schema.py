@@ -1,10 +1,10 @@
 from pydantic import BaseModel, SecretStr, field_serializer
 
-from cactus_orchestrator.runner_client import CsipAusTestProcedureCodes
+from cactus_test_definitions import TestProcedureId
 
 
 class SpawnTestProcedureRequest(BaseModel):
-    test_procedure_id: CsipAusTestProcedureCodes
+    test_procedure_id: TestProcedureId
 
 
 # TODO: what should response be?
@@ -42,6 +42,6 @@ class UserResponse(BaseModel):
 
 
 class TestProcedureResponse(BaseModel):
-    test_procedure_id: CsipAusTestProcedureCodes
+    test_procedure_id: TestProcedureId
     description: str
     category: str

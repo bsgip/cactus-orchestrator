@@ -9,11 +9,11 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import IntegrityError
 from fastapi_pagination import set_params, Params
+from cactus_test_definitions import TestProcedureId
 
 from cactus_orchestrator.main import app
 from cactus_orchestrator.model import Run, User
 from cactus_orchestrator.schema import (
-    CsipAusTestProcedureCodes,
     SpawnTestProcedureRequest,
     SpawnTestProcedureResponse,
     TestProcedureResponse,
@@ -28,7 +28,7 @@ def client() -> Generator[TestClient, None, None]:
 
 @patch.multiple(
     "cactus_orchestrator.api.run",
-    HarnessRunnerAsyncClient=Mock(),
+    RunnerClient=Mock(),
     clone_statefulset=AsyncMock(),
     wait_for_pod=AsyncMock(),
     add_ingress_rule=AsyncMock(),
@@ -41,7 +41,7 @@ def test_post_spawn_test_created(client, valid_user_p12_and_der, valid_user_jwt)
     """Just a simple test, with all k8s functions stubbed, to catch anything silly in the handler"""
     # Arrange
     from cactus_orchestrator.api.run import (
-        HarnessRunnerAsyncClient,
+        RunnerClient,
         clone_statefulset,
         select_user_certificate_x509_der,
         select_user,
@@ -51,12 +51,12 @@ def test_post_spawn_test_created(client, valid_user_p12_and_der, valid_user_jwt)
     select_user.return_value = User(
         user_id=1, subject_id="sub", issuer_id="iss", certificate_p12_bundle=None, certificate_x509_der=None
     )
-    HarnessRunnerAsyncClient().post_start_test = AsyncMock()
+    RunnerClient.start = AsyncMock()
     clone_statefulset.return_value = "pod_name"
     select_user_certificate_x509_der.return_value = valid_user_p12_and_der[1]
 
     # Act
-    req = SpawnTestProcedureRequest(test_procedure_id=CsipAusTestProcedureCodes.ALL01.value)
+    req = SpawnTestProcedureRequest(test_procedure_id=TestProcedureId.ALL_01.value)
     res = client.post("run", json=req.model_dump(), headers={"Authorization": f"Bearer {valid_user_jwt}"})
 
     # Assert
@@ -68,7 +68,7 @@ def test_post_spawn_test_created(client, valid_user_p12_and_der, valid_user_jwt)
 
 @patch.multiple(
     "cactus_orchestrator.api.run",
-    HarnessRunnerAsyncClient=Mock(),
+    RunnerClient=Mock(),
     clone_statefulset=AsyncMock(),
     wait_for_pod=AsyncMock(),
     add_ingress_rule=AsyncMock(),
@@ -96,7 +96,7 @@ def test_post_spawn_test_teardown_on_failure(client, valid_user_jwt, valid_user_
     )
 
     # Act
-    req = SpawnTestProcedureRequest(test_procedure_id=CsipAusTestProcedureCodes.ALL01)
+    req = SpawnTestProcedureRequest(test_procedure_id=TestProcedureId.ALL_01)
     res = client.post("run", json=req.model_dump(), headers={"Authorization": f"Bearer {valid_user_jwt}"})
 
     # Assert

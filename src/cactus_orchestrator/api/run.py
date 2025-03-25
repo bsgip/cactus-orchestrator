@@ -10,6 +10,7 @@ from cryptography import x509
 from cryptography.hazmat.primitives import serialization
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi_async_sqlalchemy import db
+from cactus_runner.client import RunnerClient, ClientSession, RunnerClientException
 
 from cactus_orchestrator.auth import AuthScopes, jwt_validator
 from cactus_orchestrator.crud import (
@@ -22,12 +23,6 @@ from cactus_orchestrator.k8s.resource import get_resource_names
 from cactus_orchestrator.k8s.resource.create import add_ingress_rule, clone_service, clone_statefulset, wait_for_pod
 from cactus_orchestrator.k8s.resource.delete import delete_service, delete_statefulset, remove_ingress_rule
 from cactus_orchestrator.model import Run, User
-from cactus_orchestrator.runner_client import (
-    CsipAusTestProcedureCodes,
-    HarnessRunnerAsyncClient,
-    RunnerClientException,
-    StartTestRequest,
-)
 from cactus_orchestrator.schema import (
     RunResponse,
     SpawnTestProcedureRequest,
@@ -37,6 +32,7 @@ from cactus_orchestrator.schema import (
 from cactus_orchestrator.settings import (
     CLONED_RESOURCE_NAME_FORMAT,
     POD_HARNESS_RUNNER_MANAGEMENT_PORT,
+    RUNNER_URL,
     TESTING_URL_FORMAT,
     HarnessOrchestratorException,
     main_settings,
@@ -127,10 +123,11 @@ async def spawn_teststack(
         await wait_for_pod(pod_name)
 
         # inject initial state
-        run_cl = HarnessRunnerAsyncClient(pod_fqdn, POD_HARNESS_RUNNER_MANAGEMENT_PORT)
-        await run_cl.post_start_test(
-            test_code=test.test_procedure_id,
-            body=StartTestRequest(client_cert=client_cert.public_bytes(serialization.Encoding.PEM).decode("utf-8")),
+        runner_session = ClientSession(
+            RUNNER_URL.format(pod_fqdn=pod_fqdn, pod_port=POD_HARNESS_RUNNER_MANAGEMENT_PORT)
+        )
+        await RunnerClient.start(
+            runner_session, test.test_procedure_id, client_cert.public_bytes(serialization.Encoding.PEM).decode("utf-8")
         )
 
         # finally, include new service in ingress rule
