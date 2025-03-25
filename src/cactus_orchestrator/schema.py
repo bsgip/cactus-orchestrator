@@ -1,6 +1,5 @@
-from pydantic import BaseModel, SecretStr, field_serializer
-
 from cactus_test_definitions import TestProcedureId
+from pydantic import BaseModel, SecretStr, field_serializer
 
 
 class StartRunRequest(BaseModel):
