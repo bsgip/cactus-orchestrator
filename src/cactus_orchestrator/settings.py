@@ -14,6 +14,7 @@ TESTING_URL_FORMAT = "https://{testing_fqdn}/{svc_name}"
 STATEFULSET_POD_NAME_FORMAT = (
     "{statefulset_name}-0"  # TODO: this is the k8s naming scheme of a statefulsets pod, how to better handle?
 )
+RUNNER_URL = "https://{pod_fqdn}:{pod_port}"
 
 
 def load_k8s_config() -> None:
