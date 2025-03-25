@@ -21,6 +21,7 @@ dependencies = [
     "cactus-test-definitions @ git+ssh://git@github.com/bsgip/cactus-test-definitions.git",
     "cactus-runner @ git+ssh://git@github.com/bsgip/cactus-runner.git",
     "fastapi-pagination",
+    "fastapi-utils"
 ]
 name = "cactus-orchestrator"
 dynamic = ["version"]

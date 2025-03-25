@@ -3,12 +3,12 @@ from pydantic import BaseModel, SecretStr, field_serializer
 from cactus_test_definitions import TestProcedureId
 
 
-class SpawnTestProcedureRequest(BaseModel):
+class StartRunRequest(BaseModel):
     test_procedure_id: TestProcedureId
 
 
 # TODO: what should response be?
-class SpawnTestProcedureResponse(BaseModel):
+class StartRunResponse(BaseModel):
     run_id: int
     test_url: str
 
@@ -18,10 +18,6 @@ class RunResponse(BaseModel):
     test_procedure_id: str
     test_url: str
     finalised: bool
-
-
-# TODO:
-class FinalizeTestResponse(BaseModel): ...  # noqa: E701
 
 
 class UserContext(BaseModel):
@@ -42,6 +38,7 @@ class UserResponse(BaseModel):
 
 
 class TestProcedureResponse(BaseModel):
+    __test__ = False
     test_procedure_id: TestProcedureId
     description: str
     category: str

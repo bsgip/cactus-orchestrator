@@ -14,7 +14,7 @@ TESTING_URL_FORMAT = "https://{testing_fqdn}/{svc_name}"
 STATEFULSET_POD_NAME_FORMAT = (
     "{statefulset_name}-0"  # TODO: this is the k8s naming scheme of a statefulsets pod, how to better handle?
 )
-RUNNER_URL = "https://{pod_fqdn}:{pod_port}"
+RUNNER_POD_URL = "https://{pod_fqdn}:{pod_port}"  # TODO: use service instead
 
 
 def load_k8s_config() -> None:
@@ -49,6 +49,10 @@ class HarnessOrchestratorSettings(BaseSettings):
     tls_ca_tls_secret_name: str = "tls-ca-cert-key-pair"
     # tls_server_tls_secret_name: str = "tls-server-secret-pair"
     testing_fqdn: str  # NOTE: we could extract this from the server certs
+
+    # teardown
+    teardown_max_lifetime_seconds: int = 86400
+    teardown_idle_timeout_seconds: int = 3600
 
 
 class JWTAuthSettings(BaseSettings):
