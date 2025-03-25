@@ -67,15 +67,15 @@ class Run(Base):
     finalised_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, default=None)
     finalisation_status: Mapped[FinalisationStatus] = mapped_column(Integer, nullable=False)
 
-    runfile_id: Mapped[int] = mapped_column(ForeignKey("runfile.id"), nullable=True)
-    run_file: Mapped["RunFile"] = relationship(lazy="raise")
+    run_artifact_id: Mapped[int] = mapped_column(ForeignKey("run_artifact.id"), nullable=True)
+    run_file: Mapped["RunArtifact"] = relationship(lazy="raise")
 
 
-class RunFile(Base):
+class RunArtifact(Base):
     """Single compressed file composed of all run files"""
 
-    __tablename__ = "runfile"
+    __tablename__ = "run_artifact"
 
-    runfile_id: Mapped[int] = mapped_column(name="id", primary_key=True, autoincrement=True)
+    run_artifact_id: Mapped[int] = mapped_column(name="id", primary_key=True, autoincrement=True)
     compression: Mapped[str] = mapped_column(String, nullable=False)
     file_data: Mapped[bytes] = mapped_column(LargeBinary, nullable=False, unique=False)

@@ -14,8 +14,8 @@ from cactus_test_definitions import TestProcedureId
 from cactus_orchestrator.main import app
 from cactus_orchestrator.model import Run, User
 from cactus_orchestrator.schema import (
-    SpawnTestProcedureRequest,
-    SpawnTestProcedureResponse,
+    StartRunRequest,
+    StartRunResponse,
     TestProcedureResponse,
 )
 from cactus_orchestrator.settings import HarnessOrchestratorException
@@ -56,12 +56,12 @@ def test_post_spawn_test_created(client, valid_user_p12_and_der, valid_user_jwt)
     select_user_certificate_x509_der.return_value = valid_user_p12_and_der[1]
 
     # Act
-    req = SpawnTestProcedureRequest(test_procedure_id=TestProcedureId.ALL_01.value)
+    req = StartRunRequest(test_procedure_id=TestProcedureId.ALL_01.value)
     res = client.post("run", json=req.model_dump(), headers={"Authorization": f"Bearer {valid_user_jwt}"})
 
     # Assert
     assert res.status_code == HTTPStatus.CREATED
-    resmdl = SpawnTestProcedureResponse.model_validate(res.json())
+    resmdl = StartRunResponse.model_validate(res.json())
     assert os.environ["TESTING_FQDN"] in resmdl.test_url
     insert_run_for_user.assert_called_once()
 
@@ -96,7 +96,7 @@ def test_post_spawn_test_teardown_on_failure(client, valid_user_jwt, valid_user_
     )
 
     # Act
-    req = SpawnTestProcedureRequest(test_procedure_id=TestProcedureId.ALL_01)
+    req = StartRunRequest(test_procedure_id=TestProcedureId.ALL_01)
     res = client.post("run", json=req.model_dump(), headers={"Authorization": f"Bearer {valid_user_jwt}"})
 
     # Assert
@@ -300,7 +300,7 @@ def test_get_runs_paginated(client, valid_user_jwt):
         testprocedure_id="ALL-01",
         created_at=datetime(2025, 1, 1, tzinfo=timezone.utc),
         finalised_at=datetime(2025, 1, 2, tzinfo=timezone.utc),
-        runfile_id=1,
+        run_artifact_id=1,
     )
     select_user_runs.return_value = [mock_run]
 

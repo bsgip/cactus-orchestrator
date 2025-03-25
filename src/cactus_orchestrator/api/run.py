@@ -6,6 +6,7 @@ from typing import Annotated
 from fastapi_pagination import Page, paginate
 import shortuuid
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.exc import NoResultFound
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -14,10 +15,13 @@ from cactus_runner.client import RunnerClient, ClientSession, RunnerClientExcept
 
 from cactus_orchestrator.auth import AuthScopes, jwt_validator
 from cactus_orchestrator.crud import (
+    create_runartifact,
     insert_run_for_user,
     select_user,
     select_user_certificate_x509_der,
+    select_user_run,
     select_user_runs,
+    update_run_with_runartifact_and_finalise,
 )
 from cactus_orchestrator.k8s.resource import get_resource_names
 from cactus_orchestrator.k8s.resource.create import add_ingress_rule, clone_service, clone_statefulset, wait_for_pod
@@ -25,8 +29,8 @@ from cactus_orchestrator.k8s.resource.delete import delete_service, delete_state
 from cactus_orchestrator.model import Run, User, FinalisationStatus
 from cactus_orchestrator.schema import (
     RunResponse,
-    SpawnTestProcedureRequest,
-    SpawnTestProcedureResponse,
+    StartRunRequest,
+    StartRunResponse,
     UserContext,
 )
 from cactus_orchestrator.settings import (
@@ -86,11 +90,11 @@ async def get_runs_paginated(
 
 
 @router.post("/run", status_code=HTTPStatus.CREATED)
-async def spawn_teststack(
-    test: SpawnTestProcedureRequest,
+async def spawn_teststack_and_start_run(
+    test: StartRunRequest,
     user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_scopes({AuthScopes.user_all}))],
-) -> SpawnTestProcedureResponse:
-    """This endpoint setups a test procedure as requested by client.
+) -> StartRunResponse:
+    """This endpoint sets up a test procedure as requested by client.
     Steps are:
         (1) Create a service/statefulset representing the isolated envoy test environment.
         (2) Init any state in the envoy environment.
@@ -144,7 +148,7 @@ async def spawn_teststack(
     run_id = await insert_run_for_user(db.session, user.user_id, teststack_id, test.test_procedure_id)
     await db.session.commit()
 
-    return SpawnTestProcedureResponse(
+    return StartRunResponse(
         run_id=run_id,
         test_url=TESTING_URL_FORMAT.format(testing_fqdn=main_settings.testing_fqdn, svc_name=new_svc_name),
     )
@@ -158,3 +162,46 @@ async def teardown_teststack(svc_name: str, statefulset_name: str) -> None:
     # Remove resources
     await delete_service(svc_name)
     await delete_statefulset(statefulset_name)
+
+
+async def finalise_run(
+    run: Run, url: str, session: AsyncSession, finalisation_status: FinalisationStatus, finalised_at: datetime
+) -> None:
+    runner_session = ClientSession(url)
+
+    # TODO: this should return bytes, encoding for now
+    # TODO: should also return compression or allow access to response header
+    file_data = (await RunnerClient.finalize(runner_session)).encode("utf-8")
+    compression = "gzip"
+
+    artifact = await create_runartifact(session, compression, file_data)
+    await update_run_with_runartifact_and_finalise(
+        session, run, artifact.run_artifact_id, finalisation_status, finalised_at
+    )
+
+
+@router.post("/run/{run_id}/finalise", status_code=HTTPStatus.OK)
+async def finalise_run_and_teardown_teststack(
+    run_id: int,
+    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_scopes({AuthScopes.user_all}))],
+) -> None:
+    # get user
+    user = await select_user_or_raise(db.session, user_context)
+
+    # get run
+    try:
+        run = await select_user_run(db.session, user.user_id, run_id)
+    except NoResultFound as exc:
+        logger.debug(exc)
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Not Found")
+
+    # get resource names
+    svc_name, statefulset_name, _, _, pod_fqdn = get_resource_names(run.teststack_id)
+    pod_url = RUNNER_POD_URL.format(pod_fqdn=pod_fqdn, pod_port=POD_HARNESS_RUNNER_MANAGEMENT_PORT)
+
+    # finalise
+    await finalise_run(run, pod_url, db.session, FinalisationStatus.by_client, datetime.now(timezone.utc))
+    await db.session.commit()
+
+    # teardown
+    await teardown_teststack(svc_name=svc_name, statefulset_name=statefulset_name)

@@ -12,7 +12,7 @@ from cactus_orchestrator.crud import select_nonfinalised_runs, update_run_finali
 from cactus_orchestrator.k8s.resource import get_resource_names
 from cactus_orchestrator.model import FinalisationStatus
 from cactus_orchestrator.settings import POD_HARNESS_RUNNER_MANAGEMENT_PORT, RUNNER_POD_URL, main_settings
-from cactus_orchestrator.api.run import teardown_teststack
+from cactus_orchestrator.api.run import finalise_run, teardown_teststack
 
 
 async def is_idle(now: datetime, url: str) -> bool:
@@ -31,6 +31,9 @@ def is_maxlive_overtime(now: datetime, created_at: datetime) -> bool:
     return False
 
 
+task_references: set[asyncio.Task] = set()
+
+
 @repeat_every(seconds=120)
 async def teardown_teststack_task() -> None:
     """Task that monitors live teststacks and triggers teardown based on timeout rules."""
@@ -38,24 +41,22 @@ async def teardown_teststack_task() -> None:
     for run in runs:
         now = datetime.now(timezone.utc)  # check now time per loop
         svc_name, statefulset_name, _, _, pod_fqdn = get_resource_names(run.teststack_id)  # type: ignore
-        if await is_idle(
-            now, RUNNER_POD_URL.format(pod_fqdn=pod_fqdn, pod_port=POD_HARNESS_RUNNER_MANAGEMENT_PORT)
-        ) or is_maxlive_overtime(now, run.created_at):
+        pod_url = RUNNER_POD_URL.format(pod_fqdn=pod_fqdn, pod_port=POD_HARNESS_RUNNER_MANAGEMENT_PORT)
+        if await is_idle(now, pod_url) or is_maxlive_overtime(now, run.created_at):
+
+            # finalise
+            await finalise_run(run, pod_url, db.session, FinalisationStatus.by_timeout, now)
+            await db.session.commit()
+
+            # teardown
             await teardown_teststack(svc_name=svc_name, statefulset_name=statefulset_name)
-            await update_run_finalisation_status(
-                db.session, run.run_id, finalisation_status=FinalisationStatus.by_timeout, finalised_at=now
-            )
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[Never]:
-    """Lifespan event to start background tasks."""
+    """Lifespan event to start background tasks with fastapi app."""
     task = asyncio.create_task(teardown_teststack_task())
+
     yield  # type: ignore
 
-    # Cancel when done, ignore if it fails
     task.cancel()
-    try:
-        await task
-    except asyncio.CancelledError:
-        pass

@@ -4,7 +4,7 @@ from sqlalchemy.orm import undefer
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from cactus_orchestrator.model import User, UserUniqueConstraintName, Run, FinalisationStatus
+from cactus_orchestrator.model import RunArtifact, User, UserUniqueConstraintName, Run, FinalisationStatus
 
 FinalisationStatus
 from cactus_orchestrator.schema import UserContext
@@ -149,3 +149,36 @@ async def update_run_finalisation_status(
         .values(finalisation_status=finalisation_status, finalised_at=finalised_at)
     )
     await session.execute(stmt)
+
+
+async def create_runartifact(session: AsyncSession, compression: str, file_data: bytes) -> RunArtifact:
+    runartifact = RunArtifact(compression=compression, file_data=file_data)
+    session.add(runartifact)
+    await session.flush()
+    return runartifact
+
+
+async def update_run_with_runartifact_and_finalise(
+    session: AsyncSession,
+    run: Run,
+    run_artifact_id: int,
+    finalisation_status: FinalisationStatus,
+    finalised_at: datetime,
+) -> None:
+    run.run_artifact_id = run_artifact_id
+    run.finalised_at = finalised_at
+    run.finalisation_status = finalisation_status
+    await session.flush()
+
+
+async def select_user_run(session: AsyncSession, user_id: int, run_id: int) -> Run:
+    stmt = select(Run).where(
+        and_(
+            Run.run_id == run_id,
+            Run.user_id == user_id,
+        )
+    )
+
+    resp = await session.execute(stmt)
+
+    return resp.scalar_one()
