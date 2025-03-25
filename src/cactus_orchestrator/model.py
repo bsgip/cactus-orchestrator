@@ -1,6 +1,7 @@
 from datetime import datetime
+from enum import IntEnum
 
-from sqlalchemy import DateTime, ForeignKey, LargeBinary, String, UniqueConstraint, func, Index
+from sqlalchemy import DateTime, ForeignKey, LargeBinary, String, UniqueConstraint, func, Index, Integer
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -38,9 +39,23 @@ class User(Base):
     runs: Mapped[list["Run"]] = relationship(lazy="raise")
 
 
+class FinalisationStatus(IntEnum):
+    not_finalised = 0  # Run is still alive
+    by_client = 1  # Run has been terminated by client finalisation
+    by_timeout = 2  # Run has been terminated by timeout finalisation
+    terminated = 3  # Run was never explicitly finalised, shutdown somehow.
+
+
 class Run(Base):
     __tablename__ = "run"
-    __table_args__ = (Index("testprocedure_id_created_at_idx", "testprocedure_id", "created_at"),)
+    __table_args__ = (
+        Index(
+            "finalisation_status_created_at_testprocedure_id_idx",
+            "finalisation_status",
+            "created_at",
+            "testprocedure_id",
+        ),
+    )
 
     run_id: Mapped[int] = mapped_column(name="id", primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("user_.id"))
@@ -49,8 +64,10 @@ class Run(Base):
     testprocedure_id: Mapped[str] = mapped_column(String, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
-    runfile_id: Mapped[int] = mapped_column(ForeignKey("runfile.id"), nullable=True)
     finalised_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, default=None)
+    finalisation_status: Mapped[FinalisationStatus] = mapped_column(Integer, nullable=False)
+
+    runfile_id: Mapped[int] = mapped_column(ForeignKey("runfile.id"), nullable=True)
     run_file: Mapped["RunFile"] = relationship(lazy="raise")
 
 

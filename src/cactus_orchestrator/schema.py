@@ -21,7 +21,7 @@ class RunResponse(BaseModel):
 
 
 # TODO:
-class FinalizeTestResponse(BaseModel): ...  # noqa: E701
+class finaliseTestResponse(BaseModel): ...  # noqa: E701
 
 
 class UserContext(BaseModel):

@@ -4,7 +4,9 @@ from sqlalchemy.orm import undefer
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from cactus_orchestrator.model import User, UserUniqueConstraintName, Run
+from cactus_orchestrator.model import User, UserUniqueConstraintName, Run, FinalisationStatus
+
+FinalisationStatus
 from cactus_orchestrator.schema import UserContext
 
 
@@ -91,8 +93,19 @@ async def select_user_certificate_x509_der(session: AsyncSession, user_context: 
     return res.scalar_one_or_none()
 
 
-async def insert_run_for_user(session: AsyncSession, user_id: int, teststack_id: str, testprocedure_id: str) -> int:
-    run = Run(user_id=user_id, teststack_id=teststack_id, testprocedure_id=testprocedure_id)
+async def insert_run_for_user(
+    session: AsyncSession,
+    user_id: int,
+    teststack_id: str,
+    testprocedure_id: str,
+    finalisation_status: FinalisationStatus = FinalisationStatus.not_finalised,
+) -> int:
+    run = Run(
+        user_id=user_id,
+        teststack_id=teststack_id,
+        testprocedure_id=testprocedure_id,
+        finalisation_status=finalisation_status,
+    )
     session.add(run)
     await session.flush()
     return run.run_id
@@ -108,12 +121,31 @@ async def select_user_runs(
         filters.append(Run.created_at >= created_at_gte)
 
     if finalised is True:
-        filters.append(Run.finalised_at.isnot(None))
+        filters.append(
+            Run.finalisation_status.in_((FinalisationStatus.by_client.value, FinalisationStatus.by_timeout.value))
+        )
     elif finalised is False:
-        filters.append(Run.finalised_at.is_(None))
+        filters.append(Run.finalisation_status == FinalisationStatus.not_finalised.value)
 
     if filters:
         stmt = stmt.where(and_(*filters))
 
     res = await session.execute(stmt)
     return list(res.scalars().all())
+
+
+async def select_nonfinalised_runs(session: AsyncSession) -> list[Run]:
+    stmt = select(Run).where(Run.finalisation_status == FinalisationStatus.not_finalised.value)
+    res = await session.execute(stmt)
+    return list(res.scalars().all())
+
+
+async def update_run_finalisation_status(
+    session: AsyncSession, run_id: int, finalisation_status: FinalisationStatus, finalised_at: datetime
+) -> None:
+    stmt = (
+        update(Run)
+        .where(Run.run_id == run_id)
+        .values(finalisation_status=finalisation_status, finalised_at=finalised_at)
+    )
+    await session.execute(stmt)

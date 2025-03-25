@@ -7,7 +7,14 @@ from cryptography.hazmat.primitives import serialization
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
-from cactus_orchestrator.crud import select_user_runs, upsert_user, insert_user
+from cactus_orchestrator.crud import (
+    insert_run_for_user,
+    select_nonfinalised_runs,
+    select_user_runs,
+    update_run_finalisation_status,
+    upsert_user,
+    insert_user,
+)
 from cactus_orchestrator.k8s.certificate.create import generate_client_p12
 from cactus_orchestrator.schema import UserContext
 
@@ -92,12 +99,12 @@ async def test_select_user_runs_all(pg_empty_conn):
     pg_empty_conn.execute(
         text(
             """
-            INSERT INTO run (user_id, teststack_id, testprocedure_id, finalised_at)
+            INSERT INTO run (user_id, teststack_id, testprocedure_id, finalised_at, finalisation_status)
             VALUES (
-                1, 'teststack1', 'testproc1', NULL
+                1, 'teststack1', 'testproc1', NULL, 0
             ),
             (
-                1, 'teststack2', 'testproc1', NOW()
+                1, 'teststack2', 'testproc1', NOW(), 1
             )
         """
         )
@@ -128,12 +135,12 @@ async def test_select_user_runs_finalised_only(pg_empty_conn):
     pg_empty_conn.execute(
         text(
             """
-            INSERT INTO run (user_id, teststack_id, testprocedure_id, finalised_at)
+            INSERT INTO run (user_id, teststack_id, testprocedure_id, finalised_at, finalisation_status)
             VALUES (
-                1, 'teststack1', 'testproc1', NULL
+                1, 'teststack1', 'testproc1', NULL, 0
             ),
             (
-                1, 'teststack2', 'testproc1', NOW()
+                1, 'teststack2', 'testproc1', NOW(), 1
             )
         """
         )
@@ -164,12 +171,12 @@ async def test_select_user_runs_unfinalised_only(pg_empty_conn):
     pg_empty_conn.execute(
         text(
             """
-            INSERT INTO run (user_id, teststack_id, testprocedure_id, finalised_at)
+            INSERT INTO run (user_id, teststack_id, testprocedure_id, finalised_at, finalisation_status)
             VALUES (
-                1, 'teststack1', 'testproc1', NULL
+                1, 'teststack1', 'testproc1', NULL, 0
             ),
             (
-                1, 'teststack2', 'testproc1', NOW()
+                1, 'teststack2', 'testproc1', NOW(), 1
             )
         """
         )
@@ -201,12 +208,12 @@ async def test_select_user_runs_created_at_filter(pg_empty_conn):
     pg_empty_conn.execute(
         text(
             """
-            INSERT INTO run (user_id, teststack_id, testprocedure_id, created_at)
+            INSERT INTO run (user_id, teststack_id, testprocedure_id, created_at, finalisation_status)
             VALUES (
-                1, 'teststack1', 'testproc1', '2024-01-01T00:00:00+00:00'
+                1, 'teststack1', 'testproc1', '2024-01-01T00:00:00+00:00', 0
             ),
             (
-                1, 'teststack2', 'testproc1', '2024-01-02T00:00:00+00:00'
+                1, 'teststack2', 'testproc1', '2024-01-02T00:00:00+00:00', 0
             )
         """
         )
@@ -222,3 +229,93 @@ async def test_select_user_runs_created_at_filter(pg_empty_conn):
 
     # Assert
     assert len(runs) == 1
+
+
+@pytest.mark.asyncio
+async def test_insert_run_for_user(pg_empty_conn):
+    # Arrange
+    pg_empty_conn.execute(
+        text(
+            """
+            INSERT INTO user_ (subject_id, issuer_id, certificate_p12_bundle, certificate_x509_der)
+            VALUES ('user1', 'issuer1', E'\\x', E'\\x')
+            """
+        )
+    )
+    pg_empty_conn.commit()
+
+    # Act
+    async with generate_async_session(pg_empty_conn.connection) as session:
+        run_id = await insert_run_for_user(session, 1, "teststack1", "ALL_01")
+        await session.commit()
+
+    # Assert
+    assert run_id is not None
+    result = pg_empty_conn.execute(text(f"SELECT COUNT(*) FROM run")).fetchone()
+    assert result[0] == 1
+
+
+@pytest.mark.asyncio
+async def test_select_nonfinalised_runs(pg_empty_conn):
+    """Test selecting only non-finalised runs."""
+    # Arrange
+    pg_empty_conn.execute(
+        text(
+            """
+            INSERT INTO user_ (subject_id, issuer_id, certificate_p12_bundle, certificate_x509_der)
+            VALUES ('user1', 'issuer1', E'\\x', E'\\x')
+            """
+        )
+    )
+    pg_empty_conn.execute(
+        text(
+            """
+            INSERT INTO run (user_id, teststack_id, testprocedure_id, finalisation_status)
+            VALUES (1, 'teststack1', 'testproc1', 0),
+                   (1, 'teststack2', 'testproc1', 1)
+            """
+        )
+    )
+    pg_empty_conn.commit()
+
+    # Act
+    async with generate_async_session(pg_empty_conn.connection) as session:
+        runs = await select_nonfinalised_runs(session)
+
+    # Assert
+    assert len(runs) == 1
+    assert runs[0].finalisation_status == 0
+
+
+@pytest.mark.asyncio
+async def test_update_run_finalisation_status(pg_empty_conn):
+    """Test updating the finalisation status of a run."""
+    # Arrange
+    finalised_at = datetime(2025, 1, 1, tzinfo=timezone.utc)
+    pg_empty_conn.execute(
+        text(
+            """
+            INSERT INTO user_ (subject_id, issuer_id, certificate_p12_bundle, certificate_x509_der)
+            VALUES ('user1', 'issuer1', E'\\x', E'\\x')
+            """
+        )
+    )
+    pg_empty_conn.execute(
+        text(
+            """
+            INSERT INTO run (user_id, teststack_id, testprocedure_id, finalisation_status)
+            VALUES (1, 'teststack1', 'testproc1', 0)
+            """
+        )
+    )
+    pg_empty_conn.commit()
+
+    # Act
+    async with generate_async_session(pg_empty_conn.connection) as session:
+        await update_run_finalisation_status(session, 1, 1, finalised_at)
+        await session.commit()
+
+    # Assert
+    result = pg_empty_conn.execute(text("SELECT finalisation_status, finalised_at FROM run")).fetchone()
+    assert result[0] == 1
+    assert result[1] is not None

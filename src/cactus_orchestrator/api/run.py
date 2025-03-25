@@ -22,7 +22,7 @@ from cactus_orchestrator.crud import (
 from cactus_orchestrator.k8s.resource import get_resource_names
 from cactus_orchestrator.k8s.resource.create import add_ingress_rule, clone_service, clone_statefulset, wait_for_pod
 from cactus_orchestrator.k8s.resource.delete import delete_service, delete_statefulset, remove_ingress_rule
-from cactus_orchestrator.model import Run, User
+from cactus_orchestrator.model import Run, User, FinalisationStatus
 from cactus_orchestrator.schema import (
     RunResponse,
     SpawnTestProcedureRequest,
@@ -32,7 +32,7 @@ from cactus_orchestrator.schema import (
 from cactus_orchestrator.settings import (
     CLONED_RESOURCE_NAME_FORMAT,
     POD_HARNESS_RUNNER_MANAGEMENT_PORT,
-    RUNNER_URL,
+    RUNNER_POD_URL,
     TESTING_URL_FORMAT,
     HarnessOrchestratorException,
     main_settings,
@@ -52,7 +52,9 @@ def map_run_to_run_response(run: Run) -> RunResponse:
         run_id=run.run_id,
         test_procedure_id=run.testprocedure_id,
         test_url=TESTING_URL_FORMAT.format(testing_fqdn=main_settings.testing_fqdn, svc_name=svc_name),
-        finalised=True if run.finalised_at is not None else False,
+        finalised=(
+            True if run.finalisation_status in (FinalisationStatus.by_client, FinalisationStatus.by_timeout) else False
+        ),
     )
 
 
@@ -124,7 +126,7 @@ async def spawn_teststack(
 
         # inject initial state
         runner_session = ClientSession(
-            RUNNER_URL.format(pod_fqdn=pod_fqdn, pod_port=POD_HARNESS_RUNNER_MANAGEMENT_PORT)
+            RUNNER_POD_URL.format(pod_fqdn=pod_fqdn, pod_port=POD_HARNESS_RUNNER_MANAGEMENT_PORT)
         )
         await RunnerClient.start(
             runner_session, test.test_procedure_id, client_cert.public_bytes(serialization.Encoding.PEM).decode("utf-8")
