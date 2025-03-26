@@ -4,7 +4,7 @@ import pytest
 from kubernetes.client.exceptions import ApiException
 
 from cactus_orchestrator.k8s.resource import async_k8s_api_retry, get_resource_names
-from cactus_orchestrator.settings import HarnessOrchestratorException
+from cactus_orchestrator.settings import CactusOrchestratorException
 
 
 @pytest.mark.asyncio
@@ -58,7 +58,7 @@ async def test_async_k8s_api_retry_exceeds_retries():
     async def sample_function():
         raise ApiException(status=500, reason="Internal Server Error")
 
-    with pytest.raises(HarnessOrchestratorException, match="Failed action: sample_function"):
+    with pytest.raises(CactusOrchestratorException, match="Failed action: sample_function"):
         await sample_function()
 
 
@@ -89,7 +89,7 @@ async def test_async_k8s_api_retry_fail_silently():
 @patch("cactus_orchestrator.k8s.resource.main_settings")
 def test_get_resource_names(mock_settings):
     """Test get_resource_names function."""
-    mock_settings.testing_namespace = "test-ns"
+    mock_settings.test_execution_namespace = "test-ns"
     mock_settings.template_service_name = "template-service"
     mock_settings.template_statefulset_name = "template-statefulset"
     mock_settings.template_app_name = "template-app"

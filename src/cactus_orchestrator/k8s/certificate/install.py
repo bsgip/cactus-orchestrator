@@ -80,7 +80,7 @@ def install_server_certificate(
     cert_data: bytes, key_data: bytes, ingress_name: str, namespace: str | None = None
 ) -> None:
     """Creates a TLS secret and updates the Ingress with it."""
-    namespace = namespace or main_settings.testing_namespace
+    namespace = namespace or main_settings.test_execution_namespace
 
     domain = extract_domain_from_cert(cert_data)
     secret_name = TLS_SERVER_SECRET_NAME_FORMAT.format(domain=domain.replace(".", "-"))
