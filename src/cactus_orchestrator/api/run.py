@@ -32,8 +32,8 @@ from cactus_orchestrator.settings import (
     CLONED_RESOURCE_NAME_FORMAT,
     POD_HARNESS_RUNNER_MANAGEMENT_PORT,
     RUNNER_POD_URL,
-    TESTING_URL_FORMAT,
-    HarnessOrchestratorException,
+    TEST_EXECUTION_URL_FORMAT,
+    CactusOrchestratorException,
     main_settings,
 )
 
@@ -50,7 +50,7 @@ def map_run_to_run_response(run: Run) -> RunResponse:
     return RunResponse(
         run_id=run.run_id,
         test_procedure_id=run.testprocedure_id,
-        test_url=TESTING_URL_FORMAT.format(testing_fqdn=main_settings.testing_fqdn, svc_name=svc_name),
+        test_url=TEST_EXECUTION_URL_FORMAT.format(fqdn=main_settings.test_execution_fqdn, svc_name=svc_name),
         finalised=(
             True if run.finalisation_status in (FinalisationStatus.by_client, FinalisationStatus.by_timeout) else False
         ),
@@ -134,7 +134,7 @@ async def spawn_teststack_and_start_run(
         # finally, include new service in ingress rule
         await add_ingress_rule(new_svc_name)
 
-    except (HarnessOrchestratorException, RunnerClientException) as exc:
+    except (CactusOrchestratorException, RunnerClientException) as exc:
         logger.debug(exc)
         await teardown_teststack(new_svc_name, new_statefulset_name)
         raise HTTPException(HTTPStatus.INTERNAL_SERVER_ERROR, detail="Internal Server Error.")
@@ -145,7 +145,7 @@ async def spawn_teststack_and_start_run(
 
     return StartRunResponse(
         run_id=run_id,
-        test_url=TESTING_URL_FORMAT.format(testing_fqdn=main_settings.testing_fqdn, svc_name=new_svc_name),
+        test_url=TEST_EXECUTION_URL_FORMAT.format(fqdn=main_settings.test_execution_fqdn, svc_name=new_svc_name),
     )
 
 

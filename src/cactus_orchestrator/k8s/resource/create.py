@@ -8,7 +8,7 @@ from kubernetes import client
 from kubernetes.client import V1StatefulSet
 
 from cactus_orchestrator.k8s.resource import async_k8s_api_retry
-from cactus_orchestrator.settings import DEFAULT_INGRESS_PATH_FORMAT, HarnessOrchestratorException, main_settings
+from cactus_orchestrator.settings import DEFAULT_INGRESS_PATH_FORMAT, CactusOrchestratorException, main_settings
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +21,7 @@ v1_net_api = client.NetworkingV1Api()
 @async_k8s_api_retry()
 async def clone_service(new_svc_name: str, new_app_label: str) -> None:
     res: ApplyResult = v1_core_api.read_namespaced_service(
-        name=main_settings.template_service_name, namespace=main_settings.testing_namespace, async_req=True
+        name=main_settings.template_service_name, namespace=main_settings.teststack_templates_namespace, async_req=True
     )  # type: ignore
     existing = await asyncio.to_thread(res.get)
 
@@ -37,7 +37,7 @@ async def clone_service(new_svc_name: str, new_app_label: str) -> None:
 
     # Create the new service
     res = v1_core_api.create_namespaced_service(
-        namespace=main_settings.testing_namespace, body=new_service, async_req=True
+        namespace=main_settings.test_execution_namespace, body=new_service, async_req=True
     )  # type: ignore
     await asyncio.to_thread(res.get)
     logger.info(f"New service {new_svc_name} created successfully!")
@@ -46,7 +46,9 @@ async def clone_service(new_svc_name: str, new_app_label: str) -> None:
 @async_k8s_api_retry()
 async def clone_statefulset(new_statefulset_name: str, new_service_name: str, new_app_label: str) -> None:
     res: ApplyResult = v1_app_api.read_namespaced_stateful_set(
-        name=main_settings.template_statefulset_name, namespace=main_settings.testing_namespace, async_req=True
+        name=main_settings.template_statefulset_name,
+        namespace=main_settings.teststack_templates_namespace,
+        async_req=True,
     )  # type: ignore
     existing = await asyncio.to_thread(res.get)
 
@@ -63,7 +65,7 @@ async def clone_statefulset(new_statefulset_name: str, new_service_name: str, ne
     )
 
     res = v1_app_api.create_namespaced_stateful_set(
-        body=new_set, namespace=main_settings.testing_namespace, async_req=True
+        body=new_set, namespace=main_settings.test_execution_namespace, async_req=True
     )  # type: ignore
     await asyncio.to_thread(res.get)
     logger.info(f"New StatefulSet {new_statefulset_name} created successfully!")
@@ -73,7 +75,7 @@ async def clone_statefulset(new_statefulset_name: str, new_service_name: str, ne
 async def is_container_ready(pod_name: str, container_name: str = "envoy-db") -> bool:
     """Polls pod for specific container status. Returns True on ready."""
     res: ApplyResult = v1_core_api.read_namespaced_pod(
-        name=pod_name, namespace=main_settings.testing_namespace, async_req=True
+        name=pod_name, namespace=main_settings.test_execution_namespace, async_req=True
     )  # type: ignore
     pod = await asyncio.to_thread(res.get)
     if pod.status and pod.status.container_statuses:
@@ -89,7 +91,7 @@ async def wait_for_pod(pod_name: str) -> None:
     res = await is_container_ready(pod_name)
 
     if res is False:
-        raise HarnessOrchestratorException(f"{pod_name} failed to start.")
+        raise CactusOrchestratorException(f"{pod_name} failed to start.")
 
 
 @async_k8s_api_retry()
@@ -97,7 +99,7 @@ async def add_ingress_rule(svc_name: str) -> None:
     """Updates the Ingress definition to include new path to to service (svc_name)."""
 
     res: ApplyResult = v1_net_api.read_namespaced_ingress(
-        name=main_settings.testing_ingress_name, namespace=main_settings.testing_namespace, async_req=True
+        name=main_settings.test_execution_ingress_name, namespace=main_settings.test_execution_namespace, async_req=True
     )  # type: ignore
     ingress = await asyncio.to_thread(res.get)
 
@@ -115,7 +117,7 @@ async def add_ingress_rule(svc_name: str) -> None:
 
     http_rule.paths.append(new_rule)
     res = v1_net_api.patch_namespaced_ingress(
-        main_settings.testing_ingress_name, main_settings.testing_namespace, ingress, async_req=True
+        main_settings.test_execution_ingress_name, main_settings.test_execution_namespace, ingress, async_req=True
     )  # type: ignore
     await asyncio.to_thread(res.get)
 

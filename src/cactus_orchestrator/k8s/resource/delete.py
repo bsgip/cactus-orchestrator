@@ -18,7 +18,7 @@ v1_net_api = client.NetworkingV1Api()
 
 @async_k8s_api_retry(ignore_status_code=HTTPStatus.NOT_FOUND, fail_silently=True)
 async def delete_service(svc_name: str, namespace: str | None = None) -> None:
-    namespace = namespace or main_settings.testing_namespace
+    namespace = namespace or main_settings.test_execution_namespace
     res: ApplyResult = v1_core_api.delete_namespaced_service(
         svc_name, namespace=namespace, async_req=True
     )  # type: ignore
@@ -29,7 +29,7 @@ async def delete_service(svc_name: str, namespace: str | None = None) -> None:
 
 @async_k8s_api_retry(ignore_status_code=HTTPStatus.NOT_FOUND, fail_silently=True)
 async def delete_statefulset(statefulset_name: str, namespace: str | None = None) -> None:
-    namespace = namespace or main_settings.testing_namespace
+    namespace = namespace or main_settings.test_execution_namespace
     res: ApplyResult = v1_app_api.delete_namespaced_stateful_set(
         statefulset_name, namespace=namespace, async_req=True
     )  # type: ignore
@@ -40,14 +40,14 @@ async def delete_statefulset(statefulset_name: str, namespace: str | None = None
 
 @async_k8s_api_retry()
 async def remove_ingress_rule(svc_name: str, namespace: str | None = None) -> None:
-    namespace = namespace or main_settings.testing_namespace
+    namespace = namespace or main_settings.test_execution_namespace
 
     # Construct the path to remove (same format used in add_ingress_rule)
     target_path = DEFAULT_INGRESS_PATH_FORMAT.format(svc_name=svc_name)
 
     # Fetch ingress
     res: ApplyResult = v1_net_api.read_namespaced_ingress(
-        name=main_settings.testing_ingress_name, namespace=namespace, async_req=True
+        name=main_settings.test_execution_ingress_name, namespace=namespace, async_req=True
     )  # type: ignore
     ingress = await asyncio.to_thread(res.get)
     http_rule = ingress.spec.rules[0].http
@@ -63,7 +63,10 @@ async def remove_ingress_rule(svc_name: str, namespace: str | None = None) -> No
 
     # Patch the Ingress with the updated paths
     res = v1_net_api.patch_namespaced_ingress(
-        name=main_settings.testing_ingress_name, namespace=main_settings.testing_namespace, body=ingress, async_req=True
+        name=main_settings.test_execution_ingress_name,
+        namespace=main_settings.test_execution_namespace,
+        body=ingress,
+        async_req=True,
     )  # type: ignore
     await asyncio.to_thread(res.get)
 

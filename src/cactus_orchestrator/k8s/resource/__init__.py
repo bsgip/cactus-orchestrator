@@ -9,7 +9,7 @@ from cactus_orchestrator.settings import (
     CLONED_RESOURCE_NAME_FORMAT,
     POD_FQDN_FORMAT,
     STATEFULSET_POD_NAME_FORMAT,
-    HarnessOrchestratorException,
+    CactusOrchestratorException,
     main_settings,
 )
 
@@ -35,7 +35,7 @@ def async_k8s_api_retry[**P, T](
                     if attempt < retries - 1:
                         await asyncio.sleep(delay)
                     elif not fail_silently:
-                        raise HarnessOrchestratorException(
+                        raise CactusOrchestratorException(
                             f"Failed action: {func.__name__}. Last API error: {exc.status} {exc.reason}"
                         )
                     else:
@@ -51,7 +51,7 @@ def async_k8s_api_retry[**P, T](
 # TODO: usage is error prone
 def get_resource_names(uuid: str, namespace: str | None = None) -> tuple[str, str, str, str, str]:
     """Returns tuple of names: svc_name, statefulset_name, app_label, pod_name, pod_fqdn"""
-    namespace = namespace or main_settings.testing_namespace
+    namespace = namespace or main_settings.test_execution_namespace
 
     svc_name = CLONED_RESOURCE_NAME_FORMAT.format(resource_name=main_settings.template_service_name, uuid=uuid)
     statefulset_name = CLONED_RESOURCE_NAME_FORMAT.format(
@@ -59,6 +59,8 @@ def get_resource_names(uuid: str, namespace: str | None = None) -> tuple[str, st
     )
     app_label = CLONED_RESOURCE_NAME_FORMAT.format(resource_name=main_settings.template_app_name, uuid=uuid)
     pod_name = STATEFULSET_POD_NAME_FORMAT.format(statefulset_name=statefulset_name)
-    pod_fqdn = POD_FQDN_FORMAT.format(pod_name=pod_name, svc_name=svc_name, namespace=main_settings.testing_namespace)
+    pod_fqdn = POD_FQDN_FORMAT.format(
+        pod_name=pod_name, svc_name=svc_name, namespace=main_settings.test_execution_namespace
+    )
 
     return svc_name, statefulset_name, app_label, pod_name, pod_fqdn

@@ -2,9 +2,9 @@
 apiVersion: v1
 kind: Pod
 metadata:
-  name: management
+  name: test-orchestration
   labels:
-    app: management
+    app: test-orchestration
 spec:
   serviceAccountName: pod-creator
   containers:
@@ -14,8 +14,8 @@ spec:
         - containerPort: 8080
       imagePullPolicy: Always
       env:
-        - name: TESTING_FQDN
-          value: ${TESTING_FQDN}
+        - name: TEST_EXECUTION_FQDN
+          value: ${TEST_EXECUTION_FQDN}
         - name: ORCHESTRATOR_DATABASE_URL
           valueFrom:
             secretKeyRef:
@@ -23,14 +23,14 @@ spec:
               key: ORCHESTRATOR_DATABASE_URL
 ---
 # TODO: Still unsure how this will be exposed
-# Service to expose the management API
+# Service to expose the test-orchestration API
 apiVersion: v1
 kind: Service
 metadata:
-  name: management-service
+  name: test-orchestration-service
 spec:
   selector:
-    app: management
+    app: test-orchestration
   ports:
     - protocol: TCP
       port: 8080

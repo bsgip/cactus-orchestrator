@@ -19,7 +19,7 @@ from cactus_orchestrator.schema import (
     StartRunResponse,
     TestProcedureResponse,
 )
-from cactus_orchestrator.settings import HarnessOrchestratorException
+from cactus_orchestrator.settings import CactusOrchestratorException
 
 
 @pytest.fixture
@@ -63,7 +63,7 @@ def test_post_spawn_test_created(client, valid_user_p12_and_der, valid_user_jwt)
     # Assert
     assert res.status_code == HTTPStatus.CREATED
     resmdl = StartRunResponse.model_validate(res.json())
-    assert os.environ["TESTING_FQDN"] in resmdl.test_url
+    assert os.environ["TEST_EXECUTION_FQDN"] in resmdl.test_url
     insert_run_for_user.assert_called_once()
 
 
@@ -91,7 +91,7 @@ def test_post_spawn_test_teardown_on_failure(client, valid_user_jwt, valid_user_
     )
 
     select_user_certificate_x509_der.return_value = valid_user_p12_and_der[1]
-    clone_statefulset.side_effect = HarnessOrchestratorException("fail")
+    clone_statefulset.side_effect = CactusOrchestratorException("fail")
     select_user.return_value = User(
         user_id=1, subject_id="sub", issuer_id="iss", certificate_p12_bundle=None, certificate_x509_der=None
     )

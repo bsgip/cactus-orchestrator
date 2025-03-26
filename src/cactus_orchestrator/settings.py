@@ -10,7 +10,8 @@ TLS_CA_SECRET_NAME_FORMAT = "tls-ca-{ingress_name}"
 CLONED_RESOURCE_NAME_FORMAT = "{resource_name}-{uuid}"
 # NOTE: follwing two must be kept similar
 DEFAULT_INGRESS_PATH_FORMAT = "/{svc_name}/(.*)"
-TESTING_URL_FORMAT = "https://{testing_fqdn}/{svc_name}"
+TEST_EXECUTION_URL_FORMAT = "https://{fqdn}/{svc_name}"
+
 STATEFULSET_POD_NAME_FORMAT = (
     "{statefulset_name}-0"  # TODO: this is the k8s naming scheme of a statefulsets pod, how to better handle?
 )
@@ -25,18 +26,21 @@ def load_k8s_config() -> None:
         config.kube_config.load_kube_config()  # If running locally
 
 
-class HarnessOrchestratorException(Exception): ...  # noqa: E701
+class CactusOrchestratorException(Exception): ...  # noqa: E701
 
 
-class HarnessOrchestratorSettings(BaseSettings):
-    # management
-    management_namespace: str = "management"
+class CactusOrchestratorSettings(BaseSettings):
+    # test orchestration
+    test_orchestration_namespace: str = "test-orchestration"
     orchestrator_database_url: PostgresDsn
 
-    # testing
-    testing_namespace: str = "testing"
-    testing_ingress_name: str = "testing-ingress"
+    # test execution
+    test_execution_namespace: str = "test-execution"
+    test_execution_ingress_name: str = "test-execution-ingress"
     envoy_service_port: int = 80
+
+    # teststack templates
+    teststack_templates_namespace: str = "teststack-templates"
     template_service_name: str = "envoy-svc"
     template_app_name: str = "envoy"
     template_statefulset_name: str = "envoy-set"
@@ -48,7 +52,7 @@ class HarnessOrchestratorSettings(BaseSettings):
     # A TLS type secret. This is the same CA cert along with its key, to be used for signing.
     tls_ca_tls_secret_name: str = "tls-ca-cert-key-pair"
     # tls_server_tls_secret_name: str = "tls-server-secret-pair"
-    testing_fqdn: str  # NOTE: we could extract this from the server certs
+    test_execution_fqdn: str  # NOTE: we could extract this from the server certs
 
     # teardown
     teardown_max_lifetime_seconds: int = 86400
@@ -64,4 +68,4 @@ class JWTAuthSettings(BaseSettings):
         env_prefix = "JWTAUTH_"
 
 
-main_settings = HarnessOrchestratorSettings()  # type: ignore  [call-arg]
+main_settings = CactusOrchestratorSettings()  # type: ignore  [call-arg]

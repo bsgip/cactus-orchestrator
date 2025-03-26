@@ -7,7 +7,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.types import CertificateIssuerPrivateKeyTypes
 from kubernetes import client
 
-from cactus_orchestrator.settings import HarnessOrchestratorException, main_settings
+from cactus_orchestrator.settings import CactusOrchestratorException, main_settings
 
 # k8s clients
 v1_core_api = client.CoreV1Api()
@@ -36,20 +36,20 @@ def fetch_certificate_key_pair(
 
     Args:
         secret_name (str): The name of the K8s secret.
-        namespace (str | None): The namespace where the secret is located. Defaults to the testing namespace.
+        namespace (str | None): The namespace where the secret is located. Defaults to the test_execution namespace.
         passphrase_secret (str | None): Optional passphrase to decrypt the private key if it is encrypted.
 
     Returns:
         tuple[x509.Certificate, SupportedPrivateKeyType]:
             A tuple containing the certificate and private key.
     """
-    namespace = namespace or main_settings.testing_namespace
+    namespace = namespace or main_settings.test_execution_namespace
 
     # Read secret
     secret: client.V1Secret = v1_core_api.read_namespaced_secret(secret_name, namespace=namespace)
 
     if secret is None or secret.data is None:
-        raise HarnessOrchestratorException(f"secret {secret_name} not found in namespace {namespace}")
+        raise CactusOrchestratorException(f"secret {secret_name} not found in namespace {namespace}")
 
     # Decode b64 encoded cert and key
     crt_bytes = base64.b64decode(secret.data["tls.crt"])
