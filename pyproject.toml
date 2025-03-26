@@ -61,11 +61,12 @@ env = [
     "D:JWTAUTH_JWKS_URL=https://jwks.com/jwks",
     "D:JWTAUTH_ISSUER=https://issuer.com",
     "D:JWTAUTH_AUDIENCE=cactus_orchestrator",
+    "D:CACTUS_PYTEST_WITHOUT_KUBERNETES=true"
 ]
 asyncio_default_fixture_loop_scope = "function"
 
 [tool.bandit]
-exclude_dirs = ["tests"]
+exclude_dirs = ["tests", "alembic"]
 
 [tool.mypy]
 exclude = ["tests", "alembic"]
@@ -75,6 +76,10 @@ disallow_untyped_decorators = true
 disallow_untyped_defs = true
 namespace_packages = true
 warn_redundant_casts = true
+
+[[tool.mypy.overrides]] # temporary until these libs are typed.
+module = ["cactus_runner", "cactus_test_definitions", "cactus_runner.client"]
+ignore_missing_imports = true
 
 [tool.setuptools.dynamic]
 version = { attr = "cactus_orchestrator.__version__" }

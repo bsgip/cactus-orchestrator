@@ -8,14 +8,16 @@ from kubernetes import client
 from kubernetes.client import V1StatefulSet
 
 from cactus_orchestrator.k8s.resource import async_k8s_api_retry
-from cactus_orchestrator.settings import DEFAULT_INGRESS_PATH_FORMAT, CactusOrchestratorException, main_settings
+from cactus_orchestrator.settings import (
+    DEFAULT_INGRESS_PATH_FORMAT,
+    CactusOrchestratorException,
+    main_settings,
+    v1_core_api,
+    v1_app_api,
+    v1_net_api,
+)
 
 logger = logging.getLogger(__name__)
-
-# k8s clients
-v1_core_api = client.CoreV1Api()
-v1_app_api = client.AppsV1Api()
-v1_net_api = client.NetworkingV1Api()
 
 
 @async_k8s_api_retry()

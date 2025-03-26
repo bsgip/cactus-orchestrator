@@ -1,12 +1,15 @@
-from kubernetes import config
+import os
+import logging
+
+from kubernetes import config, client
 from pydantic import PostgresDsn, SecretStr
 from pydantic_settings import BaseSettings
 
 TEST_CLIENT_P12_PASSWORD = SecretStr("abc")  # TODO: temporary
 POD_FQDN_FORMAT = "{pod_name}.{svc_name}.{namespace}.svc.cluster.local"  # TODO: use svc instead.
 POD_HARNESS_RUNNER_MANAGEMENT_PORT = 8080  # TODO: tbd
-TLS_SERVER_SECRET_NAME_FORMAT = "tls-server-{domain}"
-TLS_CA_SECRET_NAME_FORMAT = "tls-ca-{ingress_name}"
+TLS_SERVER_SECRET_NAME_FORMAT = "tls-server-{domain}"  # nosec
+TLS_CA_SECRET_NAME_FORMAT = "tls-ca-{ingress_name}"  # nosec
 CLONED_RESOURCE_NAME_FORMAT = "{resource_name}-{uuid}"
 # NOTE: follwing two must be kept similar
 DEFAULT_INGRESS_PATH_FORMAT = "/{svc_name}/(.*)"
@@ -18,8 +21,14 @@ STATEFULSET_POD_NAME_FORMAT = (
 RUNNER_POD_URL = "https://{pod_fqdn}:{pod_port}"  # TODO: use service instead
 
 
+logger = logging.getLogger(__name__)
+
+
 def load_k8s_config() -> None:
     """Loads the Kubernetes configuration."""
+    if os.getenv("CACTUS_PYTEST_WITHOUT_KUBERNETES", "").lower() == "true":
+        logger.warning("Skipping k8s configuration load...")
+        return
     try:
         config.incluster_config.load_incluster_config()  # If running inside a cluster
     except config.config_exception.ConfigException:
@@ -30,6 +39,9 @@ class CactusOrchestratorException(Exception): ...  # noqa: E701
 
 
 class CactusOrchestratorSettings(BaseSettings):
+    # misc
+    kubernetes_load_config: bool = True  # just for pytests TODO: find a better way
+
     # test orchestration
     test_orchestration_namespace: str = "test-orchestration"
     orchestrator_database_url: PostgresDsn
@@ -69,3 +81,9 @@ class JWTAuthSettings(BaseSettings):
 
 
 main_settings = CactusOrchestratorSettings()  # type: ignore  [call-arg]
+
+# NOTE: This needs to be called before instantiating any of the k8s clients
+load_k8s_config()
+v1_core_api = client.CoreV1Api()
+v1_app_api = client.AppsV1Api()
+v1_net_api = client.NetworkingV1Api()
