@@ -17,18 +17,6 @@ from cactus_orchestrator.k8s.certificate.create import generate_client_p12
 from cactus_orchestrator.model import Base
 
 
-# pytest startup / shutdown configs
-def pytest_configure():
-    """Monkey patch load_k8s_config at pytest startup (before discovery)."""
-    patcher = patch("cactus_orchestrator.settings.load_k8s_config", return_value=None)
-    patcher.start()  # Start the patch immediately
-    pytest._load_k8s_config_patcher = patcher  # Store it so we can stop it later
-
-
-def pytest_unconfigure():
-    pytest._load_k8s_config_patcher.stop()
-
-
 @pytest.fixture(scope="session")
 def ca_cert_key_pair():
     ca_key = asymmetric.rsa.generate_private_key(public_exponent=65537, key_size=2048)

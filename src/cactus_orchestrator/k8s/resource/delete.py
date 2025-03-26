@@ -3,17 +3,11 @@ import logging
 from http import HTTPStatus
 from multiprocessing.pool import ApplyResult
 
-from kubernetes import client
 
 from cactus_orchestrator.k8s.resource import async_k8s_api_retry
-from cactus_orchestrator.settings import DEFAULT_INGRESS_PATH_FORMAT, main_settings
+from cactus_orchestrator.settings import DEFAULT_INGRESS_PATH_FORMAT, main_settings, v1_core_api, v1_app_api, v1_net_api
 
 logger = logging.getLogger(__name__)
-
-# k8s clients
-v1_core_api = client.CoreV1Api()
-v1_app_api = client.AppsV1Api()
-v1_net_api = client.NetworkingV1Api()
 
 
 @async_k8s_api_retry(ignore_status_code=HTTPStatus.NOT_FOUND, fail_silently=True)

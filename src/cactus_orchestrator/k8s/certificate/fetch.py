@@ -7,10 +7,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.types import CertificateIssuerPrivateKeyTypes
 from kubernetes import client
 
-from cactus_orchestrator.settings import CactusOrchestratorException, main_settings
-
-# k8s clients
-v1_core_api = client.CoreV1Api()
+from cactus_orchestrator.settings import CactusOrchestratorException, main_settings, v1_core_api
 
 
 class SecretString:
