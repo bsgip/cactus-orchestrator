@@ -69,7 +69,7 @@ jobs:
 
       - name: Install Dependencies
         run: |
-          git config --global url."https://ssh:$(cat /run/secrets/github_pat)@github.com/".insteadOf "ssh://git@github.com/"
+          git config --global url."https://ssh:${{ secrets.GH_TOKEN }}@github.com/".insteadOf "ssh://git@github.com/"
           pip install .[test]
 
       - name: Add mypy annotator
@@ -92,7 +92,7 @@ jobs:
 
       - name: Install Dependencies
         run: |
-          git config --global url."https://ssh:$(cat /run/secrets/github_pat)@github.com/".insteadOf "ssh://git@github.com/"
+          git config --global url."https://ssh:${{ secrets.GH_TOKEN }}@github.com/".insteadOf "ssh://git@github.com/"
           pip install .[test]
 
       - name: Run Pytest
