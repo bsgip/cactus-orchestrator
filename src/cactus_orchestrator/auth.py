@@ -1,3 +1,5 @@
+from http import HTTPStatus
+import logging
 import base64
 import json
 from enum import StrEnum
@@ -7,14 +9,16 @@ import httpx
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509 import load_der_x509_certificate
-from fastapi import Security
+from fastapi import Security, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from jose import jwt
-from pydantic import BaseModel
+from jose import jwt, exceptions
+from pydantic import BaseModel, ConfigDict
 
 from cactus_orchestrator.cache import AsyncCache, ExpiringValue
 from cactus_orchestrator.schema import UserContext
 from cactus_orchestrator.settings import JWTAuthSettings
+
+logger = logging.getLogger(__name__)
 
 security = HTTPBearer()
 
@@ -25,15 +29,15 @@ class AuthScopes(StrEnum):
 
 
 class JWTClaims(BaseModel):
-    sub: str  # subject - user ID
+    model_config = ConfigDict(extra="ignore")
+
+    # NOTE: we use sub + iss to identify a unique user
+    sub: str  # subject
     aud: str  # audience
     iss: str  # issuer
     exp: int  # expiry (unix epoch)
-    iat: int  # issued at (unix epoch)
+    iat: int | None  # issued at (unix epoch)
     scopes: set[str | None]  # set of strings or empty
-
-
-class JWTAuthException(Exception): ...  # noqa: E701
 
 
 class JWTValidator:
@@ -52,7 +56,7 @@ class JWTValidator:
                 response = await client.get(self._settings.jwks_url)
                 response.raise_for_status()
         except httpx.HTTPError as e:
-            raise JWTAuthException(f"Failed to fetch JWKS: {str(e)}")
+            raise exceptions.JWKError(f"Failed to fetch JWKS: {str(e)}")
 
         jwks = response.json().get("keys", [])
         for key in jwks:
@@ -65,7 +69,7 @@ class JWTValidator:
                     "utf-8"
                 )  # NOTE: deserialising here fore cache
                 return {key["kid"]: ExpiringValue(None, pem_key)}
-        raise JWTAuthException("No RSAPublicKey found.")
+        raise exceptions.JWKError("No RSAPublicKey found.")
 
     def _deserialise_rsa_jwk(self, jwk: dict[str, str]) -> rsa.RSAPublicKey:
         """We either get base64 url-encoded n/e and convert into an RSAPublicKey
@@ -81,7 +85,7 @@ class JWTValidator:
             cert_der = base64.b64decode(jwk["x5c"][0])
             cert = load_der_x509_certificate(cert_der)
             return cast(rsa.RSAPublicKey, cert.public_key())
-        raise JWTAuthException("JWK has invalid Form.")
+        raise exceptions.JWKError("JWK has invalid Form.")
 
     def _extract_kid_from_jwt(self, token: str) -> str:
         """Extract 'kid' from the JWT header."""
@@ -95,7 +99,7 @@ class JWTValidator:
         rsa_pkey = await self._rsa_jwk_cache.get_value(None, kid)
 
         if rsa_pkey is None:
-            raise ValueError(f"No matching key-id '{kid}' found in JWKs.")
+            raise exceptions.JWKError(f"No matching key-id '{kid}' found in JWKs.")
 
         return cast(rsa.RSAPublicKey, serialization.load_pem_public_key(rsa_pkey.encode("utf-8")))
 
@@ -104,6 +108,7 @@ class JWTValidator:
         kid = self._extract_kid_from_jwt(token)
 
         public_key = await self.get_pubkey(kid)
+
         payload = jwt.decode(
             token,
             public_key.public_bytes(
@@ -119,7 +124,7 @@ class JWTValidator:
 
     def _check_scopes(self, required_scopes: set[str], jwt_claims: JWTClaims) -> JWTClaims:
         if not (required_scopes & jwt_claims.scopes):
-            raise JWTAuthException("Insufficient scope permissions")
+            raise exceptions.JWTClaimsError("Insufficient scope permissions")
         return jwt_claims
 
     def verify_jwt_and_check_scopes(
@@ -131,8 +136,13 @@ class JWTValidator:
             auth: HTTPAuthorizationCredentials = Security(security),
         ) -> UserContext:
             token = auth.credentials
-            jwt_claims = await self._verify_jwt(token)
-            validated = self._check_scopes(required_scopes, jwt_claims)
+
+            try:
+                jwt_claims = await self._verify_jwt(token)
+                validated = self._check_scopes(required_scopes, jwt_claims)
+            except (exceptions.JWKError, exceptions.JWTClaimsError, exceptions.JWTError) as exc:
+                logger.info(exc)
+                raise HTTPException(status_code=HTTPStatus.UNAUTHORIZED, detail="Invalid token")
             return UserContext(subject_id=validated.sub, issuer_id=validated.iss)
 
         return _verify_and_check_scopes

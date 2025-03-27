@@ -9,7 +9,6 @@ class StartRunRequest(BaseModel):
 # TODO: what should response be?
 class StartRunResponse(BaseModel):
     run_id: int
-    test_url: str
 
 
 class RunResponse(BaseModel):
@@ -26,8 +25,7 @@ class UserContext(BaseModel):
     issuer_id: str
 
 
-class UserResponse(BaseModel):
-    user_id: int
+class CertificateResponse(BaseModel):
     certificate_p12_b64: str
     password: SecretStr | None
 

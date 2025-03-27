@@ -8,8 +8,8 @@ from pydantic_settings import BaseSettings
 TEST_CLIENT_P12_PASSWORD = SecretStr("abc")  # TODO: temporary
 POD_FQDN_FORMAT = "{pod_name}.{svc_name}.{namespace}.svc.cluster.local"  # TODO: use svc instead.
 POD_HARNESS_RUNNER_MANAGEMENT_PORT = 8080  # TODO: tbd
-TLS_SERVER_SECRET_NAME_FORMAT = "tls-server-{domain}"  # nosec
-TLS_CA_SECRET_NAME_FORMAT = "tls-ca-{ingress_name}"  # nosec
+TLS_SERVER_SECRET_NAME_FORMAT = "tls-server-{domain}"  # nosec: Not a password
+TLS_CA_SECRET_NAME_FORMAT = "tls-ca-{ingress_name}"  # nosec: Not a password
 CLONED_RESOURCE_NAME_FORMAT = "{resource_name}-{uuid}"
 # NOTE: follwing two must be kept similar
 DEFAULT_INGRESS_PATH_FORMAT = "/{svc_name}/(.*)"

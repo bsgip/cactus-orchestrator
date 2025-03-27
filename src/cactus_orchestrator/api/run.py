@@ -7,7 +7,7 @@ import shortuuid
 from cactus_runner.client import ClientSession, RunnerClient, RunnerClientException
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi_async_sqlalchemy import db
 from fastapi_pagination import Page, paginate
 from sqlalchemy.exc import NoResultFound
@@ -61,7 +61,7 @@ async def select_user_or_raise(session: AsyncSession, user_context: UserContext)
     user = await select_user(session, user_context)
 
     if user is None:
-        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="User does not exists. Please register.")
+        raise HTTPException(status_code=HTTPStatus.FORBIDDEN, detail="User does not exists. Please register.")
     return user
 
 
@@ -88,6 +88,7 @@ async def get_runs_paginated(
 async def spawn_teststack_and_start_run(
     test: StartRunRequest,
     user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_scopes({AuthScopes.user_all}))],
+    response: Response,
 ) -> StartRunResponse:
     """This endpoint sets up a test procedure as requested by client.
     Steps are:
@@ -143,9 +144,13 @@ async def spawn_teststack_and_start_run(
     run_id = await insert_run_for_user(db.session, user.user_id, teststack_id, test.test_procedure_id)
     await db.session.commit()
 
+    # set location header
+    response.headers["Location"] = TEST_EXECUTION_URL_FORMAT.format(
+        fqdn=main_settings.test_execution_fqdn, svc_name=new_svc_name
+    )
+
     return StartRunResponse(
         run_id=run_id,
-        test_url=TEST_EXECUTION_URL_FORMAT.format(fqdn=main_settings.test_execution_fqdn, svc_name=new_svc_name),
     )
 
 

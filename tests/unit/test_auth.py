@@ -1,13 +1,12 @@
 import base64
 import json
-from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives.serialization import Encoding, NoEncryption, PrivateFormat, load_pem_public_key
-from jose import jwt
+from jose import jwt, exceptions
 
-from cactus_orchestrator.auth import JWTAuthException, JWTClaims, JWTValidator
+from cactus_orchestrator.auth import JWTClaims, JWTValidator
 
 
 @pytest.fixture
@@ -112,5 +111,5 @@ async def test_check_scopes_fail(jwt_validator):
         iat=1700000000,
         scopes={"user:all"},
     )
-    with pytest.raises(JWTAuthException, match="Insufficient scope permissions"):
+    with pytest.raises(exceptions.JWTClaimsError):
         jwt_validator._check_scopes({"admin:all"}, claims)
