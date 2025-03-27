@@ -1,4 +1,3 @@
-import base64
 import logging
 from http import HTTPStatus
 from typing import Annotated

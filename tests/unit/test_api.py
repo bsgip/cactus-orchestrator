@@ -1,24 +1,20 @@
 import base64
+import os
 from datetime import datetime, timezone
 from http import HTTPStatus
-import os
 from typing import Generator
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
-from fastapi.testclient import TestClient
-from sqlalchemy.exc import IntegrityError
-from fastapi_pagination import set_params, Params
 from cactus_test_definitions import TestProcedureId
+from fastapi.testclient import TestClient
+from fastapi_pagination import Params, set_params
+from sqlalchemy.exc import IntegrityError
 
 from cactus_orchestrator.api.run import finalise_run, teardown_teststack
 from cactus_orchestrator.main import app
 from cactus_orchestrator.model import FinalisationStatus, Run, RunArtifact, User
-from cactus_orchestrator.schema import (
-    StartRunRequest,
-    StartRunResponse,
-    TestProcedureResponse,
-)
+from cactus_orchestrator.schema import StartRunRequest, StartRunResponse, TestProcedureResponse
 from cactus_orchestrator.settings import CactusOrchestratorException
 
 
@@ -44,9 +40,9 @@ def test_post_spawn_test_created(client, valid_user_p12_and_der, valid_user_jwt)
     from cactus_orchestrator.api.run import (
         RunnerClient,
         clone_statefulset,
-        select_user_certificate_x509_der,
-        select_user,
         insert_run_for_user,
+        select_user,
+        select_user_certificate_x509_der,
     )
 
     select_user.return_value = User(
@@ -84,10 +80,10 @@ def test_post_spawn_test_teardown_on_failure(client, valid_user_jwt, valid_user_
     # Arrange
     from cactus_orchestrator.api.run import (
         clone_statefulset,
+        insert_run_for_user,
+        select_user,
         select_user_certificate_x509_der,
         teardown_teststack,
-        select_user,
-        insert_run_for_user,
     )
 
     select_user_certificate_x509_der.return_value = valid_user_p12_and_der[1]
@@ -116,7 +112,7 @@ def test_post_spawn_test_teardown_on_failure(client, valid_user_jwt, valid_user_
 def test_create_new_certificate(client, valid_user_jwt, ca_cert_key_pair):
     """Test creating a new certificate for a user"""
     # Arrange
-    from cactus_orchestrator.api.certificate import insert_user, generate_client_p12, fetch_certificate_key_pair
+    from cactus_orchestrator.api.certificate import fetch_certificate_key_pair, generate_client_p12, insert_user
 
     mock_p12 = b"mock_p12_data"
     mock_cert = AsyncMock()

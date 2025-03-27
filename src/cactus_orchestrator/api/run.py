@@ -27,7 +27,7 @@ from cactus_orchestrator.crud import (
 from cactus_orchestrator.k8s.resource import get_resource_names
 from cactus_orchestrator.k8s.resource.create import add_ingress_rule, clone_service, clone_statefulset, wait_for_pod
 from cactus_orchestrator.k8s.resource.delete import delete_service, delete_statefulset, remove_ingress_rule
-from cactus_orchestrator.model import FinalisationStatus, Run, User, RunArtifact
+from cactus_orchestrator.model import FinalisationStatus, Run, RunArtifact, User
 from cactus_orchestrator.schema import RunResponse, StartRunRequest, StartRunResponse, UserContext
 from cactus_orchestrator.settings import (
     CLONED_RESOURCE_NAME_FORMAT,

@@ -4,7 +4,7 @@ import json
 import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives.serialization import Encoding, NoEncryption, PrivateFormat, load_pem_public_key
-from jose import jwt, exceptions
+from jose import exceptions, jwt
 
 from cactus_orchestrator.auth import JWTClaims, JWTValidator
 

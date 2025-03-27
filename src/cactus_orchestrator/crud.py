@@ -3,7 +3,7 @@ from datetime import datetime
 from sqlalchemy import and_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import undefer, joinedload
+from sqlalchemy.orm import joinedload, undefer
 
 from cactus_orchestrator.model import FinalisationStatus, Run, RunArtifact, User, UserUniqueConstraintName
 from cactus_orchestrator.schema import UserContext

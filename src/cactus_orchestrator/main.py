@@ -1,12 +1,11 @@
 from fastapi import FastAPI
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi_async_sqlalchemy import SQLAlchemyMiddleware
 from fastapi_pagination import add_pagination
-from fastapi.middleware.gzip import GZipMiddleware
 
 from cactus_orchestrator.api import procedure_router, run_router, user_router
 from cactus_orchestrator.settings import main_settings
 from cactus_orchestrator.tasks import lifespan
-
 
 app = FastAPI(lifespan=lifespan)
 

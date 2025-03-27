@@ -9,6 +9,7 @@ from sqlalchemy.exc import IntegrityError
 
 from cactus_orchestrator.crud import (
     insert_run_for_user,
+    insert_user,
     select_nonfinalised_runs,
     select_user_run,
     select_user_run_with_artifact,
@@ -16,7 +17,6 @@ from cactus_orchestrator.crud import (
     update_run_finalisation_status,
     update_run_with_runartifact_and_finalise,
     upsert_user,
-    insert_user,
 )
 from cactus_orchestrator.k8s.certificate.create import generate_client_p12
 from cactus_orchestrator.model import FinalisationStatus, Run, RunArtifact

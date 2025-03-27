@@ -1,7 +1,7 @@
-import os
 import logging
+import os
 
-from kubernetes import config, client
+from kubernetes import client, config
 from pydantic import PostgresDsn, SecretStr
 from pydantic_settings import BaseSettings
 
