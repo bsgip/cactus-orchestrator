@@ -12,8 +12,8 @@ from cactus_orchestrator.settings import (
     DEFAULT_INGRESS_PATH_FORMAT,
     CactusOrchestratorException,
     main_settings,
-    v1_core_api,
     v1_app_api,
+    v1_core_api,
     v1_net_api,
 )
 

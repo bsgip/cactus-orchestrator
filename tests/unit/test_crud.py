@@ -9,16 +9,17 @@ from sqlalchemy.exc import IntegrityError
 
 from cactus_orchestrator.crud import (
     insert_run_for_user,
+    insert_user,
     select_nonfinalised_runs,
     select_user_run,
+    select_user_run_with_artifact,
     select_user_runs,
     update_run_finalisation_status,
     update_run_with_runartifact_and_finalise,
     upsert_user,
-    insert_user,
 )
 from cactus_orchestrator.k8s.certificate.create import generate_client_p12
-from cactus_orchestrator.model import FinalisationStatus, Run
+from cactus_orchestrator.model import FinalisationStatus, Run, RunArtifact
 from cactus_orchestrator.schema import UserContext
 
 
@@ -401,3 +402,44 @@ async def test_update_run_with_runartifact_and_finalise(pg_empty_conn):
     assert result[0] == 1
     assert result[1] == FinalisationStatus.by_client.value
     assert result[2] == finalised_at
+
+
+@pytest.mark.asyncio
+async def test_select_user_run_with_artifact(pg_empty_conn):
+    """Test selecting run with run artifact joined in load."""
+    # Arrange
+    run = Run(user_id=1, teststack_id="teststack1", testprocedure_id="ALL01", finalisation_status=0)
+    pg_empty_conn.execute(
+        text(
+            """
+            INSERT INTO user_ (subject_id, issuer_id, certificate_p12_bundle, certificate_x509_der)
+            VALUES ('user1', 'issuer1', E'\\x', E'\\x')
+            """
+        )
+    )
+    pg_empty_conn.execute(
+        text(
+            """
+            INSERT INTO run_artifact (compression, file_data)
+            VALUES ('gzip', E'\\x');
+            """
+        )
+    )
+    pg_empty_conn.execute(
+        text(
+            f"""
+            INSERT INTO run (user_id, teststack_id, testprocedure_id, finalisation_status, run_artifact_id)
+            VALUES ({run.user_id}, '{run.teststack_id}', '{run.testprocedure_id}', {run.finalisation_status}, 1)
+            """
+        )
+    )
+
+    pg_empty_conn.commit()
+
+    # Act
+    async with generate_async_session(pg_empty_conn.connection) as session:
+        run = await select_user_run_with_artifact(session, 1, 1)
+
+    # Assert
+    assert run.run_artifact.run_artifact_id == 1
+    assert run.run_artifact.compression == "gzip"

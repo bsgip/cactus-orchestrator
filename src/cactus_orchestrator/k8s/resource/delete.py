@@ -3,9 +3,8 @@ import logging
 from http import HTTPStatus
 from multiprocessing.pool import ApplyResult
 
-
 from cactus_orchestrator.k8s.resource import async_k8s_api_retry
-from cactus_orchestrator.settings import DEFAULT_INGRESS_PATH_FORMAT, main_settings, v1_core_api, v1_app_api, v1_net_api
+from cactus_orchestrator.settings import DEFAULT_INGRESS_PATH_FORMAT, main_settings, v1_app_api, v1_core_api, v1_net_api
 
 logger = logging.getLogger(__name__)
 

@@ -68,7 +68,7 @@ class Run(Base):
     finalisation_status: Mapped[FinalisationStatus] = mapped_column(Integer, nullable=False)
 
     run_artifact_id: Mapped[int] = mapped_column(ForeignKey("run_artifact.id"), nullable=True)
-    run_file: Mapped["RunArtifact"] = relationship(lazy="raise")
+    run_artifact: Mapped["RunArtifact"] = relationship(lazy="raise")
 
 
 class RunArtifact(Base):

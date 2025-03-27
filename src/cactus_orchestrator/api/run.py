@@ -20,13 +20,14 @@ from cactus_orchestrator.crud import (
     select_user,
     select_user_certificate_x509_der,
     select_user_run,
+    select_user_run_with_artifact,
     select_user_runs,
     update_run_with_runartifact_and_finalise,
 )
 from cactus_orchestrator.k8s.resource import get_resource_names
 from cactus_orchestrator.k8s.resource.create import add_ingress_rule, clone_service, clone_statefulset, wait_for_pod
 from cactus_orchestrator.k8s.resource.delete import delete_service, delete_statefulset, remove_ingress_rule
-from cactus_orchestrator.model import FinalisationStatus, Run, User
+from cactus_orchestrator.model import FinalisationStatus, Run, RunArtifact, User
 from cactus_orchestrator.schema import RunResponse, StartRunRequest, StartRunResponse, UserContext
 from cactus_orchestrator.settings import (
     CLONED_RESOURCE_NAME_FORMAT,
@@ -61,7 +62,7 @@ async def select_user_or_raise(session: AsyncSession, user_context: UserContext)
     user = await select_user(session, user_context)
 
     if user is None:
-        raise HTTPException(status_code=HTTPStatus.FORBIDDEN, detail="User does not exists. Please register.")
+        raise HTTPException(status_code=HTTPStatus.FORBIDDEN, detail="Certificate has not been registered.")
     return user
 
 
@@ -166,25 +167,29 @@ async def teardown_teststack(svc_name: str, statefulset_name: str) -> None:
 
 async def finalise_run(
     run: Run, url: str, session: AsyncSession, finalisation_status: FinalisationStatus, finalised_at: datetime
-) -> None:
+) -> RunArtifact:
     runner_session = ClientSession(url)
 
-    # TODO: this should return bytes, encoding for now
-    # TODO: should also return compression or allow access to response header
-    file_data = (await RunnerClient.finalize(runner_session)).encode("utf-8")
-    compression = "gzip"
+    # NOTE: we are assuming that files are small, consider streaming to file store
+    # if sizes increase.
+    file_data = (await RunnerClient.finalize(runner_session)).encode(
+        "utf-8"
+    )  # TODO: this should return bytes, encoding for now
+    compression = "gzip"  # TODO: should also return compression or allow access to response header
 
     artifact = await create_runartifact(session, compression, file_data)
     await update_run_with_runartifact_and_finalise(
         session, run, artifact.run_artifact_id, finalisation_status, finalised_at
     )
 
+    return artifact
+
 
 @router.post("/run/{run_id}/finalise", status_code=HTTPStatus.OK)
 async def finalise_run_and_teardown_teststack(
     run_id: int,
     user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_scopes({AuthScopes.user_all}))],
-) -> None:
+) -> Response:
     # get user
     user = await select_user_or_raise(db.session, user_context)
 
@@ -200,8 +205,37 @@ async def finalise_run_and_teardown_teststack(
     pod_url = RUNNER_POD_URL.format(pod_fqdn=pod_fqdn, pod_port=POD_HARNESS_RUNNER_MANAGEMENT_PORT)
 
     # finalise
-    await finalise_run(run, pod_url, db.session, FinalisationStatus.by_client, datetime.now(timezone.utc))
+    artifact = await finalise_run(run, pod_url, db.session, FinalisationStatus.by_client, datetime.now(timezone.utc))
     await db.session.commit()
 
     # teardown
     await teardown_teststack(svc_name=svc_name, statefulset_name=statefulset_name)
+
+    return Response(
+        content=artifact.file_data,
+        media_type="application/text",
+        headers={"Content-Encoding": artifact.compression},
+    )
+
+
+@router.get("/run/{run_id}/artifact", status_code=HTTPStatus.OK)
+async def get_run_artifact(
+    run_id: int,
+    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_scopes({AuthScopes.user_all}))],
+) -> Response:
+
+    # get user
+    user = await select_user_or_raise(db.session, user_context)
+
+    # get run
+    try:
+        run = await select_user_run_with_artifact(db.session, user.user_id, run_id)
+    except NoResultFound as exc:
+        logger.debug(exc)
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Not Found")
+
+    return Response(
+        content=run.run_artifact.file_data,
+        media_type="application/text",
+        headers={"Content-Encoding": run.run_artifact.compression},
+    )

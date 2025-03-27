@@ -1,17 +1,17 @@
-import base64
 import logging
 from http import HTTPStatus
 from typing import Annotated
 
 from cryptography.hazmat.primitives import serialization
 from fastapi import APIRouter, Depends
+from fastapi.responses import Response
 from fastapi_async_sqlalchemy import db
 
 from cactus_orchestrator.auth import AuthScopes, jwt_validator
 from cactus_orchestrator.crud import insert_user, select_user
 from cactus_orchestrator.k8s.certificate.create import generate_client_p12
 from cactus_orchestrator.k8s.certificate.fetch import fetch_certificate_key_pair
-from cactus_orchestrator.schema import UserContext, CertificateResponse
+from cactus_orchestrator.schema import UserContext
 from cactus_orchestrator.settings import TEST_CLIENT_P12_PASSWORD, main_settings
 
 logger = logging.getLogger(__name__)
@@ -35,7 +35,7 @@ def create_client_cert_binary(user_context: UserContext) -> tuple[bytes, bytes]:
 @router.post("/certificate/generate", status_code=HTTPStatus.OK)
 async def create_user_certificate(
     user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_scopes({AuthScopes.user_all}))],
-) -> CertificateResponse:
+) -> Response:
     # create certs
     client_p12, client_x509_der = create_client_cert_binary(user_context)
 
@@ -53,7 +53,9 @@ async def create_user_certificate(
         await db.session.commit()
 
     await db.session.commit()
-    return CertificateResponse(
-        certificate_p12_b64=base64.b64encode(client_p12).decode("utf-8"),
-        password=TEST_CLIENT_P12_PASSWORD,
+
+    return Response(
+        content=client_p12,
+        media_type="application/x-pkcs12",
+        headers={"X-Certificate-Password": TEST_CLIENT_P12_PASSWORD.get_secret_value()},
     )

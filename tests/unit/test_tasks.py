@@ -1,11 +1,12 @@
-from fastapi.testclient import TestClient
-import pytest
-from unittest.mock import ANY, AsyncMock, patch
 from datetime import datetime, timezone
+from unittest.mock import ANY, AsyncMock, patch
 
-from cactus_orchestrator.tasks import teardown_teststack_task
-from cactus_orchestrator.model import FinalisationStatus, Run
+import pytest
+from fastapi.testclient import TestClient
+
 from cactus_orchestrator.main import app
+from cactus_orchestrator.model import FinalisationStatus, Run
+from cactus_orchestrator.tasks import teardown_teststack_task
 
 
 @pytest.mark.asyncio
