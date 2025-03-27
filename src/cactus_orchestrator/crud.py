@@ -3,7 +3,7 @@ from datetime import datetime
 from sqlalchemy import and_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import undefer
+from sqlalchemy.orm import undefer, joinedload
 
 from cactus_orchestrator.model import FinalisationStatus, Run, RunArtifact, User, UserUniqueConstraintName
 from cactus_orchestrator.schema import UserContext
@@ -176,6 +176,23 @@ async def select_user_run(session: AsyncSession, user_id: int, run_id: int) -> R
             Run.run_id == run_id,
             Run.user_id == user_id,
         )
+    )
+
+    resp = await session.execute(stmt)
+
+    return resp.scalar_one()
+
+
+async def select_user_run_with_artifact(session: AsyncSession, user_id: int, run_id: int) -> Run:
+    stmt = (
+        select(Run)
+        .where(
+            and_(
+                Run.run_id == run_id,
+                Run.user_id == user_id,
+            )
+        )
+        .options(joinedload(Run.run_artifact))
     )
 
     resp = await session.execute(stmt)

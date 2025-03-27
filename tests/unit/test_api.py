@@ -131,8 +131,8 @@ def test_create_new_certificate(client, valid_user_jwt, ca_cert_key_pair):
 
     # Assert
     assert res.status_code == HTTPStatus.OK
-    data = res.json()
-    assert data["certificate_p12_b64"] == base64.b64encode(b"mock_p12_data").decode("utf-8")
+    assert res.content == b"mock_p12_data"
+    assert res.headers["content-type"] == "application/x-pkcs12"
 
 
 @patch("cactus_orchestrator.api.procedure.test_procedure_responses", [])
@@ -264,6 +264,10 @@ async def test_finalise_run_and_teardown_teststack_success(
     # Arrange
     mock_select_user_or_raise.return_value = User(user_id=1)
     mock_select_user_run.return_value = Run(teststack_id=1)
+    mock_finalise_run.return_value = RunArtifact(
+        compression="gzip",
+        file_data=b"\x1f\x8b\x08\x00I\xe9\xe4g\x02\xff\xcb,)N\xccM\xf5M,\xca\xcc\x07\x00\xcd\xcc5\xc5\x0b\x00\x00\x00",
+    )
 
     # Act
     response = client.post("/run/1/finalise", headers={"Authorization": f"Bearer {valid_user_jwt}"})

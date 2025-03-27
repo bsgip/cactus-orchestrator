@@ -16,7 +16,7 @@ jobs:
       - name: Security check - Bandit
         uses: joshvote/bandit-report-artifacts@v0.0.5
         with:
-          project_path: src/
+          project_path: .
           ignore_failure: false
           config_file: pyproject.toml
 

@@ -25,15 +25,6 @@ class UserContext(BaseModel):
     issuer_id: str
 
 
-class CertificateResponse(BaseModel):
-    certificate_p12_b64: str
-    password: SecretStr | None
-
-    @field_serializer("password", when_used="json")
-    def dump_secret(self, v: SecretStr) -> str:
-        return v.get_secret_value()
-
-
 class TestProcedureResponse(BaseModel):
     __test__ = False
     test_procedure_id: TestProcedureId
