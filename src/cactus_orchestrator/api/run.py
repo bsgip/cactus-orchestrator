@@ -175,7 +175,7 @@ async def finalise_run(
     file_data = (await RunnerClient.finalize(runner_session)).encode(
         "utf-8"
     )  # TODO: this should return bytes, encoding for now
-    compression = "gzip"  # TODO: should also return compression or allow access to response header
+    compression = "zip"  # TODO: should also return compression or allow access to response header
 
     artifact = await create_runartifact(session, compression, file_data)
     await update_run_with_runartifact_and_finalise(
@@ -213,8 +213,7 @@ async def finalise_run_and_teardown_teststack(
 
     return Response(
         content=artifact.file_data,
-        media_type="application/text",
-        headers={"Content-Encoding": artifact.compression},
+        media_type=f"application/{artifact.compression}",
     )
 
 
@@ -236,6 +235,5 @@ async def get_run_artifact(
 
     return Response(
         content=run.run_artifact.file_data,
-        media_type="application/text",
-        headers={"Content-Encoding": run.run_artifact.compression},
+        media_type=f"application/{run.run_artifact.compression}",
     )
