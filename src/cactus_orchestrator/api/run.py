@@ -18,7 +18,6 @@ from cactus_orchestrator.crud import (
     create_runartifact,
     insert_run_for_user,
     select_user,
-    select_user_certificate_x509_der,
     select_user_run,
     select_user_run_with_artifact,
     select_user_runs,
@@ -58,8 +57,10 @@ def map_run_to_run_response(run: Run) -> RunResponse:
     )
 
 
-async def select_user_or_raise(session: AsyncSession, user_context: UserContext) -> User:
-    user = await select_user(session, user_context)
+async def select_user_or_raise(
+    session: AsyncSession, user_context: UserContext, with_der: bool = False, with_p12: bool = False
+) -> User:
+    user = await select_user(session, user_context, with_der, with_p12)
 
     if user is None:
         raise HTTPException(status_code=HTTPStatus.FORBIDDEN, detail="Certificate has not been registered.")
@@ -98,15 +99,9 @@ async def spawn_teststack_and_start_run(
         (3) Update the ingress with a path to the envoy environment.
     """
     # get user
-    user = await select_user_or_raise(db.session, user_context)
+    user = await select_user_or_raise(db.session, user_context, with_der=True)
 
-    # get client cert # TODO: make more robust
-    certificate_x509_der = await select_user_certificate_x509_der(db.session, user_context)
-
-    if certificate_x509_der is None:
-        raise HTTPException(HTTPStatus.CONFLICT, detail="User has not been registered. Register user and try again.")
-
-    client_cert = x509.load_der_x509_certificate(certificate_x509_der)
+    client_cert = x509.load_der_x509_certificate(user.certificate_x509_der)
 
     if client_cert.not_valid_after_utc < datetime.now(timezone.utc):
         raise HTTPException(
@@ -137,9 +132,9 @@ async def spawn_teststack_and_start_run(
         await add_ingress_rule(new_svc_name)
 
     except (CactusOrchestratorException, RunnerClientException) as exc:
-        logger.debug(exc)
+        logger.info(exc)
         await teardown_teststack(new_svc_name, new_statefulset_name)
-        raise HTTPException(HTTPStatus.INTERNAL_SERVER_ERROR, detail="Internal Server Error.")
+        raise HTTPException(HTTPStatus.INTERNAL_SERVER_ERROR, detail="Internal Server Error")
 
     # track in DB
     run_id = await insert_run_for_user(db.session, user.user_id, teststack_id, test.test_procedure_id)

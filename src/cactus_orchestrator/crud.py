@@ -73,13 +73,23 @@ async def upsert_user(
     return resp.scalar_one_or_none()
 
 
-async def select_user(session: AsyncSession, user_context: UserContext) -> User | None:
+async def select_user(
+    session: AsyncSession, user_context: UserContext, with_der: bool = False, with_p12: bool = False
+) -> User | None:
 
-    stmt = (
-        select(User)
-        .where(and_(User.subject_id == user_context.subject_id, User.issuer_id == user_context.issuer_id))
-        .options(undefer(User.certificate_p12_bundle))
+    stmt = select(User).where(
+        and_(User.subject_id == user_context.subject_id, User.issuer_id == user_context.issuer_id)
     )
+
+    options_list = []
+    if with_p12:
+        options_list.append(undefer(User.certificate_p12_bundle))
+    if with_der:
+        options_list.append(undefer(User.certificate_x509_der))
+
+    if options_list:
+        stmt = stmt.options(*options_list)
+
     res = await session.execute(stmt)
     return res.scalar_one_or_none()
 
@@ -89,7 +99,7 @@ async def select_user_certificate_x509_der(session: AsyncSession, user_context: 
         and_(User.subject_id == user_context.subject_id, User.issuer_id == user_context.issuer_id)
     )
     res = await session.execute(stmt)
-    return res.scalar_one_or_none()
+    return res.scalar_one()
 
 
 async def insert_run_for_user(

@@ -87,13 +87,14 @@ async def is_container_ready(pod_name: str, container_name: str = "envoy-db") ->
     return False
 
 
-@async_k8s_api_retry()
-async def wait_for_pod(pod_name: str) -> None:
+async def wait_for_pod(pod_name: str, max_retries: int = 10, wait_interval: int = 5) -> None:
     # TODO: this should wait for the harness_runner container of the pod to be live
-    res = await is_container_ready(pod_name)
+    for attempt in range(max_retries):
+        if await is_container_ready(pod_name):
+            return
+        await asyncio.sleep(wait_interval)
 
-    if res is False:
-        raise CactusOrchestratorException(f"{pod_name} failed to start.")
+    raise CactusOrchestratorException(f"{pod_name} failed to start.")
 
 
 @async_k8s_api_retry()

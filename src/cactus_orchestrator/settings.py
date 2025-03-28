@@ -18,7 +18,7 @@ TEST_EXECUTION_URL_FORMAT = "https://{fqdn}/{svc_name}"
 STATEFULSET_POD_NAME_FORMAT = (
     "{statefulset_name}-0"  # TODO: this is the k8s naming scheme of a statefulsets pod, how to better handle?
 )
-RUNNER_POD_URL = "https://{pod_fqdn}:{pod_port}"  # TODO: use service instead
+RUNNER_POD_URL = "http://{pod_fqdn}:{pod_port}"  # TODO: use service instead
 
 
 logger = logging.getLogger(__name__)
