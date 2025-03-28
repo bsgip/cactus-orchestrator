@@ -10,7 +10,7 @@ from fastapi_async_sqlalchemy import db
 from cactus_orchestrator.auth import AuthScopes, jwt_validator
 from cactus_orchestrator.crud import upsert_user
 from cactus_orchestrator.k8s.certificate.create import generate_client_p12
-from cactus_orchestrator.k8s.certificate.fetch import fetch_certificate_key_pair
+from cactus_orchestrator.k8s.certificate.fetch import certificate_authority_cache, fetch_certificate_key_pair
 from cactus_orchestrator.schema import UserContext
 from cactus_orchestrator.settings import TEST_CLIENT_P12_PASSWORD, main_settings
 
@@ -49,3 +49,10 @@ async def create_user_certificate(
         media_type="application/x-pkcs12",
         headers={"X-Certificate-Password": TEST_CLIENT_P12_PASSWORD.get_secret_value()},
     )
+
+
+@router.get("/certificate/authority", status_code=HTTPStatus.OK)
+async def fetch_current_certificate_authority_pem(
+    _: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_scopes({AuthScopes.user_all}))],
+) -> Response:
+    certificate_authority_cache

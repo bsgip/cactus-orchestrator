@@ -1,5 +1,7 @@
+import asyncio
 import base64
 from typing import get_args
+from multiprocessing.pool import ApplyResult
 
 from cryptography import x509
 from cryptography.hazmat.backends import default_backend
@@ -7,6 +9,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.types import CertificateIssuerPrivateKeyTypes
 from kubernetes import client
 
+from cactus_orchestrator.cache import AsyncCache, ExpiringValue
 from cactus_orchestrator.settings import CactusOrchestratorException, main_settings, v1_core_api
 
 
@@ -25,7 +28,7 @@ class SecretString:
         return self._secret
 
 
-def fetch_certificate_key_pair(
+async def fetch_certificate_key_pair(
     secret_name: str, namespace: str | None = None, passphrase_secret: SecretString | None = None
 ) -> tuple[x509.Certificate, CertificateIssuerPrivateKeyTypes]:
     """
@@ -43,7 +46,8 @@ def fetch_certificate_key_pair(
     namespace = namespace or main_settings.test_execution_namespace
 
     # Read secret
-    secret: client.V1Secret = v1_core_api.read_namespaced_secret(secret_name, namespace=namespace)
+    res: ApplyResult = v1_core_api.read_namespaced_secret(secret_name, namespace=namespace, async_req=True)  # type: ignore
+    secret: client.V1Secret = await asyncio.to_thread(res.get)
 
     if secret is None or secret.data is None:
         raise CactusOrchestratorException(f"secret {secret_name} not found in namespace {namespace}")
@@ -64,3 +68,15 @@ def fetch_certificate_key_pair(
         raise TypeError(f"Invalid private key type for {secret_name}")
 
     return certificate, private_key  # type: ignore
+
+
+async def fetch_certificate_key_pair_for_cache(
+    secret_name: str, namespace: str | None = None, passphrase_secret: SecretString | None = None
+) -> dict[str, ExpiringValue[tuple[x509.Certificate, CertificateIssuerPrivateKeyTypes]]]:
+    cert_key = await fetch_certificate_key_pair(secret_name, namespace, passphrase_secret)
+
+    return {"": ExpiringValue(expiry=cert_key[0].not_valid_after_utc, value=cert_key)}
+
+# TODO: revist this.
+# NOTE: do not log.
+_ca_singing_cache =
