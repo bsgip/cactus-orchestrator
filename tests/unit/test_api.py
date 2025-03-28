@@ -30,7 +30,6 @@ def client() -> Generator[TestClient, None, None]:
     wait_for_pod=AsyncMock(),
     add_ingress_rule=AsyncMock(),
     clone_service=AsyncMock(),
-    select_user_certificate_x509_der=AsyncMock(),
     select_user=AsyncMock(),
     insert_run_for_user=AsyncMock(),
 )
@@ -42,16 +41,17 @@ def test_post_spawn_test_created(client, valid_user_p12_and_der, valid_user_jwt)
         clone_statefulset,
         insert_run_for_user,
         select_user,
-        select_user_certificate_x509_der,
     )
 
     select_user.return_value = User(
-        user_id=1, subject_id="sub", issuer_id="iss", certificate_p12_bundle=None, certificate_x509_der=None
+        user_id=1,
+        subject_id="sub",
+        issuer_id="iss",
+        certificate_p12_bundle=None,
+        certificate_x509_der=valid_user_p12_and_der[1],
     )
     RunnerClient.start = AsyncMock()
     clone_statefulset.return_value = "pod_name"
-    select_user_certificate_x509_der.return_value = valid_user_p12_and_der[1]
-
     # Act
     req = StartRunRequest(test_procedure_id=TestProcedureId.ALL_01.value)
     res = client.post("run", json=req.model_dump(), headers={"Authorization": f"Bearer {valid_user_jwt}"})
@@ -71,7 +71,6 @@ def test_post_spawn_test_created(client, valid_user_p12_and_der, valid_user_jwt)
     add_ingress_rule=AsyncMock(),
     clone_service=AsyncMock(),
     teardown_teststack=AsyncMock(),
-    select_user_certificate_x509_der=AsyncMock(),
     select_user=AsyncMock(),
     insert_run_for_user=AsyncMock(),
 )
@@ -82,14 +81,16 @@ def test_post_spawn_test_teardown_on_failure(client, valid_user_jwt, valid_user_
         clone_statefulset,
         insert_run_for_user,
         select_user,
-        select_user_certificate_x509_der,
         teardown_teststack,
     )
 
-    select_user_certificate_x509_der.return_value = valid_user_p12_and_der[1]
     clone_statefulset.side_effect = CactusOrchestratorException("fail")
     select_user.return_value = User(
-        user_id=1, subject_id="sub", issuer_id="iss", certificate_p12_bundle=None, certificate_x509_der=None
+        user_id=1,
+        subject_id="sub",
+        issuer_id="iss",
+        certificate_p12_bundle=None,
+        certificate_x509_der=valid_user_p12_and_der[1],
     )
 
     # Act

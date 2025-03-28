@@ -1,4 +1,5 @@
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
+from itertools import product
 
 import pytest
 from assertical.fixtures.postgres import generate_async_session
@@ -11,6 +12,7 @@ from cactus_orchestrator.crud import (
     insert_run_for_user,
     insert_user,
     select_nonfinalised_runs,
+    select_user,
     select_user_run,
     select_user_run_with_artifact,
     select_user_runs,
@@ -443,3 +445,37 @@ async def test_select_user_run_with_artifact(pg_empty_conn):
     # Assert
     assert run.run_artifact.run_artifact_id == 1
     assert run.run_artifact.compression == "gzip"
+
+
+@pytest.mark.parametrize(("with_der", "with_p12"), product((True, False), (True, False)))
+@pytest.mark.asyncio
+async def test_select_user(pg_empty_conn, with_der: bool, with_p12: bool):
+    # Arrange
+    pg_empty_conn.execute(
+        text(
+            """
+            INSERT INTO user_ (subject_id, issuer_id, certificate_p12_bundle, certificate_x509_der)
+            VALUES ('user1', 'issuer1', E'\\x', E'\\x')
+            """
+        )
+    )
+    pg_empty_conn.commit()
+    uc = UserContext(subject_id="user1", issuer_id="issuer1")
+
+    # Act
+    async with generate_async_session(pg_empty_conn.connection) as session:
+        user = await select_user(session, uc, with_der, with_p12)
+
+        # Assert
+        assert user is not None
+        if with_der:
+            assert user.certificate_x509_der is not None
+        else:
+            with pytest.raises(Exception):
+                user.certificate_x509_der
+
+        if with_p12:
+            assert user.certificate_p12_bundle is not None
+        else:
+            with pytest.raises(Exception):
+                user.certificate_p12_bundle

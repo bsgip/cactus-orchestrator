@@ -13,7 +13,7 @@ from cactus_orchestrator.k8s.resource.create import (
     wait_for_pod,
 )
 from cactus_orchestrator.k8s.resource.delete import delete_service, delete_statefulset, remove_ingress_rule
-from cactus_orchestrator.settings import DEFAULT_INGRESS_PATH_FORMAT
+from cactus_orchestrator.settings import DEFAULT_INGRESS_PATH_FORMAT, CactusOrchestratorException
 
 
 class MockThread:
@@ -117,6 +117,17 @@ async def test_wait_for_pod(mock_is_container_ready):
     """Test waiting for a pod to be ready."""
     await wait_for_pod("test-pod")
     mock_is_container_ready.assert_called_once()
+
+
+@pytest.mark.asyncio
+@patch("cactus_orchestrator.k8s.resource.create.is_container_ready", return_value=False)
+async def test_wait_for_pod_retries(mock_is_container_ready):
+    """Test waiting for a pod to be ready."""
+
+    with pytest.raises(CactusOrchestratorException):
+        await wait_for_pod("test-pod", 2, wait_interval=1)
+
+    assert mock_is_container_ready.call_count == 2
 
 
 @pytest.mark.asyncio
