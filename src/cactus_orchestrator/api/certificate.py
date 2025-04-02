@@ -8,7 +8,7 @@ from fastapi.responses import Response
 from fastapi_async_sqlalchemy import db
 
 from cactus_orchestrator.auth import AuthScopes, jwt_validator
-from cactus_orchestrator.crud import insert_user, select_user
+from cactus_orchestrator.crud import upsert_user
 from cactus_orchestrator.k8s.certificate.create import generate_client_p12
 from cactus_orchestrator.k8s.certificate.fetch import fetch_certificate_key_pair
 from cactus_orchestrator.schema import UserContext
@@ -39,18 +39,8 @@ async def create_user_certificate(
     # create certs
     client_p12, client_x509_der = create_client_cert_binary(user_context)
 
-    user = await select_user(db.session, user_context)
-
-    if user is None:
-        logger.info(f"Registering new user {user_context}")
-
-        # create certs
-        client_p12, client_x509_der = create_client_cert_binary(user_context)
-
-        # write user
-        user = await insert_user(db.session, user_context, client_p12, client_x509_der)
-
-        await db.session.commit()
+    # insert or update user with new cert
+    _ = await upsert_user(db.session, user_context, client_p12=client_p12, client_x509_der=client_x509_der)
 
     await db.session.commit()
 
