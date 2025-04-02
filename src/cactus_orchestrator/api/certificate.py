@@ -32,7 +32,13 @@ def create_client_cert_binary(user_context: UserContext) -> tuple[bytes, bytes]:
     return client_p12, client_cert.public_bytes(encoding=serialization.Encoding.DER)
 
 
-@router.post("/certificate/generate", status_code=HTTPStatus.OK)
+@router.post(
+    "/certificate/generate",
+    status_code=HTTPStatus.OK,
+    responses={
+        HTTPStatus.OK: {"headers": {"X-Certificate-Password": {"description": "Password for .p12 certificate bundle."}}}
+    },
+)
 async def create_user_certificate(
     user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_scopes({AuthScopes.user_all}))],
 ) -> Response:
