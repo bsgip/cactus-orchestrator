@@ -126,7 +126,7 @@ def test_create_new_certificate(client, valid_user_jwt, ca_cert_key_pair):
     fetch_certificate_key_pair.return_value = ca_cert_key_pair
 
     # Act
-    res = client.post("/certificate/generate", headers={"Authorization": f"Bearer {valid_user_jwt}"})
+    res = client.put("/certificate", headers={"Authorization": f"Bearer {valid_user_jwt}"})
 
     # Assert
     assert res.status_code == HTTPStatus.OK

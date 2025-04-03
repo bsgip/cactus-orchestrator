@@ -71,8 +71,8 @@ async def fetch_existing_certificate(
     )
 
 
-@router.post(
-    "/certificate/generate",
+@router.put(
+    "/certificate",
     status_code=HTTPStatus.OK,
     response_class=Response,
     responses={
