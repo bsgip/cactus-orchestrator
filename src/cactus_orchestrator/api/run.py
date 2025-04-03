@@ -86,7 +86,13 @@ async def get_runs_paginated(
     return paginate(resp)
 
 
-@router.post("/run", status_code=HTTPStatus.CREATED)
+@router.post(
+    "/run",
+    status_code=HTTPStatus.CREATED,
+    responses={
+        HTTPStatus.CREATED: {"headers": {"Location": {"description": "URL of the newly created test server resource."}}}
+    },
+)
 async def spawn_teststack_and_start_run(
     test: StartRunRequest,
     user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_scopes({AuthScopes.user_all}))],
