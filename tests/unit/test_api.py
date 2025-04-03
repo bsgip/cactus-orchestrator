@@ -56,6 +56,8 @@ def test_post_spawn_test_created(client, valid_user_p12_and_der, valid_user_jwt)
     )
     RunnerClient.start = AsyncMock()
     clone_statefulset.return_value = "pod_name"
+    insert_run_for_user.return_value = 1
+
     # Act
     req = StartRunRequest(test_procedure_id=TestProcedureId.ALL_01.value)
     res = client.post("run", json=req.model_dump(), headers={"Authorization": f"Bearer {valid_user_jwt}"})
@@ -63,7 +65,8 @@ def test_post_spawn_test_created(client, valid_user_p12_and_der, valid_user_jwt)
     # Assert
     assert res.status_code == HTTPStatus.CREATED
     resmdl = StartRunResponse.model_validate(res.json())
-    assert os.environ["TEST_EXECUTION_FQDN"] in res.headers["Location"]
+    assert os.environ["TEST_EXECUTION_FQDN"] in resmdl.test_url
+    assert res.headers["Location"] == "/run/1"
     insert_run_for_user.assert_called_once()
 
 

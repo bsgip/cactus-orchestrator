@@ -147,12 +147,11 @@ async def spawn_teststack_and_start_run(
     await db.session.commit()
 
     # set location header
-    response.headers["Location"] = TEST_EXECUTION_URL_FORMAT.format(
-        fqdn=main_settings.test_execution_fqdn, svc_name=new_svc_name
-    )
+    response.headers["Location"] = f"/run/{run_id}"
 
     return StartRunResponse(
         run_id=run_id,
+        test_url=TEST_EXECUTION_URL_FORMAT.format(fqdn=main_settings.test_execution_fqdn, svc_name=new_svc_name),
     )
 
 
