@@ -38,12 +38,13 @@ def test_generate_client_p12_invalid_password(ca_cert_key_pair):
 
 
 @patch("cactus_orchestrator.k8s.certificate.fetch.v1_core_api")
-def test_fetch_certificate_key_pair(mock_v1_core_api, mock_k8s_tls_secret):
+@pytest.mark.asyncio
+async def test_fetch_certificate_key_pair(mock_v1_core_api, mock_k8s_tls_secret, mock_thread_cls):
     """Test fetching a certificate and key from a mock Kubernetes secret."""
 
-    mock_v1_core_api.read_namespaced_secret.return_value = mock_k8s_tls_secret
+    mock_v1_core_api.read_namespaced_secret.return_value = mock_thread_cls(mock_k8s_tls_secret)
 
-    cert, key = fetch_certificate_key_pair("test-secret", "test-namespace")
+    cert, key = await fetch_certificate_key_pair("test-secret", "test-namespace")
 
     assert isinstance(cert, x509.Certificate)
     assert isinstance(key, rsa.RSAPrivateKey)

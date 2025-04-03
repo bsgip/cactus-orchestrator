@@ -1,4 +1,3 @@
-import base64
 import os
 from datetime import datetime, timezone
 from http import HTTPStatus
@@ -9,9 +8,11 @@ import pytest
 from cactus_test_definitions import TestProcedureId
 from fastapi.testclient import TestClient
 from fastapi_pagination import Params, set_params
-from sqlalchemy.exc import IntegrityError
+from cryptography.hazmat.primitives import serialization
 
+from cactus_orchestrator.api.certificate import update_ca_certificate_cache, _ca_crt_cachekey
 from cactus_orchestrator.api.run import finalise_run, teardown_teststack
+from cactus_orchestrator.cache import AsyncCache, ExpiringValue
 from cactus_orchestrator.main import app
 from cactus_orchestrator.model import FinalisationStatus, Run, RunArtifact, User
 from cactus_orchestrator.schema import StartRunRequest, StartRunResponse, TestProcedureResponse
@@ -105,7 +106,7 @@ def test_post_spawn_test_teardown_on_failure(client, valid_user_jwt, valid_user_
 
 @patch.multiple(
     "cactus_orchestrator.api.certificate",
-    fetch_certificate_key_pair=Mock(),
+    fetch_certificate_key_pair=AsyncMock(),
     generate_client_p12=Mock(),
     upsert_user=AsyncMock(return_value=1),
 )
@@ -128,6 +129,36 @@ def test_create_new_certificate(client, valid_user_jwt, ca_cert_key_pair):
     assert res.status_code == HTTPStatus.OK
     assert res.content == b"mock_p12_data"
     assert res.headers["content-type"] == "application/x-pkcs12"
+
+
+@patch("cactus_orchestrator.api.certificate.fetch_certificate_only", new_callable=AsyncMock)
+@pytest.mark.asyncio
+async def test_update_ca_certificate_cache(mock_fetch_certificate_only, ca_cert_key_pair):
+    """basic success test for cache update function - Controller/Managment layer function"""
+    # Arrange
+    mock_fetch_certificate_only.return_value = ca_cert_key_pair[0]
+
+    # Act
+    res = await update_ca_certificate_cache(None)
+
+    # Assert
+    assert isinstance(res[_ca_crt_cachekey], ExpiringValue)
+    assert res[_ca_crt_cachekey].expiry == ca_cert_key_pair[0].not_valid_after_utc
+
+
+@patch("cactus_orchestrator.api.certificate._ca_crt_cache", spec=AsyncCache)
+def test_fetch_current_certificate_authority_der(mock_ca_crt_cache, client, ca_cert_key_pair, valid_user_jwt):
+    """Basic success path test."""
+    # Arrange
+    mock_ca_crt_cache.get_value = AsyncMock(return_value=ca_cert_key_pair[0])
+
+    # Act
+    res = client.get("/certificate/authority", headers={"Authorization": f"Bearer {valid_user_jwt}"})
+
+    # Assert
+    assert res.status_code == HTTPStatus.OK
+    assert res.headers["content-type"] == "application/x-x509-ca-cert"
+    assert res.content == ca_cert_key_pair[0].public_bytes(serialization.Encoding.DER)
 
 
 @patch("cactus_orchestrator.api.procedure.test_procedure_responses", [])

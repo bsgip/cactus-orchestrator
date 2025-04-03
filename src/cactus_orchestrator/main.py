@@ -1,4 +1,5 @@
 import logging
+
 from fastapi import FastAPI
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi_async_sqlalchemy import SQLAlchemyMiddleware

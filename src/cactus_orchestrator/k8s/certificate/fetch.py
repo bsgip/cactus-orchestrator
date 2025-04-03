@@ -1,4 +1,6 @@
+import asyncio
 import base64
+from multiprocessing.pool import ApplyResult
 from typing import get_args
 
 from cryptography import x509
@@ -25,7 +27,7 @@ class SecretString:
         return self._secret
 
 
-def fetch_certificate_key_pair(
+async def fetch_certificate_key_pair(
     secret_name: str, namespace: str | None = None, passphrase_secret: SecretString | None = None
 ) -> tuple[x509.Certificate, CertificateIssuerPrivateKeyTypes]:
     """
@@ -43,7 +45,10 @@ def fetch_certificate_key_pair(
     namespace = namespace or main_settings.test_execution_namespace
 
     # Read secret
-    secret: client.V1Secret = v1_core_api.read_namespaced_secret(secret_name, namespace=namespace)
+    res: ApplyResult = v1_core_api.read_namespaced_secret(
+        secret_name, namespace=namespace, async_req=True
+    )  # type: ignore
+    secret: client.V1Secret = await asyncio.to_thread(res.get)
 
     if secret is None or secret.data is None:
         raise CactusOrchestratorException(f"secret {secret_name} not found in namespace {namespace}")
@@ -64,3 +69,22 @@ def fetch_certificate_key_pair(
         raise TypeError(f"Invalid private key type for {secret_name}")
 
     return certificate, private_key  # type: ignore
+
+
+async def fetch_certificate_only(secret_name: str, namespace: str | None = None) -> x509.Certificate:
+    namespace = namespace or main_settings.test_execution_namespace
+
+    # Read secret
+    res: ApplyResult = v1_core_api.read_namespaced_secret(
+        secret_name, namespace=namespace, async_req=True
+    )  # type: ignore
+    secret: client.V1Secret = await asyncio.to_thread(res.get)
+
+    if secret is None or secret.data is None:
+        raise CactusOrchestratorException(f"secret {secret_name} not found in namespace {namespace}")
+
+    # Decode b64 encoded cert
+    crt_bytes = base64.b64decode(secret.data["ca.crt"])
+
+    # Deserialise
+    return x509.load_pem_x509_certificate(crt_bytes, default_backend())

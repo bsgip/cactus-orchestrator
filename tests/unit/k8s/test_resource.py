@@ -16,19 +16,9 @@ from cactus_orchestrator.k8s.resource.delete import delete_service, delete_state
 from cactus_orchestrator.settings import DEFAULT_INGRESS_PATH_FORMAT, CactusOrchestratorException
 
 
-class MockThread:
-    """For async_req=True in Kubernetes API calls - it doesn't actually support asyncio"""
-
-    def __init__(self, result):
-        self.result = result
-
-    def get(self, *args, **kwargs):
-        return self.result
-
-
 @pytest.mark.asyncio
 @patch("cactus_orchestrator.k8s.resource.create.v1_core_api")
-async def test_clone_service(mock_v1_core_api):
+async def test_clone_service(mock_v1_core_api, mock_thread_cls):
     # Arrange
     mock_service = client.V1Service(
         api_version="v1",
@@ -37,8 +27,8 @@ async def test_clone_service(mock_v1_core_api):
         spec=client.V1ServiceSpec(ports=[client.V1ServicePort(port=80)]),
     )
 
-    mock_v1_core_api.read_namespaced_service.return_value = MockThread(mock_service)
-    mock_v1_core_api.create_namespaced_service.return_value = MockThread(None)
+    mock_v1_core_api.read_namespaced_service.return_value = mock_thread_cls(mock_service)
+    mock_v1_core_api.create_namespaced_service.return_value = mock_thread_cls(None)
 
     # Act
     await clone_service("new-service", "new-app-label")
@@ -50,7 +40,7 @@ async def test_clone_service(mock_v1_core_api):
 
 @pytest.mark.asyncio
 @patch("cactus_orchestrator.k8s.resource.create.v1_app_api")
-async def test_clone_statefulset(mock_v1_app_api):
+async def test_clone_statefulset(mock_v1_app_api, mock_thread_cls):
     """Test cloning a Kubernetes StatefulSet."""
     mock_statefulset = client.V1StatefulSet(
         api_version="apps/v1",
@@ -63,8 +53,8 @@ async def test_clone_statefulset(mock_v1_app_api):
         ),
     )
 
-    mock_v1_app_api.read_namespaced_stateful_set.return_value = MockThread(mock_statefulset)
-    mock_v1_app_api.create_namespaced_stateful_set.return_value = MockThread(None)
+    mock_v1_app_api.read_namespaced_stateful_set.return_value = mock_thread_cls(mock_statefulset)
+    mock_v1_app_api.create_namespaced_stateful_set.return_value = mock_thread_cls(None)
 
     await clone_statefulset("new-statefulset", "new-service", "new-app-label")
 
@@ -74,7 +64,7 @@ async def test_clone_statefulset(mock_v1_app_api):
 
 @pytest.mark.asyncio
 @patch("cactus_orchestrator.k8s.resource.create.v1_core_api")
-async def test_is_container_ready(mock_v1_core_api, generate_k8s_class_instance):
+async def test_is_container_ready(mock_v1_core_api, generate_k8s_class_instance, mock_thread_cls):
     """Test checking if a container is ready."""
     # Arrange
     mock_pod = client.V1Pod(
@@ -85,7 +75,7 @@ async def test_is_container_ready(mock_v1_core_api, generate_k8s_class_instance)
             ]
         )
     )
-    mock_v1_core_api.read_namespaced_pod.return_value = MockThread(mock_pod)
+    mock_v1_core_api.read_namespaced_pod.return_value = mock_thread_cls(mock_pod)
 
     # Act
     res = await is_container_ready("test-pod")
@@ -97,12 +87,12 @@ async def test_is_container_ready(mock_v1_core_api, generate_k8s_class_instance)
 
 @pytest.mark.asyncio
 @patch("cactus_orchestrator.k8s.resource.create.v1_core_api")
-async def test_is_container_ready_not_found(mock_v1_core_api):
+async def test_is_container_ready_not_found(mock_v1_core_api, mock_thread_cls):
     """Test checking container readiness when the container is missing."""
     # Arrange
     mock_pod = client.V1Pod(status=client.V1PodStatus(container_statuses=[]))
 
-    mock_v1_core_api.read_namespaced_pod.return_value = MockThread(mock_pod)
+    mock_v1_core_api.read_namespaced_pod.return_value = mock_thread_cls(mock_pod)
 
     # Act
     res = await is_container_ready("test-pod")
@@ -132,15 +122,15 @@ async def test_wait_for_pod_retries(mock_is_container_ready):
 
 @pytest.mark.asyncio
 @patch("cactus_orchestrator.k8s.resource.create.v1_net_api")
-async def test_add_ingress_rule(mock_v1_net_api):
+async def test_add_ingress_rule(mock_v1_net_api, mock_thread_cls):
     """Test adding an ingress rule to Kubernetes."""
     # Arrange
     mock_ingress = client.V1Ingress(
         spec=client.V1IngressSpec(rules=[client.V1IngressRule(http=client.V1HTTPIngressRuleValue(paths=[]))])
     )
 
-    mock_v1_net_api.read_namespaced_ingress.return_value = MockThread(mock_ingress)
-    mock_v1_net_api.patch_namespaced_ingress.return_value = MockThread(None)
+    mock_v1_net_api.read_namespaced_ingress.return_value = mock_thread_cls(mock_ingress)
+    mock_v1_net_api.patch_namespaced_ingress.return_value = mock_thread_cls(None)
 
     # Act
     await add_ingress_rule("new-service")
@@ -152,10 +142,10 @@ async def test_add_ingress_rule(mock_v1_net_api):
 
 @pytest.mark.asyncio
 @patch("cactus_orchestrator.k8s.resource.delete.v1_core_api")
-async def test_delete_service(mock_v1_core_api):
+async def test_delete_service(mock_v1_core_api, mock_thread_cls):
     """Test deleting a Kubernetes Service."""
     # Arrange
-    mock_v1_core_api.delete_namespaced_service.return_value = MockThread(None)
+    mock_v1_core_api.delete_namespaced_service.return_value = mock_thread_cls(None)
 
     # Act
     await delete_service("test-service")
@@ -166,10 +156,10 @@ async def test_delete_service(mock_v1_core_api):
 
 @pytest.mark.asyncio
 @patch("cactus_orchestrator.k8s.resource.delete.v1_app_api")
-async def test_delete_statefulset(mock_v1_app_api):
+async def test_delete_statefulset(mock_v1_app_api, mock_thread_cls):
     """Test deleting a Kubernetes StatefulSet."""
     # Arrange
-    mock_v1_app_api.delete_namespaced_stateful_set.return_value = MockThread(None)
+    mock_v1_app_api.delete_namespaced_stateful_set.return_value = mock_thread_cls(None)
 
     # Act
     await delete_statefulset("test-statefulset")
@@ -180,7 +170,7 @@ async def test_delete_statefulset(mock_v1_app_api):
 
 @pytest.mark.asyncio
 @patch("cactus_orchestrator.k8s.resource.delete.v1_net_api")
-async def test_remove_ingress_rule(mock_v1_net_api, generate_k8s_class_instance):
+async def test_remove_ingress_rule(mock_v1_net_api, generate_k8s_class_instance, mock_thread_cls):
     """Test removing an ingress rule from Kubernetes."""
     # Arrange
     mock_ingress = generate_k8s_class_instance(client.V1Ingress)
@@ -200,8 +190,8 @@ async def test_remove_ingress_rule(mock_v1_net_api, generate_k8s_class_instance)
         )
     ]
 
-    mock_v1_net_api.read_namespaced_ingress.return_value = MockThread(mock_ingress)
-    mock_v1_net_api.patch_namespaced_ingress.return_value = MockThread(None)
+    mock_v1_net_api.read_namespaced_ingress.return_value = mock_thread_cls(mock_ingress)
+    mock_v1_net_api.patch_namespaced_ingress.return_value = mock_thread_cls(None)
 
     # Act
     await remove_ingress_rule("remove-me")
