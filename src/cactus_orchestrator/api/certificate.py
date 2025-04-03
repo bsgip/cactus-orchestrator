@@ -4,13 +4,13 @@ from typing import Annotated, Any
 
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
 from fastapi_async_sqlalchemy import db
 
 from cactus_orchestrator.auth import AuthScopes, jwt_validator
 from cactus_orchestrator.cache import AsyncCache, ExpiringValue
-from cactus_orchestrator.crud import upsert_user
+from cactus_orchestrator.crud import select_user, upsert_user
 from cactus_orchestrator.k8s.certificate.create import generate_client_p12
 from cactus_orchestrator.k8s.certificate.fetch import fetch_certificate_key_pair, fetch_certificate_only
 from cactus_orchestrator.schema import UserContext
@@ -44,6 +44,23 @@ async def create_client_cert_binary(user_context: UserContext) -> tuple[bytes, b
         p12_password=TEST_CLIENT_P12_PASSWORD.get_secret_value(),
     )
     return client_p12, client_cert.public_bytes(encoding=serialization.Encoding.DER)
+
+
+@router.get("/certificate")
+async def fetch_existing_certificate(
+    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_scopes({AuthScopes.user_all}))],
+) -> Response:
+
+    # get user with p12
+    user = await select_user(db.session, user_context, with_p12=True)
+
+    if user is None:
+        raise HTTPException(status_code=HTTPStatus.CONFLICT, detail="No certificate exists, please register.")
+
+    return Response(
+        content=user.certificate_p12_bundle,
+        media_type="application/x-pkcs12",
+    )
 
 
 @router.post(
