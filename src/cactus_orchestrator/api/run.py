@@ -232,7 +232,10 @@ async def get_run_artifact(
         run = await select_user_run_with_artifact(db.session, user.user_id, run_id)
     except NoResultFound as exc:
         logger.debug(exc)
-        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Not Found")
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Run does not exist.")
+
+    if run.run_artifact is None:
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="RunArtifact does not exist.")
 
     return Response(
         content=run.run_artifact.file_data,
