@@ -107,20 +107,18 @@ def test_post_spawn_test_teardown_on_failure(client, valid_user_jwt, valid_user_
     "cactus_orchestrator.api.certificate",
     fetch_certificate_key_pair=Mock(),
     generate_client_p12=Mock(),
-    insert_user=AsyncMock(),
-    select_user=AsyncMock(return_value=None),
+    upsert_user=AsyncMock(return_value=1),
 )
 def test_create_new_certificate(client, valid_user_jwt, ca_cert_key_pair):
     """Test creating a new certificate for a user"""
     # Arrange
-    from cactus_orchestrator.api.certificate import fetch_certificate_key_pair, generate_client_p12, insert_user
+    from cactus_orchestrator.api.certificate import fetch_certificate_key_pair, generate_client_p12
 
     mock_p12 = b"mock_p12_data"
     mock_cert = AsyncMock()
     mock_cert.public_bytes.return_value = b"mock_cert_data"
 
     generate_client_p12.return_value = (mock_p12, mock_cert)
-    insert_user.return_value = AsyncMock(user_id=1, certificate_p12_bundle=mock_p12)
     fetch_certificate_key_pair.return_value = ca_cert_key_pair
 
     # Act

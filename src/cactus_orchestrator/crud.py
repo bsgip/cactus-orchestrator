@@ -51,7 +51,7 @@ async def update_user(
 
 async def upsert_user(
     session: AsyncSession, user_context: UserContext, client_p12: bytes, client_x509_der: bytes
-) -> int | None:
+) -> int:
     """We have to use sqlalchemy-core with postgres dialect for upserts"""
     # form statement
     stmt = insert(User).values(
@@ -70,7 +70,7 @@ async def upsert_user(
             ),
         ).returning(User.user_id)
     )
-    return resp.scalar_one_or_none()
+    return resp.scalar_one()
 
 
 async def select_user(
