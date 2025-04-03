@@ -22,6 +22,10 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+MEDIA_TYPE_P12 = "application/x-pkcs12"
+MEDIA_TYPE_CA_CRT = "application/x-x509-ca-cert"
+
+
 async def update_ca_certificate_cache(_: Any) -> dict[str, ExpiringValue[x509.Certificate]]:
     cert = await fetch_certificate_only(main_settings.tls_ca_certificate_generic_secret_name)
 
@@ -46,7 +50,11 @@ async def create_client_cert_binary(user_context: UserContext) -> tuple[bytes, b
     return client_p12, client_cert.public_bytes(encoding=serialization.Encoding.DER)
 
 
-@router.get("/certificate")
+@router.get(
+    "/certificate",
+    response_class=Response,
+    responses={HTTPStatus.OK: {"content": {MEDIA_TYPE_P12: {}}}},
+)
 async def fetch_existing_certificate(
     user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_scopes({AuthScopes.user_all}))],
 ) -> Response:
@@ -59,15 +67,19 @@ async def fetch_existing_certificate(
 
     return Response(
         content=user.certificate_p12_bundle,
-        media_type="application/x-pkcs12",
+        media_type=MEDIA_TYPE_P12,
     )
 
 
 @router.post(
     "/certificate/generate",
     status_code=HTTPStatus.OK,
+    response_class=Response,
     responses={
-        HTTPStatus.OK: {"headers": {"X-Certificate-Password": {"description": "Password for .p12 certificate bundle."}}}
+        HTTPStatus.OK: {
+            "headers": {"X-Certificate-Password": {"description": "Password for .p12 certificate bundle."}},
+            "content": {MEDIA_TYPE_P12: {}},
+        }
     },
 )
 async def create_user_certificate(
@@ -83,12 +95,17 @@ async def create_user_certificate(
 
     return Response(
         content=client_p12,
-        media_type="application/x-pkcs12",
+        media_type=MEDIA_TYPE_P12,
         headers={"X-Certificate-Password": TEST_CLIENT_P12_PASSWORD.get_secret_value()},
     )
 
 
-@router.get("/certificate/authority", status_code=HTTPStatus.OK)
+@router.get(
+    "/certificate/authority",
+    status_code=HTTPStatus.OK,
+    response_class=Response,
+    responses={HTTPStatus.OK: {"content": {MEDIA_TYPE_CA_CRT: {}}}},
+)
 async def fetch_current_certificate_authority_der(
     _: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_scopes({AuthScopes.user_all}))],
 ) -> Response:
@@ -101,5 +118,5 @@ async def fetch_current_certificate_authority_der(
 
     return Response(
         content=ca_cert.public_bytes(serialization.Encoding.DER),
-        media_type="application/x-x509-ca-cert",
+        media_type=MEDIA_TYPE_CA_CRT,
     )
