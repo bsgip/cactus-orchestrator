@@ -10,7 +10,10 @@ from fastapi.testclient import TestClient
 from fastapi_pagination import Params, set_params
 from cryptography.hazmat.primitives import serialization
 
-from cactus_orchestrator.api.certificate import update_ca_certificate_cache, _ca_crt_cachekey
+from cactus_orchestrator.api.certificate import (
+    update_ca_certificate_cache,
+    _ca_crt_cachekey,
+)
 from cactus_orchestrator.api.run import finalise_run, teardown_teststack
 from cactus_orchestrator.cache import AsyncCache, ExpiringValue
 from cactus_orchestrator.main import app
@@ -131,10 +134,25 @@ def test_create_new_certificate(client, valid_user_jwt, ca_cert_key_pair):
     assert res.headers["content-type"] == "application/x-pkcs12"
 
 
+@patch("cactus_orchestrator.api.certificate.select_user")
+def test_fetch_existing_certificate(mock_select_user, client, valid_user_jwt):
+    # Arrange
+    mock_select_user.return_value = User(certificate_p12_bundle=b"mock_p12_data")
+
+    # Act
+    res = client.get("/certificate", headers={"Authorization": f"Bearer {valid_user_jwt}"})
+
+    # Assert
+    assert res.status_code == HTTPStatus.OK
+    assert res.content == b"mock_p12_data"
+    assert res.headers["content-type"] == "application/x-pkcs12"
+
+
+# NOTE: not api route handler, Controller/Managment layer
 @patch("cactus_orchestrator.api.certificate.fetch_certificate_only", new_callable=AsyncMock)
 @pytest.mark.asyncio
 async def test_update_ca_certificate_cache(mock_fetch_certificate_only, ca_cert_key_pair):
-    """basic success test for cache update function - Controller/Managment layer function"""
+    """basic success test for cache update function"""
     # Arrange
     mock_fetch_certificate_only.return_value = ca_cert_key_pair[0]
 
