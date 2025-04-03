@@ -148,6 +148,18 @@ def test_fetch_existing_certificate(mock_select_user, client, valid_user_jwt):
     assert res.headers["content-type"] == "application/x-pkcs12"
 
 
+@patch("cactus_orchestrator.api.certificate.select_user")
+def test_fetch_existing_certificate_notfound(mock_select_user, client, valid_user_jwt):
+    # Arrange
+    mock_select_user.return_value = None
+
+    # Act
+    res = client.get("/certificate", headers={"Authorization": f"Bearer {valid_user_jwt}"})
+
+    # Assert
+    assert res.status_code == HTTPStatus.NOT_FOUND
+
+
 # NOTE: not api route handler, Controller/Managment layer
 @patch("cactus_orchestrator.api.certificate.fetch_certificate_only", new_callable=AsyncMock)
 @pytest.mark.asyncio

@@ -63,7 +63,7 @@ async def fetch_existing_certificate(
     user = await select_user(db.session, user_context, with_p12=True)
 
     if user is None:
-        raise HTTPException(status_code=HTTPStatus.CONFLICT, detail="No certificate exists, please register.")
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="No certificate exists, please register.")
 
     return Response(
         content=user.certificate_p12_bundle,
