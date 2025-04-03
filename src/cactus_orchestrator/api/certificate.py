@@ -1,7 +1,8 @@
 import logging
 from http import HTTPStatus
-from typing import Annotated
+from typing import Annotated, Any
 
+from cryptography import x509
 from cryptography.hazmat.primitives import serialization
 from fastapi import APIRouter, Depends
 from fastapi.responses import Response
@@ -10,9 +11,9 @@ from fastapi_async_sqlalchemy import db
 from cactus_orchestrator.auth import AuthScopes, jwt_validator
 from cactus_orchestrator.crud import upsert_user
 from cactus_orchestrator.k8s.certificate.create import generate_client_p12
-from cactus_orchestrator.k8s.certificate.fetch import certificate_authority_cache, fetch_certificate_key_pair
+from cactus_orchestrator.k8s.certificate.fetch import fetch_certificate_key_pair, fetch_certificate_only
 from cactus_orchestrator.schema import UserContext
-from cactus_orchestrator.settings import TEST_CLIENT_P12_PASSWORD, main_settings
+from cactus_orchestrator.settings import TEST_CLIENT_P12_PASSWORD, CactusOrchestratorException, main_settings
 
 logger = logging.getLogger(__name__)
 
@@ -20,9 +21,21 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-def create_client_cert_binary(user_context: UserContext) -> tuple[bytes, bytes]:
+async def update_ca_certificate_cache(_: Any) -> dict[str, ExpiringValue[x509.Certificate]]:
+    cert = await fetch_certificate_only(main_settings.tls_ca_certificate_generic_secret_name)
+
+    return {_ca_crt_cachekey: ExpiringValue(expiry=cert.not_valid_after_utc, value=cert)}
+
+
+# NOTE: do not log.
+_ca_crt_cachekey = ""
+_ca_crt_cache = AsyncCache(update_fn=update_ca_certificate_cache, force_update_delay_seconds=60)
+
+
+async def create_client_cert_binary(user_context: UserContext) -> tuple[bytes, bytes]:
+    ca_cert, ca_key = await fetch_certificate_key_pair(main_settings.tls_ca_tls_secret_name)  # TODO: cache maybe?
+
     # create client certificate
-    ca_cert, ca_key = fetch_certificate_key_pair(main_settings.tls_ca_tls_secret_name)  # TODO: cache this
     client_p12, client_cert = generate_client_p12(
         ca_cert=ca_cert,
         ca_key=ca_key,
@@ -37,7 +50,7 @@ async def create_user_certificate(
     user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_scopes({AuthScopes.user_all}))],
 ) -> Response:
     # create certs
-    client_p12, client_x509_der = create_client_cert_binary(user_context)
+    client_p12, client_x509_der = await create_client_cert_binary(user_context)
 
     # insert or update user with new cert
     _ = await upsert_user(db.session, user_context, client_p12=client_p12, client_x509_der=client_x509_der)
@@ -52,7 +65,17 @@ async def create_user_certificate(
 
 
 @router.get("/certificate/authority", status_code=HTTPStatus.OK)
-async def fetch_current_certificate_authority_pem(
+async def fetch_current_certificate_authority_der(
     _: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_scopes({AuthScopes.user_all}))],
 ) -> Response:
-    certificate_authority_cache
+
+    # fetch ca
+    ca_cert = await _ca_crt_cache.get_value(None, _ca_crt_cachekey)
+
+    if ca_cert is None:
+        raise CactusOrchestratorException("CA certificate not found.")
+
+    return Response(
+        content=ca_cert.public_bytes(serialization.Encoding.DER),
+        media_type="application/x-x509-ca-cert",
+    )

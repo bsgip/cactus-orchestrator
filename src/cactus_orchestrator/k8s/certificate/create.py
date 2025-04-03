@@ -6,9 +6,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives.asymmetric.types import CertificateIssuerPrivateKeyTypes
 from cryptography.hazmat.primitives.serialization import pkcs12
 from cryptography.x509.oid import NameOID
-from pydantic import SecretStr
 
-from cactus_orchestrator.k8s.certificate.fetch import fetch_certificate_key_pair
 
 VALIDITY_DAYS = 10
 
@@ -55,15 +53,3 @@ def generate_client_p12(
     )
 
     return pfx_data, client_cert
-
-
-def create_client_cert_binary(client_common_name: str, p12_password: SecretStr) -> tuple[bytes, bytes]:
-    # create client certificate
-    ca_cert, ca_key = fetch_certificate_key_pair(main_settings.tls_ca_tls_secret_name)  # TODO: cache this
-    client_p12, client_cert = generate_client_p12(
-        ca_cert=ca_cert,
-        ca_key=ca_key,
-        client_common_name=client_common_name,
-        p12_password=p12_password.get_secret_value(),
-    )
-    return client_p12, client_cert.public_bytes(encoding=serialization.Encoding.DER)
