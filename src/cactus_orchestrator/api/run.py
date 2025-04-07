@@ -173,9 +173,7 @@ async def finalise_run(
 
     # NOTE: we are assuming that files are small, consider streaming to file store
     # if sizes increase.
-    file_data = (await RunnerClient.finalize(runner_session)).encode(
-        "utf-8"
-    )  # TODO: this should return bytes, encoding for now
+    file_data = await RunnerClient.finalize(runner_session)
     compression = "zip"  # TODO: should also return compression or allow access to response header
 
     artifact = await create_runartifact(session, compression, file_data)
