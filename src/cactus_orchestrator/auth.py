@@ -119,7 +119,7 @@ class JWTValidator:
             issuer=self._settings.issuer,
         )
 
-        scopes = set(payload.pop("scopes", "").split())  # supposed to be space separated string of scopes
+        scopes = set(payload.pop("scope", "").split())  # supposed to be space separated string of scopes
         return JWTClaims(**payload, scopes=scopes)
 
     def _check_scopes(self, required_scopes: set[str], jwt_claims: JWTClaims) -> JWTClaims:
