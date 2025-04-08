@@ -70,7 +70,7 @@ async def select_user_or_raise(
 @router.get("/run", status_code=HTTPStatus.OK)
 async def get_runs_paginated(
     user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_scopes({AuthScopes.user_all}))],
-    finalised: bool = Query(default=True),
+    finalised: bool | None = Query(default=None),
     created_after: datetime = Query(default=datetime.now(tz=timezone.utc) - timedelta(days=7)),
 ) -> Page[RunResponse]:
     # get user
