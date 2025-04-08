@@ -63,7 +63,7 @@ async def test_verify_jwt(jwt_validator, kid_and_jwks_stub, ca_cert_key_pair):
         "iss": "auth-server",
         "exp": 9999999999,
         "iat": 1700000000,
-        "scopes": "user:read user:create",
+        "scope": "user:read user:create",
     }
     private_pem = private_key.private_bytes(
         encoding=Encoding.PEM,

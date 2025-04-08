@@ -99,7 +99,7 @@ def valid_user_jwt(mock_jwt_validator_jwks_cache, ca_cert_key_pair) -> str:
         "iss": os.environ["JWTAUTH_ISSUER"],
         "exp": datetime.now(timezone.utc) + timedelta(hours=1),
         "iat": datetime.now(timezone.utc),
-        "scopes": "user:all",
+        "scope": "user:all",
     }
 
     token = jwt.encode(
