@@ -17,6 +17,17 @@ from cactus_orchestrator.k8s.certificate.create import generate_client_p12
 from cactus_orchestrator.model import Base
 
 
+def pytest_configure(config):
+    """Set environment variable before tests run."""
+    os.environ["TEARDOWN_TASK_REPEAT_EVERY_SECONDS"] = "1"
+
+
+@pytest.fixture(scope="session", autouse=True)
+def set_environment(request):
+    repeat_every_sec = request.node.get_closest_marker("teardowntask_repeat_every")
+    os.environ["TEARDOWN_TASK_REPEAT_EVERY_SECONDS"] = str(repeat_every_sec)
+
+
 @pytest.fixture(scope="session")
 def ca_cert_key_pair():
     ca_key = asymmetric.rsa.generate_private_key(public_exponent=65537, key_size=2048)

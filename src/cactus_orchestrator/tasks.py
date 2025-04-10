@@ -1,7 +1,9 @@
 import asyncio
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+import logging
 from typing import AsyncIterator, Never
+import os
 
 from cactus_runner.client import ClientSession, RunnerClient
 from fastapi import FastAPI
@@ -15,6 +17,15 @@ from cactus_orchestrator.model import FinalisationStatus
 from cactus_orchestrator.settings import POD_HARNESS_RUNNER_MANAGEMENT_PORT, RUNNER_POD_URL, main_settings
 
 
+logger = logging.getLogger(__name__)
+
+
+try:
+    TEARDOWN_TASK_REPEAT_EVERY_SECONDS = int(os.getenv("TEARDOWN_TASK_REPEAT_EVERY_SECONDS", 120))
+except ValueError:
+    TEARDOWN_TASK_REPEAT_EVERY_SECONDS = 120
+
+
 async def is_idle(now: datetime, url: str) -> bool:
     s = ClientSession(url)
 
@@ -26,7 +37,7 @@ async def is_idle(now: datetime, url: str) -> bool:
 
 
 def is_maxlive_overtime(now: datetime, created_at: datetime) -> bool:
-    if (now.timestamp() - created_at.timestamp()) > main_settings.teardown_idle_timeout_seconds:
+    if (now.timestamp() - created_at.timestamp()) > main_settings.teardown_max_lifetime_seconds:
         return True
     return False
 
@@ -34,7 +45,7 @@ def is_maxlive_overtime(now: datetime, created_at: datetime) -> bool:
 task_references: set[asyncio.Task] = set()
 
 
-@repeat_every(seconds=120)
+@repeat_every(seconds=TEARDOWN_TASK_REPEAT_EVERY_SECONDS)
 async def teardown_teststack_task() -> None:
     """Task that monitors live teststacks and triggers teardown based on timeout rules."""
     runs = await select_nonfinalised_runs(db.session)
@@ -44,6 +55,7 @@ async def teardown_teststack_task() -> None:
         pod_url = RUNNER_POD_URL.format(pod_fqdn=pod_fqdn, pod_port=POD_HARNESS_RUNNER_MANAGEMENT_PORT)
         if await is_idle(now, pod_url) or is_maxlive_overtime(now, run.created_at):
 
+            logger.info(f"(Idle/Overtime Task) Shutting down {svc_name}")
             # finalise
             await finalise_run(run, pod_url, db.session, FinalisationStatus.by_timeout, now)
             await db.session.commit()
@@ -55,8 +67,6 @@ async def teardown_teststack_task() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[Never]:
     """Lifespan event to start background tasks with fastapi app."""
-    task = asyncio.create_task(teardown_teststack_task())
+    await teardown_teststack_task()
 
     yield  # type: ignore
-
-    task.cancel()
