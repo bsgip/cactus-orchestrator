@@ -48,6 +48,7 @@ task_references: set[asyncio.Task] = set()
 @repeat_every(seconds=TEARDOWN_TASK_REPEAT_EVERY_SECONDS)
 async def teardown_teststack_task() -> None:
     """Task that monitors live teststacks and triggers teardown based on timeout rules."""
+    logger.info("running..")
     runs = await select_nonfinalised_runs(db.session)
     for run in runs:
         now = datetime.now(timezone.utc)  # check now time per loop
