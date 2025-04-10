@@ -49,21 +49,20 @@ task_references: set[asyncio.Task] = set()
 async def teardown_teststack_task() -> None:
     """Task that monitors live teststacks and triggers teardown based on timeout rules."""
     logger.info("running..")
-    logger.info(db.session)
-    runs = await select_nonfinalised_runs(db.session)
-    logger.info(runs)
-    for run in runs:
-        now = datetime.now(timezone.utc)  # check now time per loop
-        svc_name, statefulset_name, _, _, pod_fqdn = get_resource_names(run.teststack_id)  # type: ignore
-        pod_url = RUNNER_POD_URL.format(pod_fqdn=pod_fqdn, pod_port=POD_HARNESS_RUNNER_MANAGEMENT_PORT)
-        if await is_idle(now, pod_url) or is_maxlive_overtime(now, run.created_at):
-            logger.info(f"(Idle/Overtime Task) Shutting down {svc_name}")
-            # finalise
-            await finalise_run(run, pod_url, db.session, FinalisationStatus.by_timeout, now)
-            await db.session.commit()
 
-            # teardown
-            await teardown_teststack(svc_name=svc_name, statefulset_name=statefulset_name)
+    async with db():
+        runs = await select_nonfinalised_runs(db.session)
+
+        for run in runs:
+            now = datetime.now(timezone.utc)
+            svc_name, statefulset_name, _, _, pod_fqdn = get_resource_names(run.teststack_id)
+            pod_url = RUNNER_POD_URL.format(pod_fqdn=pod_fqdn, pod_port=POD_HARNESS_RUNNER_MANAGEMENT_PORT)
+
+            if await is_idle(now, pod_url) or is_maxlive_overtime(now, run.created_at):
+                logger.info(f"(Idle/Overtime Task) Shutting down {svc_name}")
+                await finalise_run(run, pod_url, db.session, FinalisationStatus.by_timeout, now)
+                await db.session.commit()
+                await teardown_teststack(svc_name=svc_name, statefulset_name=statefulset_name)
 
 
 @asynccontextmanager
