@@ -67,6 +67,7 @@ async def teardown_teststack_task() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[Never]:
     """Lifespan event to start background tasks with fastapi app."""
+    logger.info("Starting teardown_teststack_task")
     await teardown_teststack_task()
 
     yield  # type: ignore
