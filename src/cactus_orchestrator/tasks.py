@@ -1,22 +1,27 @@
 import asyncio
+import logging
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-import logging
 from typing import Any, AsyncIterator, Callable, Coroutine, Never
 
-
-from cactus_runner.client import ClientSession, RunnerClient, ClientTimeout
+from aiohttp import ClientConnectionError
+from cactus_runner.client import ClientSession, ClientTimeout, RunnerClient
 from fastapi import FastAPI
 from fastapi_async_sqlalchemy import db
 from fastapi_utils.tasks import repeat_every
+from kubernetes.client.exceptions import ApiException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from cactus_orchestrator.api.run import finalise_run, teardown_teststack
-from cactus_orchestrator.crud import select_nonfinalised_runs
+from cactus_orchestrator.crud import select_nonfinalised_runs, update_run_finalisation_status
 from cactus_orchestrator.k8s.resource import get_resource_names
 from cactus_orchestrator.model import FinalisationStatus
-from cactus_orchestrator.settings import POD_HARNESS_RUNNER_MANAGEMENT_PORT, RUNNER_POD_URL, CactusOrchestratorSettings
-
+from cactus_orchestrator.settings import (
+    POD_HARNESS_RUNNER_MANAGEMENT_PORT,
+    RUNNER_POD_URL,
+    CactusOrchestratorException,
+    CactusOrchestratorSettings,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -61,9 +66,20 @@ async def teardown_idle_teststack(
                 await finalise_run(run, pod_url, session, FinalisationStatus.by_timeout, now)
                 await session.commit()
                 await teardown_teststack(svc_name=svc_name, statefulset_name=statefulset_name)
+            except (ApiException, ClientConnectionError) as exc:
+                logger.warning(
+                    (
+                        f"Failed to teardown idle service {svc_name} because it could not be reached, "
+                        "flagging as terminated..."
+                    )
+                )
+                logger.debug(exc)
+                await update_run_finalisation_status(
+                    session, run.run_id, finalisation_status=FinalisationStatus.terminated, finalised_at=now
+                )
+
             except Exception as exc:
-                logger.warning(f"Failed to teardown idle service {svc_name}")
-                logger.info(exc)
+                logger.warning(f"Failed to teardown idle service {svc_name}", exc_info=exc)
                 continue
 
 
