@@ -2,10 +2,9 @@ import logging
 import os
 
 from kubernetes import client, config
-from pydantic import PostgresDsn, SecretStr
+from pydantic import PostgresDsn
 from pydantic_settings import BaseSettings
 
-TEST_CLIENT_P12_PASSWORD = SecretStr("abc")  # TODO: temporary
 POD_FQDN_FORMAT = "{pod_name}.{svc_name}.{namespace}.svc.cluster.local"  # TODO: use svc instead.
 POD_HARNESS_RUNNER_MANAGEMENT_PORT = 8080  # TODO: tbd
 TLS_SERVER_SECRET_NAME_FORMAT = "tls-server-{domain}"  # nosec: Not a password

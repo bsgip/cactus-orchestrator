@@ -16,11 +16,7 @@ from cactus_orchestrator.api.run import finalise_run, teardown_teststack
 from cactus_orchestrator.crud import select_nonfinalised_runs, update_run_finalisation_status
 from cactus_orchestrator.k8s.resource import get_resource_names
 from cactus_orchestrator.model import FinalisationStatus
-from cactus_orchestrator.settings import (
-    POD_HARNESS_RUNNER_MANAGEMENT_PORT,
-    RUNNER_POD_URL,
-    CactusOrchestratorSettings,
-)
+from cactus_orchestrator.settings import POD_HARNESS_RUNNER_MANAGEMENT_PORT, RUNNER_POD_URL, CactusOrchestratorSettings
 
 logger = logging.getLogger(__name__)
 
