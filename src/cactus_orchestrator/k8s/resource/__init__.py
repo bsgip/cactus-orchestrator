@@ -10,7 +10,7 @@ from cactus_orchestrator.settings import (
     POD_FQDN_FORMAT,
     STATEFULSET_POD_NAME_FORMAT,
     CactusOrchestratorException,
-    main_settings,
+    get_current_settings,
 )
 
 logger = logging.getLogger(__name__)
@@ -51,16 +51,16 @@ def async_k8s_api_retry[**P, T](
 # TODO: usage is error prone
 def get_resource_names(uuid: str, namespace: str | None = None) -> tuple[str, str, str, str, str]:
     """Returns tuple of names: svc_name, statefulset_name, app_label, pod_name, pod_fqdn"""
-    namespace = namespace or main_settings.test_execution_namespace
+    namespace = namespace or get_current_settings().test_execution_namespace
 
-    svc_name = CLONED_RESOURCE_NAME_FORMAT.format(resource_name=main_settings.template_service_name, uuid=uuid)
+    svc_name = CLONED_RESOURCE_NAME_FORMAT.format(resource_name=get_current_settings().template_service_name, uuid=uuid)
     statefulset_name = CLONED_RESOURCE_NAME_FORMAT.format(
-        resource_name=main_settings.template_statefulset_name, uuid=uuid
+        resource_name=get_current_settings().template_statefulset_name, uuid=uuid
     )
-    app_label = CLONED_RESOURCE_NAME_FORMAT.format(resource_name=main_settings.template_app_name, uuid=uuid)
+    app_label = CLONED_RESOURCE_NAME_FORMAT.format(resource_name=get_current_settings().template_app_name, uuid=uuid)
     pod_name = STATEFULSET_POD_NAME_FORMAT.format(statefulset_name=statefulset_name)
     pod_fqdn = POD_FQDN_FORMAT.format(
-        pod_name=pod_name, svc_name=svc_name, namespace=main_settings.test_execution_namespace
+        pod_name=pod_name, svc_name=svc_name, namespace=get_current_settings().test_execution_namespace
     )
 
     return svc_name, statefulset_name, app_label, pod_name, pod_fqdn

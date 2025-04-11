@@ -14,7 +14,7 @@ from cactus_orchestrator.crud import select_user, upsert_user
 from cactus_orchestrator.k8s.certificate.create import generate_client_p12
 from cactus_orchestrator.k8s.certificate.fetch import fetch_certificate_key_pair, fetch_certificate_only
 from cactus_orchestrator.schema import UserContext
-from cactus_orchestrator.settings import TEST_CLIENT_P12_PASSWORD, CactusOrchestratorException, main_settings
+from cactus_orchestrator.settings import TEST_CLIENT_P12_PASSWORD, CactusOrchestratorException, get_current_settings
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +27,7 @@ MEDIA_TYPE_CA_CRT = "application/x-x509-ca-cert"
 
 
 async def update_ca_certificate_cache(_: Any) -> dict[str, ExpiringValue[x509.Certificate]]:
-    cert = await fetch_certificate_only(main_settings.tls_ca_certificate_generic_secret_name)
+    cert = await fetch_certificate_only(get_current_settings().tls_ca_certificate_generic_secret_name)
 
     return {_ca_crt_cachekey: ExpiringValue(expiry=cert.not_valid_after_utc, value=cert)}
 
@@ -38,7 +38,9 @@ _ca_crt_cache = AsyncCache(update_fn=update_ca_certificate_cache, force_update_d
 
 
 async def create_client_cert_binary(user_context: UserContext) -> tuple[bytes, bytes]:
-    ca_cert, ca_key = await fetch_certificate_key_pair(main_settings.tls_ca_tls_secret_name)  # TODO: cache maybe?
+    ca_cert, ca_key = await fetch_certificate_key_pair(
+        get_current_settings().tls_ca_tls_secret_name
+    )  # TODO: cache maybe?
 
     # create client certificate
     client_p12, client_cert = generate_client_p12(

@@ -4,7 +4,7 @@ from http import HTTPStatus
 from typing import Annotated
 
 import shortuuid
-from cactus_runner.client import ClientSession, RunnerClient, RunnerClientException
+from cactus_runner.client import ClientSession, ClientTimeout, RunnerClient, RunnerClientException
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
@@ -34,7 +34,7 @@ from cactus_orchestrator.settings import (
     RUNNER_POD_URL,
     TEST_EXECUTION_URL_FORMAT,
     CactusOrchestratorException,
-    main_settings,
+    get_current_settings,
 )
 
 logger = logging.getLogger(__name__)
@@ -45,12 +45,12 @@ router = APIRouter()
 
 def map_run_to_run_response(run: Run) -> RunResponse:
     svc_name = CLONED_RESOURCE_NAME_FORMAT.format(
-        resource_name=main_settings.template_service_name, uuid=run.teststack_id
+        resource_name=get_current_settings().template_service_name, uuid=run.teststack_id
     )
     return RunResponse(
         run_id=run.run_id,
         test_procedure_id=run.testprocedure_id,
-        test_url=TEST_EXECUTION_URL_FORMAT.format(fqdn=main_settings.test_execution_fqdn, svc_name=svc_name),
+        test_url=TEST_EXECUTION_URL_FORMAT.format(fqdn=get_current_settings().test_execution_fqdn, svc_name=svc_name),
         finalised=(
             True if run.finalisation_status in (FinalisationStatus.by_client, FinalisationStatus.by_timeout) else False
         ),
@@ -127,12 +127,13 @@ async def spawn_teststack_and_start_run(
         await wait_for_pod(pod_name)
 
         # inject initial state
-        runner_session = ClientSession(
-            RUNNER_POD_URL.format(pod_fqdn=pod_fqdn, pod_port=POD_HARNESS_RUNNER_MANAGEMENT_PORT)
-        )
-        await RunnerClient.start(
-            runner_session, test.test_procedure_id, client_cert.public_bytes(serialization.Encoding.PEM).decode("utf-8")
-        )
+        async with ClientSession(
+            base_url=RUNNER_POD_URL.format(pod_fqdn=pod_fqdn, pod_port=POD_HARNESS_RUNNER_MANAGEMENT_PORT),
+            timeout=ClientTimeout(30),
+        ) as s:
+            await RunnerClient.start(
+                s, test.test_procedure_id, client_cert.public_bytes(serialization.Encoding.PEM).decode("utf-8")
+            )
 
         # finally, include new service in ingress rule
         await add_ingress_rule(new_svc_name)
@@ -151,7 +152,9 @@ async def spawn_teststack_and_start_run(
 
     return StartRunResponse(
         run_id=run_id,
-        test_url=TEST_EXECUTION_URL_FORMAT.format(fqdn=main_settings.test_execution_fqdn, svc_name=new_svc_name),
+        test_url=TEST_EXECUTION_URL_FORMAT.format(
+            fqdn=get_current_settings().test_execution_fqdn, svc_name=new_svc_name
+        ),
     )
 
 
@@ -168,12 +171,12 @@ async def teardown_teststack(svc_name: str, statefulset_name: str) -> None:
 async def finalise_run(
     run: Run, url: str, session: AsyncSession, finalisation_status: FinalisationStatus, finalised_at: datetime
 ) -> RunArtifact:
-    runner_session = ClientSession(url)
 
-    # NOTE: we are assuming that files are small, consider streaming to file store
-    # if sizes increase.
-    file_data = await RunnerClient.finalize(runner_session)
-    compression = "zip"  # TODO: should also return compression or allow access to response header
+    async with ClientSession(base_url=url, timeout=ClientTimeout(30)) as s:
+        # NOTE: we are assuming that files are small, consider streaming to file store
+        # if sizes increase.
+        file_data = await RunnerClient.finalize(s)
+        compression = "zip"  # TODO: should also return compression or allow access to response header
 
     artifact = await create_runartifact(session, compression, file_data)
     await update_run_with_runartifact_and_finalise(

@@ -61,9 +61,13 @@ env = [
     "D:JWTAUTH_JWKS_URL=https://jwks.com/jwks",
     "D:JWTAUTH_ISSUER=https://issuer.com",
     "D:JWTAUTH_AUDIENCE=cactus_orchestrator",
-    "D:CACTUS_PYTEST_WITHOUT_KUBERNETES=true"
+    "D:CACTUS_PYTEST_WITHOUT_KUBERNETES=true",
 ]
 asyncio_default_fixture_loop_scope = "function"
+markers = [
+    "idleteardowntask_enable(seconds): Mark test that enables teardown task and sets repeat every duration",
+    "with_test_db: Mark test that sets ORCHESTRATOR_DATABASE_URL to point at the test database",
+]
 
 [tool.bandit]
 exclude_dirs = ["tests", "alembic"]

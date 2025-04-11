@@ -67,8 +67,10 @@ class CactusOrchestratorSettings(BaseSettings):
     test_execution_fqdn: str  # NOTE: we could extract this from the server certs
 
     # teardown
-    teardown_max_lifetime_seconds: int = 86400
-    teardown_idle_timeout_seconds: int = 3600
+    idleteardowntask_enable: bool = True
+    idleteardowntask_max_lifetime_seconds: int = 86400
+    idleteardowntask_idle_timeout_seconds: int = 3600
+    idleteardowntask_repeat_every_seconds: int = 120
 
 
 class JWTAuthSettings(BaseSettings):
@@ -80,7 +82,22 @@ class JWTAuthSettings(BaseSettings):
         env_prefix = "JWTAUTH_"
 
 
-main_settings = CactusOrchestratorSettings()  # type: ignore  [call-arg]
+_main_settings: CactusOrchestratorSettings | None = None
+
+
+def get_current_settings() -> CactusOrchestratorSettings:
+    global _main_settings
+    if not _main_settings:
+        _main_settings = CactusOrchestratorSettings()  # type: ignore  [call-arg]
+        return _main_settings
+    return _main_settings
+
+
+# NOTE: just for tests, not thread-safe
+def _reset_current_settings() -> None:
+    global _main_settings
+    _main_settings = None
+
 
 # NOTE: This needs to be called before instantiating any of the k8s clients
 load_k8s_config()
