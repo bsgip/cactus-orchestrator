@@ -92,7 +92,7 @@ def generate_idleteardowntask(
     @repeat_every(seconds=idleteardowntask_repeat_every_seconds)
     async def idleteardowntask() -> None:
         """Task that monitors live teststacks and triggers teardown based on timeout rules."""
-        logger.info("running..")
+        logger.info("Running idleteardowntask..")
 
         async with db():
             await teardown_idle_teststack(
