@@ -5,7 +5,7 @@ import logging
 from typing import Any, AsyncIterator, Callable, Coroutine, Never
 
 
-from cactus_runner.client import ClientSession, RunnerClient
+from cactus_runner.client import ClientSession, RunnerClient, ClientTimeout
 from fastapi import FastAPI
 from fastapi_async_sqlalchemy import db
 from fastapi_utils.tasks import repeat_every
@@ -22,10 +22,8 @@ logger = logging.getLogger(__name__)
 
 
 async def is_idle(now: datetime, url: str, idle_seconds: int) -> bool:
-    s = ClientSession(url)
-
-    details = await RunnerClient.last_request(s)
-    await s.close()
+    async with ClientSession(base_url=url, timeout=ClientTimeout(30)) as s:
+        details = await RunnerClient.last_request(s)
 
     if (now.timestamp() - details.timestamp) > idle_seconds:
         return True

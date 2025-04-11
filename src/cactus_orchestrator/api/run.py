@@ -4,7 +4,7 @@ from http import HTTPStatus
 from typing import Annotated
 
 import shortuuid
-from cactus_runner.client import ClientSession, RunnerClient, RunnerClientException
+from cactus_runner.client import ClientSession, RunnerClient, RunnerClientException, ClientTimeout
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
@@ -127,12 +127,13 @@ async def spawn_teststack_and_start_run(
         await wait_for_pod(pod_name)
 
         # inject initial state
-        runner_session = ClientSession(
-            RUNNER_POD_URL.format(pod_fqdn=pod_fqdn, pod_port=POD_HARNESS_RUNNER_MANAGEMENT_PORT)
-        )
-        await RunnerClient.start(
-            runner_session, test.test_procedure_id, client_cert.public_bytes(serialization.Encoding.PEM).decode("utf-8")
-        )
+        async with ClientSession(
+            base_url=RUNNER_POD_URL.format(pod_fqdn=pod_fqdn, pod_port=POD_HARNESS_RUNNER_MANAGEMENT_PORT),
+            timeout=ClientTimeout(30),
+        ) as session:
+            await RunnerClient.start(
+                session, test.test_procedure_id, client_cert.public_bytes(serialization.Encoding.PEM).decode("utf-8")
+            )
 
         # finally, include new service in ingress rule
         await add_ingress_rule(new_svc_name)
@@ -170,14 +171,12 @@ async def teardown_teststack(svc_name: str, statefulset_name: str) -> None:
 async def finalise_run(
     run: Run, url: str, session: AsyncSession, finalisation_status: FinalisationStatus, finalised_at: datetime
 ) -> RunArtifact:
-    runner_session = ClientSession(url)
 
-    # NOTE: we are assuming that files are small, consider streaming to file store
-    # if sizes increase.
-    file_data = await RunnerClient.finalize(runner_session)
-    compression = "zip"  # TODO: should also return compression or allow access to response header
-
-    await runner_session.close()
+    async with ClientSession(base_url=url, timeout=ClientTimeout(30)) as session:
+        # NOTE: we are assuming that files are small, consider streaming to file store
+        # if sizes increase.
+        file_data = await RunnerClient.finalize(session)
+        compression = "zip"  # TODO: should also return compression or allow access to response header
 
     artifact = await create_runartifact(session, compression, file_data)
     await update_run_with_runartifact_and_finalise(
