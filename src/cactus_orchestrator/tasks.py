@@ -48,9 +48,14 @@ async def teardown_idle_teststack(
         svc_name, statefulset_name, _, _, pod_fqdn = get_resource_names(run.teststack_id)
         pod_url = RUNNER_POD_URL.format(pod_fqdn=pod_fqdn, pod_port=POD_HARNESS_RUNNER_MANAGEMENT_PORT)
         logger.info(run)
-        if (await is_idle(now, pod_url, teardowntask_idle_timeout_seconds)) or is_maxlive_overtime(
-            now, run.created_at, teardowntask_max_lifetime_seconds
-        ):
+
+        try:
+            idle = await is_idle(now, pod_url, teardowntask_idle_timeout_seconds)
+        except Exception as exc:
+            logger.warning("Call to cactus-runner last request endpoint failed.")
+            logger.debug(exc)
+
+        if idle or is_maxlive_overtime(now, run.created_at, teardowntask_max_lifetime_seconds):
             logger.info(f"(Idle/Overtime Task) Shutting down {svc_name}")
             try:
                 await finalise_run(run, pod_url, session, FinalisationStatus.by_timeout, now)
