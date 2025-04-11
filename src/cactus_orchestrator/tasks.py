@@ -47,7 +47,6 @@ async def teardown_idle_teststack(
         now = datetime.now(timezone.utc)
         svc_name, statefulset_name, _, _, pod_fqdn = get_resource_names(run.teststack_id)
         pod_url = RUNNER_POD_URL.format(pod_fqdn=pod_fqdn, pod_port=POD_HARNESS_RUNNER_MANAGEMENT_PORT)
-        logger.info(run)
 
         idle = False
         try:
