@@ -49,6 +49,7 @@ async def teardown_idle_teststack(
         pod_url = RUNNER_POD_URL.format(pod_fqdn=pod_fqdn, pod_port=POD_HARNESS_RUNNER_MANAGEMENT_PORT)
         logger.info(run)
 
+        idle = False
         try:
             idle = await is_idle(now, pod_url, teardowntask_idle_timeout_seconds)
         except Exception as exc:
