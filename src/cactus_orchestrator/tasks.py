@@ -25,7 +25,8 @@ async def is_idle(now: datetime, url: str, idle_seconds: int) -> bool:
     s = ClientSession(url)
 
     details = await RunnerClient.last_request(s)
-    s.close()
+    await s.close()
+
     if (now.timestamp() - details.timestamp) > idle_seconds:
         return True
     return False
