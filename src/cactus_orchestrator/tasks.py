@@ -42,7 +42,7 @@ async def teardown_idle_teststack(
     teardowntask_idle_timeout_seconds: int,
 ) -> None:
     runs = await select_nonfinalised_runs(session)
-
+    logger.info(runs)
     for run in runs:
         now = datetime.now(timezone.utc)
         svc_name, statefulset_name, _, _, pod_fqdn = get_resource_names(run.teststack_id)
