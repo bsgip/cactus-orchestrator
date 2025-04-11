@@ -19,7 +19,6 @@ from cactus_orchestrator.model import FinalisationStatus
 from cactus_orchestrator.settings import (
     POD_HARNESS_RUNNER_MANAGEMENT_PORT,
     RUNNER_POD_URL,
-    CactusOrchestratorException,
     CactusOrchestratorSettings,
 )
 
