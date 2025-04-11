@@ -25,7 +25,7 @@ async def is_idle(now: datetime, url: str, idle_seconds: int) -> bool:
     async with ClientSession(base_url=url, timeout=ClientTimeout(30)) as s:
         details = await RunnerClient.last_request(s)
 
-    if (now.timestamp() - details.timestamp) > idle_seconds:
+    if (now.timestamp() - details.timestamp.timestamp()) > idle_seconds:
         return True
     return False
 
@@ -57,7 +57,8 @@ async def teardown_idle_teststack(
                 await session.commit()
                 await teardown_teststack(svc_name=svc_name, statefulset_name=statefulset_name)
             except Exception as exc:
-                logger.warning(f"Failed to teardown idle service {svc_name}", exc_info=exc)
+                logger.warning(f"Failed to teardown idle service {svc_name}")
+                logger.debug(exc)
                 continue
 
 
