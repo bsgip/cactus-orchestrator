@@ -177,6 +177,8 @@ async def finalise_run(
     file_data = await RunnerClient.finalize(runner_session)
     compression = "zip"  # TODO: should also return compression or allow access to response header
 
+    await runner_session.close()
+
     artifact = await create_runartifact(session, compression, file_data)
     await update_run_with_runartifact_and_finalise(
         session, run, artifact.run_artifact_id, finalisation_status, finalised_at
