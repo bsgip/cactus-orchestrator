@@ -63,7 +63,7 @@ async def teardown_idle_teststack(
                 await teardown_teststack(svc_name=svc_name, statefulset_name=statefulset_name)
             except Exception as exc:
                 logger.warning(f"Failed to teardown idle service {svc_name}")
-                logger.debug(exc)
+                logger.info(exc)
                 continue
 
 
