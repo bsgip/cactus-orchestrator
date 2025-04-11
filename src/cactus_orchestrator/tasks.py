@@ -77,6 +77,7 @@ async def teardown_idle_teststack(
                 await update_run_finalisation_status(
                     session, run.run_id, finalisation_status=FinalisationStatus.terminated, finalised_at=now
                 )
+                await session.commit()
 
             except Exception as exc:
                 logger.warning(f"Failed to teardown idle service {svc_name}", exc_info=exc)
