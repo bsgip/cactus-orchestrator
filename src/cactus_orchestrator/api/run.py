@@ -130,9 +130,9 @@ async def spawn_teststack_and_start_run(
         async with ClientSession(
             base_url=RUNNER_POD_URL.format(pod_fqdn=pod_fqdn, pod_port=POD_HARNESS_RUNNER_MANAGEMENT_PORT),
             timeout=ClientTimeout(30),
-        ) as session:
+        ) as s:
             await RunnerClient.start(
-                session, test.test_procedure_id, client_cert.public_bytes(serialization.Encoding.PEM).decode("utf-8")
+                s, test.test_procedure_id, client_cert.public_bytes(serialization.Encoding.PEM).decode("utf-8")
             )
 
         # finally, include new service in ingress rule
@@ -172,10 +172,10 @@ async def finalise_run(
     run: Run, url: str, session: AsyncSession, finalisation_status: FinalisationStatus, finalised_at: datetime
 ) -> RunArtifact:
 
-    async with ClientSession(base_url=url, timeout=ClientTimeout(30)) as session:
+    async with ClientSession(base_url=url, timeout=ClientTimeout(30)) as s:
         # NOTE: we are assuming that files are small, consider streaming to file store
         # if sizes increase.
-        file_data = await RunnerClient.finalize(session)
+        file_data = await RunnerClient.finalize(s)
         compression = "zip"  # TODO: should also return compression or allow access to response header
 
     artifact = await create_runartifact(session, compression, file_data)
