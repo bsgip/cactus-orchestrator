@@ -42,12 +42,12 @@ async def teardown_idle_teststack(
     teardowntask_idle_timeout_seconds: int,
 ) -> None:
     runs = await select_nonfinalised_runs(session)
-    logger.info(runs)
+
     for run in runs:
         now = datetime.now(timezone.utc)
         svc_name, statefulset_name, _, _, pod_fqdn = get_resource_names(run.teststack_id)
         pod_url = RUNNER_POD_URL.format(pod_fqdn=pod_fqdn, pod_port=POD_HARNESS_RUNNER_MANAGEMENT_PORT)
-
+        logger.info(run)
         if await is_idle(now, pod_url, teardowntask_idle_timeout_seconds) or is_maxlive_overtime(
             now, run.created_at, teardowntask_max_lifetime_seconds
         ):
