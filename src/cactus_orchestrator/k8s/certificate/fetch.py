@@ -9,7 +9,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.types import CertificateIssuerPrivateKeyTypes
 from kubernetes import client
 
-from cactus_orchestrator.settings import CactusOrchestratorException, main_settings, v1_core_api
+from cactus_orchestrator.settings import CactusOrchestratorException, get_current_settings, v1_core_api
 
 
 class SecretString:
@@ -42,7 +42,7 @@ async def fetch_certificate_key_pair(
         tuple[x509.Certificate, SupportedPrivateKeyType]:
             A tuple containing the certificate and private key.
     """
-    namespace = namespace or main_settings.test_execution_namespace
+    namespace = namespace or get_current_settings().test_execution_namespace
 
     # Read secret
     res: ApplyResult = v1_core_api.read_namespaced_secret(
@@ -72,7 +72,7 @@ async def fetch_certificate_key_pair(
 
 
 async def fetch_certificate_only(secret_name: str, namespace: str | None = None) -> x509.Certificate:
-    namespace = namespace or main_settings.test_execution_namespace
+    namespace = namespace or get_current_settings().test_execution_namespace
 
     # Read secret
     res: ApplyResult = v1_core_api.read_namespaced_secret(

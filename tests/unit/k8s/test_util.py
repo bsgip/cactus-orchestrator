@@ -1,4 +1,4 @@
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import pytest
 from kubernetes.client.exceptions import ApiException
@@ -86,13 +86,15 @@ async def test_async_k8s_api_retry_fail_silently():
     assert result is None
 
 
-@patch("cactus_orchestrator.k8s.resource.main_settings")
-def test_get_resource_names(mock_settings):
+@patch("cactus_orchestrator.k8s.resource.get_current_settings")
+def test_get_resource_names(mock_get_current_settings):
     """Test get_resource_names function."""
+    mock_settings = Mock()
     mock_settings.test_execution_namespace = "test-ns"
     mock_settings.template_service_name = "template-service"
     mock_settings.template_statefulset_name = "template-statefulset"
     mock_settings.template_app_name = "template-app"
+    mock_get_current_settings.return_value = mock_settings
 
     uuid = "abc123"
     svc_name, statefulset_name, app_label, pod_name, pod_fqdn = get_resource_names(uuid)

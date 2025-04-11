@@ -34,7 +34,7 @@ from cactus_orchestrator.settings import (
     RUNNER_POD_URL,
     TEST_EXECUTION_URL_FORMAT,
     CactusOrchestratorException,
-    main_settings,
+    get_current_settings,
 )
 
 logger = logging.getLogger(__name__)
@@ -45,12 +45,12 @@ router = APIRouter()
 
 def map_run_to_run_response(run: Run) -> RunResponse:
     svc_name = CLONED_RESOURCE_NAME_FORMAT.format(
-        resource_name=main_settings.template_service_name, uuid=run.teststack_id
+        resource_name=get_current_settings().template_service_name, uuid=run.teststack_id
     )
     return RunResponse(
         run_id=run.run_id,
         test_procedure_id=run.testprocedure_id,
-        test_url=TEST_EXECUTION_URL_FORMAT.format(fqdn=main_settings.test_execution_fqdn, svc_name=svc_name),
+        test_url=TEST_EXECUTION_URL_FORMAT.format(fqdn=get_current_settings().test_execution_fqdn, svc_name=svc_name),
         finalised=(
             True if run.finalisation_status in (FinalisationStatus.by_client, FinalisationStatus.by_timeout) else False
         ),
@@ -151,7 +151,9 @@ async def spawn_teststack_and_start_run(
 
     return StartRunResponse(
         run_id=run_id,
-        test_url=TEST_EXECUTION_URL_FORMAT.format(fqdn=main_settings.test_execution_fqdn, svc_name=new_svc_name),
+        test_url=TEST_EXECUTION_URL_FORMAT.format(
+            fqdn=get_current_settings().test_execution_fqdn, svc_name=new_svc_name
+        ),
     )
 
 

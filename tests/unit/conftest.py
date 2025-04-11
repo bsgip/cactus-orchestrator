@@ -12,20 +12,41 @@ from cryptography.x509.oid import NameOID
 from jose import jwt
 from kubernetes.client import V1Secret
 from sqlalchemy import Connection, NullPool, create_engine
+from assertical.fixtures.postgres import generate_async_conn_str_from_connection
 
+from cactus_orchestrator.settings import get_current_settings, _reset_current_settings
+from cactus_orchestrator.main import generate_app
 from cactus_orchestrator.k8s.certificate.create import generate_client_p12
 from cactus_orchestrator.model import Base
 
 
-def pytest_configure(config):
-    """Set environment variable before tests run."""
-    os.environ["TEARDOWN_TASK_REPEAT_EVERY_SECONDS"] = "1"
+@pytest.fixture(scope="function", autouse=True)
+def set_environment(request, pg_empty_conn):
+    # Disable tasks by default for tests
+    os.environ["IDLETEARDOWNTASK_ENABLE"] = "false"
+
+    # clear current settings TODO: side effects?
+    _reset_current_settings()
+
+    # check marks
+    idleteardowntask_enable = request.node.get_closest_marker("idleteardowntask_enable")
+    if idleteardowntask_enable:
+        os.environ["IDLETEARDOWNTASK_ENABLE"] = "true"
+        repeat_every_sec = idleteardowntask_enable.args[0]
+        os.environ["IDLETEARDOWNTASK_REPEAT_EVERY_SECONDS"] = str(repeat_every_sec)
+
+    with_test_db = request.node.get_closest_marker("with_test_db")
+    if with_test_db:
+        os.environ["ORCHESTRATOR_DATABASE_URL"] = generate_async_conn_str_from_connection(pg_empty_conn.connection)
+    yield
+    # Clean up env between tests NOTE: not thread-safe
+    os.environ.pop("TEARDOWNTASK_REPEAT_EVERY_SECONDS", None)
+    _reset_current_settings()
 
 
-@pytest.fixture(scope="session", autouse=True)
-def set_environment(request):
-    repeat_every_sec = request.node.get_closest_marker("teardowntask_repeat_every")
-    os.environ["TEARDOWN_TASK_REPEAT_EVERY_SECONDS"] = str(repeat_every_sec)
+@pytest.fixture(scope="function")
+def new_app():
+    yield generate_app(get_current_settings())
 
 
 @pytest.fixture(scope="session")

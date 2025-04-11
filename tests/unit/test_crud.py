@@ -21,7 +21,7 @@ from cactus_orchestrator.crud import (
     upsert_user,
 )
 from cactus_orchestrator.k8s.certificate.create import generate_client_p12
-from cactus_orchestrator.model import FinalisationStatus, Run, RunArtifact
+from cactus_orchestrator.model import FinalisationStatus, Run
 from cactus_orchestrator.schema import UserContext
 
 
