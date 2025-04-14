@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 async def is_idle(now: datetime, url: str, idle_seconds: int) -> bool:
     async with ClientSession(base_url=url, timeout=ClientTimeout(30)) as s:
-        details = await RunnerClient.last_request(s)
+        details = await RunnerClient.last_interaction(s)
 
     if (now.timestamp() - details.timestamp.timestamp()) > idle_seconds:
         return True
