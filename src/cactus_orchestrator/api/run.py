@@ -27,7 +27,7 @@ from cactus_orchestrator.k8s.resource import get_resource_names
 from cactus_orchestrator.k8s.resource.create import add_ingress_rule, clone_service, clone_statefulset, wait_for_pod
 from cactus_orchestrator.k8s.resource.delete import delete_service, delete_statefulset, remove_ingress_rule
 from cactus_orchestrator.model import FinalisationStatus, Run, RunArtifact, User
-from cactus_orchestrator.schema import RunResponse, StartRunRequest, StartRunResponse, UserContext
+from cactus_orchestrator.schema import RunResponse, InitRunRequest, InitRunResponse, StartRunResponse, UserContext
 from cactus_orchestrator.settings import (
     CLONED_RESOURCE_NAME_FORMAT,
     POD_HARNESS_RUNNER_MANAGEMENT_PORT,
@@ -89,15 +89,12 @@ async def get_runs_paginated(
 @router.post(
     "/run",
     status_code=HTTPStatus.CREATED,
-    responses={
-        HTTPStatus.CREATED: {"headers": {"Location": {"description": "URL of the newly created test server resource."}}}
-    },
 )
-async def spawn_teststack_and_start_run(
-    test: StartRunRequest,
+async def spawn_teststack_and_init_run(
+    test: InitRunRequest,
     user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_scopes({AuthScopes.user_all}))],
     response: Response,
-) -> StartRunResponse:
+) -> InitRunResponse:
     """This endpoint sets up a test procedure as requested by client.
     Steps are:
         (1) Create a service/statefulset representing the isolated envoy test environment.
@@ -131,7 +128,7 @@ async def spawn_teststack_and_start_run(
             base_url=RUNNER_POD_URL.format(pod_fqdn=pod_fqdn, pod_port=POD_HARNESS_RUNNER_MANAGEMENT_PORT),
             timeout=ClientTimeout(30),
         ) as s:
-            await RunnerClient.start(
+            await RunnerClient.init(
                 s, test.test_procedure_id, client_cert.public_bytes(serialization.Encoding.PEM).decode("utf-8")
             )
 
@@ -150,11 +147,46 @@ async def spawn_teststack_and_start_run(
     # set location header
     response.headers["Location"] = f"/run/{run_id}"
 
-    return StartRunResponse(
+    return InitRunResponse(
         run_id=run_id,
         test_url=TEST_EXECUTION_URL_FORMAT.format(
             fqdn=get_current_settings().test_execution_fqdn, svc_name=new_svc_name
         ),
+    )
+
+
+@router.post(
+    "/run/{run_id}",
+    status_code=HTTPStatus.CREATED,
+)
+async def start_run(
+    run_id: int,
+    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_scopes({AuthScopes.user_all}))],
+) -> StartRunResponse:
+    """Request a test run to progress to the execution phase."""
+    # get user
+    user = await select_user_or_raise(db.session, user_context)
+
+    # get run
+    try:
+        run = await select_user_run(db.session, user.user_id, run_id)
+    except NoResultFound as exc:
+        logger.debug(exc)
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Not Found")
+
+    # resource ids
+    svc_name, _, _, _, pod_fqdn = get_resource_names(run.teststack_id)
+
+    # request runner starts run
+    async with ClientSession(
+        base_url=RUNNER_POD_URL.format(pod_fqdn=pod_fqdn, pod_port=POD_HARNESS_RUNNER_MANAGEMENT_PORT),
+        timeout=ClientTimeout(30),
+    ) as s:
+        await RunnerClient.start()
+
+    return StartRunResponse(
+        run_id=run.run_id,
+        test_url=TEST_EXECUTION_URL_FORMAT.format(fqdn=get_current_settings().test_execution_fqdn, svc_name=svc_name),
     )
 
 
