@@ -182,10 +182,9 @@ async def start_run(
         base_url=RUNNER_POD_URL.format(pod_fqdn=pod_fqdn, pod_port=POD_HARNESS_RUNNER_MANAGEMENT_PORT),
         timeout=ClientTimeout(30),
     ) as s:
-        await RunnerClient.start()
+        await RunnerClient.start(s)
 
     return StartRunResponse(
-        run_id=run.run_id,
         test_url=TEST_EXECUTION_URL_FORMAT.format(fqdn=get_current_settings().test_execution_fqdn, svc_name=svc_name),
     )
 
