@@ -18,7 +18,7 @@ from cactus_orchestrator.api.run import finalise_run, teardown_teststack
 from cactus_orchestrator.cache import AsyncCache, ExpiringValue
 from cactus_orchestrator.main import app
 from cactus_orchestrator.model import FinalisationStatus, Run, RunArtifact, User
-from cactus_orchestrator.schema import StartRunRequest, StartRunResponse, TestProcedureResponse
+from cactus_orchestrator.schema import InitRunRequest, InitRunResponse, StartRunResponse, TestProcedureResponse
 from cactus_orchestrator.settings import CactusOrchestratorException
 
 
@@ -54,20 +54,66 @@ def test_post_spawn_test_created(client, valid_user_p12_and_der, valid_user_jwt)
         certificate_p12_bundle=None,
         certificate_x509_der=valid_user_p12_and_der[1],
     )
-    RunnerClient.start = AsyncMock()
+    RunnerClient.init = AsyncMock()
     clone_statefulset.return_value = "pod_name"
     insert_run_for_user.return_value = 1
 
     # Act
-    req = StartRunRequest(test_procedure_id=TestProcedureId.ALL_01.value)
+    req = InitRunRequest(test_procedure_id=TestProcedureId.ALL_01.value)
     res = client.post("run", json=req.model_dump(), headers={"Authorization": f"Bearer {valid_user_jwt}"})
 
     # Assert
     assert res.status_code == HTTPStatus.CREATED
-    resmdl = StartRunResponse.model_validate(res.json())
+    resmdl = InitRunResponse.model_validate(res.json())
     assert os.environ["TEST_EXECUTION_FQDN"] in resmdl.test_url
     assert res.headers["Location"] == "/run/1"
     insert_run_for_user.assert_called_once()
+
+
+@patch.multiple(
+    "cactus_orchestrator.api.run",
+    RunnerClient=Mock(),
+    clone_statefulset=AsyncMock(),
+    wait_for_pod=AsyncMock(),
+    add_ingress_rule=AsyncMock(),
+    clone_service=AsyncMock(),
+    select_user=AsyncMock(),
+    select_user_run=AsyncMock(),
+)
+def test_start_run(client, valid_user_p12_and_der, valid_user_jwt):
+    """Just a simple test, with all k8s functions stubbed, to catch anything silly in the handler"""
+    # Arrange
+    from cactus_orchestrator.api.run import (
+        RunnerClient,
+        select_user_run,
+        select_user,
+    )
+
+    select_user.return_value = User(
+        user_id=1,
+        subject_id="sub",
+        issuer_id="iss",
+        certificate_p12_bundle=None,
+        certificate_x509_der=valid_user_p12_and_der[1],
+    )
+    RunnerClient.start = AsyncMock()
+    select_user_run.return_value = Run(
+        run_id=1,
+        user_id=1,
+        teststack_id="abc",
+        testprocedure_id=1,
+        created_at=datetime(2025, 1, 1, tzinfo=timezone.utc),
+        finalisation_status=0.0,
+    )
+
+    # Act
+    res = client.post("run/1", headers={"Authorization": f"Bearer {valid_user_jwt}"})
+
+    # Assert
+    res
+    assert res.status_code == HTTPStatus.CREATED
+    resmdl = StartRunResponse.model_validate(res.json())
+    assert os.environ["TEST_EXECUTION_FQDN"] in resmdl.test_url
 
 
 @patch.multiple(
@@ -101,7 +147,7 @@ def test_post_spawn_test_teardown_on_failure(client, valid_user_jwt, valid_user_
     )
 
     # Act
-    req = StartRunRequest(test_procedure_id=TestProcedureId.ALL_01)
+    req = InitRunRequest(test_procedure_id=TestProcedureId.ALL_01)
     res = client.post("run", json=req.model_dump(), headers={"Authorization": f"Bearer {valid_user_jwt}"})
 
     # Assert

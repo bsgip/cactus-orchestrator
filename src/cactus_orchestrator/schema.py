@@ -2,14 +2,16 @@ from cactus_test_definitions import TestProcedureId
 from pydantic import BaseModel
 
 
-class StartRunRequest(BaseModel):
+class InitRunRequest(BaseModel):
     test_procedure_id: TestProcedureId
 
 
-# TODO: what should response be?
 class StartRunResponse(BaseModel):
-    run_id: int
     test_url: str
+
+
+class InitRunResponse(StartRunResponse):
+    run_id: int
 
 
 class RunResponse(BaseModel):
