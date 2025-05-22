@@ -117,7 +117,7 @@ async def add_ingress_rule(svc_name: str) -> None:
         backend=client.V1IngressBackend(
             service=client.V1IngressServiceBackend(
                 name=svc_name,
-                port=client.V1ServiceBackendPort(number=get_current_settings().envoy_service_port),
+                port=client.V1ServiceBackendPort(number=get_current_settings().teststack_service_port),
             )
         ),
     )
