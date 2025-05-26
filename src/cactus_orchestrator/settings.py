@@ -48,7 +48,7 @@ class CactusOrchestratorSettings(BaseSettings):
     # test execution
     test_execution_namespace: str = "test-execution"
     test_execution_ingress_name: str = "test-execution-ingress"
-    envoy_service_port: int = 80
+    teststack_service_port: int = 80
 
     # teststack templates
     teststack_templates_namespace: str = "teststack-templates"

@@ -64,8 +64,8 @@ async def teardown_idle_teststack(
             except (ApiException, ClientConnectionError) as exc:
                 logger.warning(
                     (
-                        f"Failed to teardown idle service {svc_name} because it could not be reached, "
-                        "flagging as terminated..."
+                        f"Failed to teardown idle instance with service name {svc_name} because it "
+                        "could not be reached, flagging as terminated..."
                     )
                 )
                 logger.debug(exc)
@@ -75,7 +75,7 @@ async def teardown_idle_teststack(
                 await session.commit()
 
             except Exception as exc:
-                logger.warning(f"Failed to teardown idle service {svc_name}", exc_info=exc)
+                logger.warning(f"Failed to teardown idle instance with service name {svc_name}", exc_info=exc)
                 continue
 
 
