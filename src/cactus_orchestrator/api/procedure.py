@@ -2,7 +2,7 @@ import logging
 from http import HTTPStatus
 from typing import Annotated
 
-from cactus_test_definitions import TestProcedureConfig, TestProcedures
+from cactus_test_definitions import TestProcedureConfig, TestProcedureId, TestProcedures
 from fastapi import APIRouter, Depends
 from fastapi_pagination import Page, paginate
 from fastapi_pagination.utils import disable_installed_extensions_check
@@ -22,9 +22,11 @@ def map_from_definitions_to_responses(definitions: TestProcedures) -> list[TestP
     responses = []
     test_procedure_ids = []
     for k, v in definitions.test_procedures.items():
-        if k in test_procedure_ids:
+        if k in test_procedure_ids or k not in TestProcedureId:
             continue
-        responses.append(TestProcedureResponse(test_procedure_id=k, description=v.description, category=v.category))
+        responses.append(
+            TestProcedureResponse(test_procedure_id=TestProcedureId(k), description=v.description, category=v.category)
+        )
         test_procedure_ids.append(k)
     return responses
 
