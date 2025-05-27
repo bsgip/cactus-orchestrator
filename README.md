@@ -52,7 +52,7 @@ The current implementation relies on 'template' resources (defined in YAML) that
 |----------------------|----------------|-------------|
 | `KUBERNETES_LOAD_CONFIG` | `true` | For testing only. Set to `false` to skip loading Kubernetes configuration. |
 | `TEST_ORCHESTRATION_NAMESPACE` | `test-orchestration` | Namespace used by the cactus-orchestrator components. |
-| `ORCHESTRATOR_DATABASE_URL` | – | SQLAlchemy-style database connection string. |
+| `ORCHESTRATOR_DATABASE_URL` | – | SQLAlchemy-style database connection string using `postgresql+asyncpg` scheme. |
 | `TEST_EXECUTION_NAMESPACE` | `test-execution` | Namespace used for live cactus teststack instances (cactus-runner, envoy, etc.). |
 | `TEST_EXECUTION_INGRESS_NAME` | `test-execution-ingress` | Name of the ingress resource managing external access to teststack instances. |
 | `TESTSTACK_SERVICE_PORT` | `80` | Port exposed by the Kubernetes `Service` for teststack instances. |
@@ -69,10 +69,16 @@ The current implementation relies on 'template' resources (defined in YAML) that
 | `IDLETEARDOWNTASK_REPEAT_EVERY_SECONDS` | `120` | Frequency (in seconds) at which the idle teardown task runs. |
 
 ---
+## Database-related
+- Only tested with **PostgreSQL 16**.
+- Uses **SQLAlchemy with asyncpg**.
+- **Alembic** manages schema migrations, with scripts located under [`./alembic`](./alembic).
+- Database connection is configured via the `ORCHESTRATOR_DATABASE_URL` environment variable.
+- Migrations are not run automatically; apply manually as part of deployment.
+
 ## TODO / Notes
 
 - Consider dynamically generating all resources instead of relying on pre-defined templates.
 - Evaluate adoption of a modern, typed Kubernetes client library.
 - Investigate replacing StatefulSets with regular Pods if persistent identity is no longer needed.
-- Consider introducing a service mesh to transparently encrypt pod-to-pod communication.
 
