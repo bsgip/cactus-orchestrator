@@ -11,7 +11,7 @@ from cactus_orchestrator.settings import CactusOrchestratorSettings, get_current
 from cactus_orchestrator.tasks import lifespan
 
 # Setup logs
-logging.basicConfig(style="{", level=logging.INFO)
+logging.basicConfig(style="{", level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 
