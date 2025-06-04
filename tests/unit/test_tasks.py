@@ -8,7 +8,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 from assertical.fixtures.postgres import generate_async_session
 
-from cactus_orchestrator.model import FinalisationStatus, Run
+from cactus_orchestrator.model import RunStatus, Run
 from cactus_orchestrator.tasks import generate_idleteardowntask, teardown_idle_teststack
 
 
@@ -45,7 +45,7 @@ async def test_teardown_teststack_task(
             testprocedure_id="ALL_01",
             created_at=created_at,
             finalised_at=None,
-            finalisation_status=FinalisationStatus.not_finalised,
+            run_status=RunStatus.initialised,
         )
     ]
     mock_is_idle.return_value = idle
@@ -120,9 +120,9 @@ async def test_teardown_idle_teststack(pg_empty_conn, new_app):
     # expecting maxlive_overtime=True
     pg_empty_conn.execute(
         text(
-            """
-            INSERT INTO run (user_id, teststack_id, testprocedure_id, finalisation_status, created_at)
-            VALUES (1, 'teststack1', 'testproc1', 0, '2000-01-01T00:00:00Z')
+            f"""
+            INSERT INTO run (user_id, teststack_id, testprocedure_id, run_status, created_at)
+            VALUES (1, 'teststack1', 'testproc1', {RunStatus.initialised.value}, '2000-01-01T00:00:00Z')
             """
         )
     )

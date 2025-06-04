@@ -13,9 +13,9 @@ from kubernetes.client.exceptions import ApiException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from cactus_orchestrator.api.run import finalise_run, teardown_teststack
-from cactus_orchestrator.crud import select_nonfinalised_runs, update_run_finalisation_status
+from cactus_orchestrator.crud import select_nonfinalised_runs, update_run_run_status
 from cactus_orchestrator.k8s.resource import get_resource_names
-from cactus_orchestrator.model import FinalisationStatus
+from cactus_orchestrator.model import RunStatus
 from cactus_orchestrator.settings import POD_HARNESS_RUNNER_MANAGEMENT_PORT, RUNNER_POD_URL, CactusOrchestratorSettings
 
 logger = logging.getLogger(__name__)
@@ -58,7 +58,7 @@ async def teardown_idle_teststack(
         if idle or is_maxlive_overtime(now, run.created_at, teardowntask_max_lifetime_seconds):
             logger.info(f"(Idle/Overtime Task) Shutting down {svc_name}")
             try:
-                await finalise_run(run, pod_url, session, FinalisationStatus.by_timeout, now)
+                await finalise_run(run, pod_url, session, RunStatus.finalised_by_timeout, now)
                 await session.commit()
                 await teardown_teststack(svc_name=svc_name, statefulset_name=statefulset_name)
             except (ApiException, ClientConnectionError) as exc:
@@ -69,9 +69,7 @@ async def teardown_idle_teststack(
                     )
                 )
                 logger.debug(exc)
-                await update_run_finalisation_status(
-                    session, run.run_id, finalisation_status=FinalisationStatus.terminated, finalised_at=now
-                )
+                await update_run_run_status(session, run.run_id, run_status=RunStatus.terminated, finalised_at=now)
                 await session.commit()
 
             except Exception as exc:

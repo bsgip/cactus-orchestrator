@@ -21,13 +21,21 @@ from cactus_orchestrator.crud import (
     select_user_run,
     select_user_run_with_artifact,
     select_user_runs,
+    update_run_run_status,
     update_run_with_runartifact_and_finalise,
 )
 from cactus_orchestrator.k8s.resource import get_resource_names
 from cactus_orchestrator.k8s.resource.create import add_ingress_rule, clone_service, clone_statefulset, wait_for_pod
 from cactus_orchestrator.k8s.resource.delete import delete_service, delete_statefulset, remove_ingress_rule
-from cactus_orchestrator.model import FinalisationStatus, Run, RunArtifact, User
-from cactus_orchestrator.schema import RunResponse, InitRunRequest, InitRunResponse, StartRunResponse, UserContext
+from cactus_orchestrator.model import RunStatus, Run, RunArtifact, User
+from cactus_orchestrator.schema import (
+    RunResponse,
+    InitRunRequest,
+    InitRunResponse,
+    StartRunResponse,
+    UserContext,
+    RunStatusResponse,
+)
 from cactus_orchestrator.settings import (
     CLONED_RESOURCE_NAME_FORMAT,
     POD_HARNESS_RUNNER_MANAGEMENT_PORT,
@@ -47,13 +55,17 @@ def map_run_to_run_response(run: Run) -> RunResponse:
     svc_name = CLONED_RESOURCE_NAME_FORMAT.format(
         resource_name=get_current_settings().template_service_name, uuid=run.teststack_id
     )
+    status = RunStatusResponse.finalised
+    if run.run_status == RunStatus.initialised:
+        status = RunStatusResponse.initialised
+    elif run.run_status == RunStatus.started:
+        status = RunStatusResponse.started
+
     return RunResponse(
         run_id=run.run_id,
         test_procedure_id=run.testprocedure_id,
         test_url=TEST_EXECUTION_URL_FORMAT.format(fqdn=get_current_settings().test_execution_fqdn, svc_name=svc_name),
-        finalised=(
-            True if run.finalisation_status in (FinalisationStatus.by_client, FinalisationStatus.by_timeout) else False
-        ),
+        status=status,
     )
 
 
@@ -141,7 +153,9 @@ async def spawn_teststack_and_init_run(
         raise HTTPException(HTTPStatus.INTERNAL_SERVER_ERROR, detail="Internal Server Error")
 
     # track in DB
-    run_id = await insert_run_for_user(db.session, user.user_id, teststack_id, test.test_procedure_id)
+    run_id = await insert_run_for_user(
+        db.session, user.user_id, teststack_id, test.test_procedure_id, RunStatus.initialised
+    )
     await db.session.commit()
 
     # set location header
@@ -184,6 +198,9 @@ async def start_run(
     ) as s:
         await RunnerClient.start(s)
 
+    # update status
+    await update_run_run_status(session=db.session, run_id=run.run_id, run_status=RunStatus.started)
+
     return StartRunResponse(
         test_url=TEST_EXECUTION_URL_FORMAT.format(fqdn=get_current_settings().test_execution_fqdn, svc_name=svc_name),
     )
@@ -200,7 +217,7 @@ async def teardown_teststack(svc_name: str, statefulset_name: str) -> None:
 
 
 async def finalise_run(
-    run: Run, url: str, session: AsyncSession, finalisation_status: FinalisationStatus, finalised_at: datetime
+    run: Run, url: str, session: AsyncSession, run_status: RunStatus, finalised_at: datetime
 ) -> RunArtifact:
 
     async with ClientSession(base_url=url, timeout=ClientTimeout(30)) as s:
@@ -210,9 +227,7 @@ async def finalise_run(
         compression = "zip"  # TODO: should also return compression or allow access to response header
 
     artifact = await create_runartifact(session, compression, file_data)
-    await update_run_with_runartifact_and_finalise(
-        session, run, artifact.run_artifact_id, finalisation_status, finalised_at
-    )
+    await update_run_with_runartifact_and_finalise(session, run, artifact.run_artifact_id, run_status, finalised_at)
 
     return artifact
 
@@ -237,7 +252,7 @@ async def finalise_run_and_teardown_teststack(
     pod_url = RUNNER_POD_URL.format(pod_fqdn=pod_fqdn, pod_port=POD_HARNESS_RUNNER_MANAGEMENT_PORT)
 
     # finalise
-    artifact = await finalise_run(run, pod_url, db.session, FinalisationStatus.by_client, datetime.now(timezone.utc))
+    artifact = await finalise_run(run, pod_url, db.session, RunStatus.finalised_by_client, datetime.now(timezone.utc))
     await db.session.commit()
 
     # teardown
