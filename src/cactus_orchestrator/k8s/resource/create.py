@@ -76,16 +76,21 @@ async def clone_statefulset(new_statefulset_name: str, new_service_name: str, ne
 
 
 @async_k8s_api_retry()
-async def is_container_ready(pod_name: str, container_name: str = "envoy") -> bool:
+async def is_container_ready(pod_name: str, container_name: str = "cactus-runner") -> bool:
     """Polls pod for specific container status. Returns True on ready."""
     res: ApplyResult = v1_core_api.read_namespaced_pod(
         name=pod_name, namespace=get_current_settings().test_execution_namespace, async_req=True
     )  # type: ignore
     pod = await asyncio.to_thread(res.get)
-    if pod.status and pod.status.container_statuses:
-        for container_status in pod.status.container_statuses:
-            if container_status.name == container_name:
-                return container_status.ready
+
+    if not pod or not pod.status:
+        return False
+
+    statuses = (pod.status.container_statuses or []) + (pod.status.init_container_statuses or [])
+    for status in statuses:
+        if status.name == container_name:
+            return status.ready
+
     return False
 
 
