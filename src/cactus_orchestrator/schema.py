@@ -1,5 +1,12 @@
+from enum import StrEnum, auto
 from cactus_test_definitions import TestProcedureId
 from pydantic import BaseModel
+
+
+class RunStatusResponse(StrEnum):
+    initialised = auto()
+    started = auto()
+    finalised = auto()
 
 
 class InitRunRequest(BaseModel):
@@ -18,7 +25,7 @@ class RunResponse(BaseModel):
     run_id: int
     test_procedure_id: str
     test_url: str
-    finalised: bool
+    status: RunStatusResponse
 
 
 class UserContext(BaseModel):

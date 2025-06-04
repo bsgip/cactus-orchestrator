@@ -17,7 +17,7 @@ from cactus_orchestrator.api.certificate import (
 from cactus_orchestrator.api.run import finalise_run, teardown_teststack
 from cactus_orchestrator.cache import AsyncCache, ExpiringValue
 from cactus_orchestrator.main import app
-from cactus_orchestrator.model import FinalisationStatus, Run, RunArtifact, User
+from cactus_orchestrator.model import RunStatus, Run, RunArtifact, User
 from cactus_orchestrator.schema import InitRunRequest, InitRunResponse, StartRunResponse, TestProcedureResponse
 from cactus_orchestrator.settings import CactusOrchestratorException
 
@@ -79,15 +79,12 @@ def test_post_spawn_test_created(client, valid_user_p12_and_der, valid_user_jwt)
     clone_service=AsyncMock(),
     select_user=AsyncMock(),
     select_user_run=AsyncMock(),
+    update_run_run_status=AsyncMock(),
 )
 def test_start_run(client, valid_user_p12_and_der, valid_user_jwt):
     """Just a simple test, with all k8s functions stubbed, to catch anything silly in the handler"""
     # Arrange
-    from cactus_orchestrator.api.run import (
-        RunnerClient,
-        select_user_run,
-        select_user,
-    )
+    from cactus_orchestrator.api.run import RunnerClient, select_user_run, select_user, update_run_run_status
 
     select_user.return_value = User(
         user_id=1,
@@ -103,7 +100,7 @@ def test_start_run(client, valid_user_p12_and_der, valid_user_jwt):
         teststack_id="abc",
         testprocedure_id=1,
         created_at=datetime(2025, 1, 1, tzinfo=timezone.utc),
-        finalisation_status=0.0,
+        run_status=0.0,
     )
 
     # Act
@@ -111,9 +108,11 @@ def test_start_run(client, valid_user_p12_and_der, valid_user_jwt):
 
     # Assert
     res
-    assert res.status_code == HTTPStatus.CREATED
+    assert res.status_code == HTTPStatus.OK
     resmdl = StartRunResponse.model_validate(res.json())
     assert os.environ["TEST_EXECUTION_FQDN"] in resmdl.test_url
+    update_run_run_status.assert_awaited_once()
+    assert update_run_run_status.call_args.kwargs["run_status"] == RunStatus.started
 
 
 @patch.multiple(
@@ -350,7 +349,7 @@ async def test_finalise_run_creates_run_artifact_and_updates_run(
 
     # Act
     run = Run(teststack_id=1)
-    await finalise_run(run, "http://mockurl", Mock(), FinalisationStatus.by_client, datetime.now(timezone.utc))
+    await finalise_run(run, "http://mockurl", Mock(), RunStatus.finalised_by_client, datetime.now(timezone.utc))
 
     # Assert
     mock_finalize.assert_called_once()

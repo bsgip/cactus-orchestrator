@@ -16,12 +16,12 @@ from cactus_orchestrator.crud import (
     select_user_run,
     select_user_run_with_artifact,
     select_user_runs,
-    update_run_finalisation_status,
+    update_run_run_status,
     update_run_with_runartifact_and_finalise,
     upsert_user,
 )
 from cactus_orchestrator.k8s.certificate.create import generate_client_p12
-from cactus_orchestrator.model import FinalisationStatus, Run
+from cactus_orchestrator.model import RunStatus, Run
 from cactus_orchestrator.schema import UserContext
 
 
@@ -105,12 +105,21 @@ async def test_select_user_runs_all(pg_empty_conn):
     pg_empty_conn.execute(
         text(
             """
-            INSERT INTO run (user_id, teststack_id, testprocedure_id, finalised_at, finalisation_status)
+            INSERT INTO run (user_id, teststack_id, testprocedure_id, finalised_at, run_status)
             VALUES (
-                1, 'teststack1', 'testproc1', NULL, 0
+                1, 'teststack1', 'testproc1', NULL, 1
             ),
             (
-                1, 'teststack2', 'testproc1', NOW(), 1
+                1, 'teststack2', 'testproc1', NOW(), 2
+            ),
+            (
+                1, 'teststack3', 'testproc1', NOW(), 3
+            ),
+            (
+                1, 'teststack4', 'testproc1', NOW(), 4
+            ),
+            (
+                1, 'teststack5', 'testproc1', NOW(), 5
             )
         """
         )
@@ -123,11 +132,15 @@ async def test_select_user_runs_all(pg_empty_conn):
         runs = await select_user_runs(session, 1, finalised=None, created_at_gte=None)
 
     # Assert
-    assert len(runs) == 2
+    assert len(runs) == 5
 
 
+@pytest.mark.parametrize(
+    "run_status",
+    [(RunStatus.finalised_by_client.value), (RunStatus.finalised_by_timeout.value)],
+)
 @pytest.mark.asyncio
-async def test_select_user_runs_finalised_only(pg_empty_conn):
+async def test_select_user_runs_finalised_only(pg_empty_conn, run_status):
     """Test fetching only finalised runs."""
     # Arrange
     pg_empty_conn.execute(
@@ -140,13 +153,13 @@ async def test_select_user_runs_finalised_only(pg_empty_conn):
     )
     pg_empty_conn.execute(
         text(
-            """
-            INSERT INTO run (user_id, teststack_id, testprocedure_id, finalised_at, finalisation_status)
+            f"""
+            INSERT INTO run (user_id, teststack_id, testprocedure_id, finalised_at, run_status)
             VALUES (
-                1, 'teststack1', 'testproc1', NULL, 0
+                1, 'teststack1', 'testproc1', NULL, 1
             ),
             (
-                1, 'teststack2', 'testproc1', NOW(), 1
+                1, 'teststack2', 'testproc1', NOW(), {run_status}
             )
         """
         )
@@ -163,7 +176,8 @@ async def test_select_user_runs_finalised_only(pg_empty_conn):
 
 
 @pytest.mark.asyncio
-async def test_select_user_runs_unfinalised_only(pg_empty_conn):
+@pytest.mark.parametrize("run_status", [(RunStatus.initialised.value), (RunStatus.started.value)])
+async def test_select_user_runs_unfinalised_only(pg_empty_conn, run_status):
     """Test fetching only unfinalised runs."""
     # Arrange
     pg_empty_conn.execute(
@@ -176,13 +190,13 @@ async def test_select_user_runs_unfinalised_only(pg_empty_conn):
     )
     pg_empty_conn.execute(
         text(
-            """
-            INSERT INTO run (user_id, teststack_id, testprocedure_id, finalised_at, finalisation_status)
+            f"""
+            INSERT INTO run (user_id, teststack_id, testprocedure_id, finalised_at, run_status)
             VALUES (
-                1, 'teststack1', 'testproc1', NULL, 0
+                1, 'teststack1', 'testproc1', NULL, {run_status}
             ),
             (
-                1, 'teststack2', 'testproc1', NOW(), 1
+                1, 'teststack2', 'testproc1', NOW(), 4
             )
         """
         )
@@ -214,7 +228,7 @@ async def test_select_user_runs_created_at_filter(pg_empty_conn):
     pg_empty_conn.execute(
         text(
             """
-            INSERT INTO run (user_id, teststack_id, testprocedure_id, created_at, finalisation_status)
+            INSERT INTO run (user_id, teststack_id, testprocedure_id, created_at, run_status)
             VALUES (
                 1, 'teststack1', 'testproc1', '2024-01-01T00:00:00+00:00', 0
             ),
@@ -252,7 +266,7 @@ async def test_insert_run_for_user(pg_empty_conn):
 
     # Act
     async with generate_async_session(pg_empty_conn.connection) as session:
-        run_id = await insert_run_for_user(session, 1, "teststack1", "ALL_01")
+        run_id = await insert_run_for_user(session, 1, "teststack1", "ALL_01", RunStatus.initialised)
         await session.commit()
 
     # Assert
@@ -261,8 +275,9 @@ async def test_insert_run_for_user(pg_empty_conn):
     assert result[0] == 1
 
 
+@pytest.mark.parametrize("run_status", [(RunStatus.initialised.value), (RunStatus.started.value)])
 @pytest.mark.asyncio
-async def test_select_nonfinalised_runs(pg_empty_conn):
+async def test_select_nonfinalised_runs(pg_empty_conn, run_status):
     """Test selecting only non-finalised runs."""
     # Arrange
     pg_empty_conn.execute(
@@ -275,10 +290,10 @@ async def test_select_nonfinalised_runs(pg_empty_conn):
     )
     pg_empty_conn.execute(
         text(
-            """
-            INSERT INTO run (user_id, teststack_id, testprocedure_id, finalisation_status)
-            VALUES (1, 'teststack1', 'testproc1', 0),
-                   (1, 'teststack2', 'testproc1', 1)
+            f"""
+            INSERT INTO run (user_id, teststack_id, testprocedure_id, run_status)
+            VALUES (1, 'teststack1', 'testproc1', {run_status}),
+                   (1, 'teststack2', 'testproc1', 4)
             """
         )
     )
@@ -290,11 +305,11 @@ async def test_select_nonfinalised_runs(pg_empty_conn):
 
     # Assert
     assert len(runs) == 1
-    assert runs[0].finalisation_status == 0
+    assert runs[0].run_status == run_status
 
 
 @pytest.mark.asyncio
-async def test_update_run_finalisation_status(pg_empty_conn):
+async def test_update_run_run_status(pg_empty_conn):
     """Test updating the finalisation status of a run."""
     # Arrange
     finalised_at = datetime(2025, 1, 1, tzinfo=timezone.utc)
@@ -309,7 +324,7 @@ async def test_update_run_finalisation_status(pg_empty_conn):
     pg_empty_conn.execute(
         text(
             """
-            INSERT INTO run (user_id, teststack_id, testprocedure_id, finalisation_status)
+            INSERT INTO run (user_id, teststack_id, testprocedure_id, run_status)
             VALUES (1, 'teststack1', 'testproc1', 0)
             """
         )
@@ -318,11 +333,11 @@ async def test_update_run_finalisation_status(pg_empty_conn):
 
     # Act
     async with generate_async_session(pg_empty_conn.connection) as session:
-        await update_run_finalisation_status(session, 1, 1, finalised_at)
+        await update_run_run_status(session, 1, 1, finalised_at)
         await session.commit()
 
     # Assert
-    result = pg_empty_conn.execute(text("SELECT finalisation_status, finalised_at FROM run")).fetchone()
+    result = pg_empty_conn.execute(text("SELECT run_status, finalised_at FROM run")).fetchone()
     assert result[0] == 1
     assert result[1] is not None
 
@@ -342,7 +357,7 @@ async def test_select_user_run(pg_empty_conn):
     pg_empty_conn.execute(
         text(
             """
-            INSERT INTO run (user_id, teststack_id, testprocedure_id, finalisation_status)
+            INSERT INTO run (user_id, teststack_id, testprocedure_id, run_status)
             VALUES (1, 'teststack1', 'testproc1', 0)
             """
         )
@@ -363,7 +378,7 @@ async def test_select_user_run(pg_empty_conn):
 async def test_update_run_with_runartifact_and_finalise(pg_empty_conn):
     """Test updating a run with a run artifact and finalisation status."""
     # Arrange
-    run = Run(user_id=1, teststack_id="teststack1", testprocedure_id="ALL01", finalisation_status=0)
+    run = Run(user_id=1, teststack_id="teststack1", testprocedure_id="ALL01", run_status=0)
     finalised_at = datetime(2025, 1, 1, tzinfo=timezone.utc)
     pg_empty_conn.execute(
         text(
@@ -376,8 +391,8 @@ async def test_update_run_with_runartifact_and_finalise(pg_empty_conn):
     pg_empty_conn.execute(
         text(
             f"""
-            INSERT INTO run (user_id, teststack_id, testprocedure_id, finalisation_status)
-            VALUES ({run.user_id}, '{run.teststack_id}', '{run.testprocedure_id}', {run.finalisation_status})
+            INSERT INTO run (user_id, teststack_id, testprocedure_id, run_status)
+            VALUES ({run.user_id}, '{run.teststack_id}', '{run.testprocedure_id}', {run.run_status})
             """
         )
     )
@@ -394,15 +409,13 @@ async def test_update_run_with_runartifact_and_finalise(pg_empty_conn):
     # Act
     async with generate_async_session(pg_empty_conn.connection) as session:
         run = await select_user_run(session, 1, 1)
-        await update_run_with_runartifact_and_finalise(session, run, 1, FinalisationStatus.by_client, finalised_at)
+        await update_run_with_runartifact_and_finalise(session, run, 1, RunStatus.finalised_by_client, finalised_at)
         await session.commit()
 
     # Assert
-    result = pg_empty_conn.execute(
-        text("SELECT run_artifact_id, finalisation_status, finalised_at FROM run")
-    ).fetchone()
+    result = pg_empty_conn.execute(text("SELECT run_artifact_id, run_status, finalised_at FROM run")).fetchone()
     assert result[0] == 1
-    assert result[1] == FinalisationStatus.by_client.value
+    assert result[1] == RunStatus.finalised_by_client.value
     assert result[2] == finalised_at
 
 
@@ -410,7 +423,7 @@ async def test_update_run_with_runartifact_and_finalise(pg_empty_conn):
 async def test_select_user_run_with_artifact(pg_empty_conn):
     """Test selecting run with run artifact joined in load."""
     # Arrange
-    run = Run(user_id=1, teststack_id="teststack1", testprocedure_id="ALL01", finalisation_status=0)
+    run = Run(user_id=1, teststack_id="teststack1", testprocedure_id="ALL01", run_status=0)
     pg_empty_conn.execute(
         text(
             """
@@ -430,8 +443,8 @@ async def test_select_user_run_with_artifact(pg_empty_conn):
     pg_empty_conn.execute(
         text(
             f"""
-            INSERT INTO run (user_id, teststack_id, testprocedure_id, finalisation_status, run_artifact_id)
-            VALUES ({run.user_id}, '{run.teststack_id}', '{run.testprocedure_id}', {run.finalisation_status}, 1)
+            INSERT INTO run (user_id, teststack_id, testprocedure_id, run_status, run_artifact_id)
+            VALUES ({run.user_id}, '{run.teststack_id}', '{run.testprocedure_id}', {run.run_status}, 1)
             """
         )
     )

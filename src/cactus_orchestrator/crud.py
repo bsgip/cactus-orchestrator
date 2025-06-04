@@ -5,7 +5,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload, undefer
 
-from cactus_orchestrator.model import FinalisationStatus, Run, RunArtifact, User, UserUniqueConstraintName
+from cactus_orchestrator.model import RunStatus, Run, RunArtifact, User, UserUniqueConstraintName
 from cactus_orchestrator.schema import UserContext
 
 
@@ -103,17 +103,13 @@ async def select_user_certificate_x509_der(session: AsyncSession, user_context: 
 
 
 async def insert_run_for_user(
-    session: AsyncSession,
-    user_id: int,
-    teststack_id: str,
-    testprocedure_id: str,
-    finalisation_status: FinalisationStatus = FinalisationStatus.not_finalised,
+    session: AsyncSession, user_id: int, teststack_id: str, testprocedure_id: str, run_status: RunStatus
 ) -> int:
     run = Run(
         user_id=user_id,
         teststack_id=teststack_id,
         testprocedure_id=testprocedure_id,
-        finalisation_status=finalisation_status,
+        run_status=run_status,
     )
     session.add(run)
     await session.flush()
@@ -130,11 +126,9 @@ async def select_user_runs(
         filters.append(Run.created_at >= created_at_gte)
 
     if finalised is True:
-        filters.append(
-            Run.finalisation_status.in_((FinalisationStatus.by_client.value, FinalisationStatus.by_timeout.value))
-        )
+        filters.append(Run.run_status.in_((RunStatus.finalised_by_client.value, RunStatus.finalised_by_timeout.value)))
     elif finalised is False:
-        filters.append(Run.finalisation_status == FinalisationStatus.not_finalised.value)
+        filters.append(Run.run_status.in_((RunStatus.initialised.value, RunStatus.started.value)))
 
     if filters:
         stmt = stmt.where(and_(*filters))
@@ -144,19 +138,15 @@ async def select_user_runs(
 
 
 async def select_nonfinalised_runs(session: AsyncSession) -> list[Run]:
-    stmt = select(Run).where(Run.finalisation_status == FinalisationStatus.not_finalised.value)
+    stmt = select(Run).where(Run.run_status.in_((RunStatus.started.value, RunStatus.initialised.value)))
     res = await session.execute(stmt)
     return list(res.scalars().all())
 
 
-async def update_run_finalisation_status(
-    session: AsyncSession, run_id: int, finalisation_status: FinalisationStatus, finalised_at: datetime
+async def update_run_run_status(
+    session: AsyncSession, run_id: int, run_status: RunStatus, finalised_at: datetime | None = None
 ) -> None:
-    stmt = (
-        update(Run)
-        .where(Run.run_id == run_id)
-        .values(finalisation_status=finalisation_status, finalised_at=finalised_at)
-    )
+    stmt = update(Run).where(Run.run_id == run_id).values(run_status=run_status, finalised_at=finalised_at)
     await session.execute(stmt)
 
 
@@ -171,12 +161,12 @@ async def update_run_with_runartifact_and_finalise(
     session: AsyncSession,
     run: Run,
     run_artifact_id: int,
-    finalisation_status: FinalisationStatus,
+    run_status: RunStatus,
     finalised_at: datetime,
 ) -> None:
     run.run_artifact_id = run_artifact_id
     run.finalised_at = finalised_at
-    run.finalisation_status = finalisation_status
+    run.run_status = run_status
     await session.flush()
 
 

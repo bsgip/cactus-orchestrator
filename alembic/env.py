@@ -6,7 +6,9 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from alembic import context
 from cactus_orchestrator import model
-from cactus_orchestrator.settings import main_settings
+from cactus_orchestrator.settings import get_current_settings
+
+main_settings = get_current_settings()
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.

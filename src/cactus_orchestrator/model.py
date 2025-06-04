@@ -1,5 +1,5 @@
 from datetime import datetime
-from enum import IntEnum
+from enum import IntEnum, auto
 
 from sqlalchemy import DateTime, ForeignKey, Index, Integer, LargeBinary, String, UniqueConstraint, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
@@ -39,19 +39,20 @@ class User(Base):
     runs: Mapped[list["Run"]] = relationship(lazy="raise")
 
 
-class FinalisationStatus(IntEnum):
-    not_finalised = 0  # Run is still alive
-    by_client = 1  # Run has been terminated by client finalisation
-    by_timeout = 2  # Run has been terminated by timeout finalisation
-    terminated = 3  # Run was never explicitly finalised, shutdown somehow.
+class RunStatus(IntEnum):
+    initialised = auto()
+    started = auto()
+    finalised_by_client = auto()  # Run has been terminated by client finalisation
+    finalised_by_timeout = auto()  # Run has been terminated by timeout finalisation
+    terminated = auto()  # Run was never explicitly finalised, shutdown somehow.
 
 
 class Run(Base):
     __tablename__ = "run"
     __table_args__ = (
         Index(
-            "finalisation_status_created_at_testprocedure_id_idx",
-            "finalisation_status",
+            "run_status_created_at_testprocedure_id_idx",
+            "run_status",
             "created_at",
             "testprocedure_id",
         ),
@@ -65,7 +66,7 @@ class Run(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     finalised_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, default=None)
-    finalisation_status: Mapped[FinalisationStatus] = mapped_column(Integer, nullable=False)
+    run_status: Mapped[RunStatus] = mapped_column(Integer, nullable=False)
 
     run_artifact_id: Mapped[int] = mapped_column(ForeignKey("run_artifact.id"), nullable=True)
     run_artifact: Mapped["RunArtifact"] = relationship(lazy="raise")
