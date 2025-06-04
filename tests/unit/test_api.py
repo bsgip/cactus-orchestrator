@@ -108,7 +108,7 @@ def test_start_run(client, valid_user_p12_and_der, valid_user_jwt):
 
     # Assert
     res
-    assert res.status_code == HTTPStatus.CREATED
+    assert res.status_code == HTTPStatus.OK
     resmdl = StartRunResponse.model_validate(res.json())
     assert os.environ["TEST_EXECUTION_FQDN"] in resmdl.test_url
     update_run_run_status.assert_awaited_once()

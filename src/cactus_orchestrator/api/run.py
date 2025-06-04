@@ -171,7 +171,7 @@ async def spawn_teststack_and_init_run(
 
 @router.post(
     "/run/{run_id}",
-    status_code=HTTPStatus.CREATED,
+    status_code=HTTPStatus.OK,
 )
 async def start_run(
     run_id: int,
