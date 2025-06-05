@@ -6,6 +6,7 @@ from urllib.parse import urlparse
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi_async_sqlalchemy import db
 
+from cactus_orchestrator.api.run import select_user_or_raise
 from cactus_orchestrator.auth import AuthScopes, jwt_validator
 from cactus_orchestrator.crud import select_user
 from cactus_orchestrator.schema import UserContext, UserSubscriptionDomain
@@ -27,12 +28,7 @@ def parse_domain(d: str) -> str:
 async def fetch_existing_domain(
     user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_scopes({AuthScopes.user_all}))],
 ) -> UserSubscriptionDomain:
-
-    # get user
-    user = await select_user(db.session, user_context)
-    if user is None:
-        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="No domain exists, please register.")
-
+    user = await select_user_or_raise(db.session, user_context)
     return UserSubscriptionDomain(subscription_domain=user.subscription_domain)
 
 
@@ -41,12 +37,7 @@ async def create_subscription_domain(
     body: UserSubscriptionDomain,
     user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_scopes({AuthScopes.user_all}))],
 ) -> UserSubscriptionDomain:
-
-    # get user
-    user = await select_user(db.session, user_context)
-    if user is None:
-        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="No user exists, please register.")
-
+    user = await select_user_or_raise(db.session, user_context)
     parsed_domain = parse_domain(body.subscription_domain)
     if not parsed_domain:
         raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail="Expected a FQDN like 'my.example.domain'")
