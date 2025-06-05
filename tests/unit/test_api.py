@@ -375,23 +375,11 @@ async def test_finalise_run_and_teardown_teststack_success(
     assert response.status_code == 200
 
 
-@patch("cactus_orchestrator.api.domain.select_user")
-def test_fetch_existing_domain_notfound(mock_select_user, client, valid_user_jwt):
-    # Arrange
-    mock_select_user.return_value = None
-
-    # Act
-    res = client.get("/domain", headers={"Authorization": f"Bearer {valid_user_jwt}"})
-
-    # Assert
-    assert res.status_code == HTTPStatus.NOT_FOUND
-
-
-@patch("cactus_orchestrator.api.domain.select_user")
-def test_fetch_existing_domain(mock_select_user, client, valid_user_jwt):
+@patch("cactus_orchestrator.api.domain.select_user_or_raise")
+def test_fetch_existing_domain(mock_select_user_or_raise, client, valid_user_jwt):
     # Arrange
     domain = "my.custom.domain"
-    mock_select_user.return_value = User(subscription_domain=domain)
+    mock_select_user_or_raise.return_value = User(subscription_domain=domain)
 
     # Act
     res = client.get("/domain", headers={"Authorization": f"Bearer {valid_user_jwt}"})
@@ -402,19 +390,6 @@ def test_fetch_existing_domain(mock_select_user, client, valid_user_jwt):
     assert data["subscription_domain"] == domain
 
 
-@patch("cactus_orchestrator.api.domain.select_user")
-def test_update_existing_domain_no_user(mock_select_user, client, valid_user_jwt):
-    # Arrange
-    mock_select_user.return_value = None
-
-    # Act
-    req = UserSubscriptionDomain(subscription_domain="example.com")
-    res = client.post("/domain", headers={"Authorization": f"Bearer {valid_user_jwt}"}, json=req.model_dump())
-
-    # Assert
-    assert res.status_code == HTTPStatus.NOT_FOUND
-
-
 @pytest.mark.parametrize(
     "input_domain, expected",
     [
@@ -423,11 +398,11 @@ def test_update_existing_domain_no_user(mock_select_user, client, valid_user_jwt
         ("http://my.other.example2/", "my.other.example2"),
     ],
 )
-@patch("cactus_orchestrator.api.domain.select_user")
-def test_update_existing_domain(mock_select_user, client, valid_user_jwt, input_domain: str, expected: str):
+@patch("cactus_orchestrator.api.domain.select_user_or_raise")
+def test_update_existing_domain(mock_select_user_or_raise, client, valid_user_jwt, input_domain: str, expected: str):
     # Arrange
     domain = "original.domain"
-    mock_select_user.return_value = User(subscription_domain=domain)
+    mock_select_user_or_raise.return_value = User(subscription_domain=domain)
 
     # Act
     req = UserSubscriptionDomain(subscription_domain=input_domain)
