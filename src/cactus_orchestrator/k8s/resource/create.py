@@ -76,10 +76,13 @@ async def clone_statefulset(new_statefulset_name: str, new_service_name: str, ne
 
 
 @async_k8s_api_retry()
-async def is_container_ready(pod_name: str, container_name: str = "cactus-runner") -> bool:
-    """Polls pod for specific container status. Returns True on ready."""
+async def is_container_ready(pod_name: str, container_name: str | None = None, namespace: str | None = None) -> bool:
+    """Checks pod for specific container status. Returns True on ready."""
+    settings = get_current_settings()
+    container_name = container_name or settings.pod_readiness_check_container_name
+    namespace = namespace or settings.test_execution_namespace
     res: ApplyResult = v1_core_api.read_namespaced_pod(
-        name=pod_name, namespace=get_current_settings().test_execution_namespace, async_req=True
+        name=pod_name, namespace=namespace, async_req=True
     )  # type: ignore
     pod = await asyncio.to_thread(res.get)
 
@@ -94,11 +97,32 @@ async def is_container_ready(pod_name: str, container_name: str = "cactus-runner
     return False
 
 
+async def is_pod_ready(pod_name: str, namespace: str | None = None) -> bool:
+    """Check entire pod's status, should be ready only when all containers are ready."""
+    settings = get_current_settings()
+    namespace = namespace or settings.test_execution_namespace
+
+    # get pod status
+    res: ApplyResult = v1_core_api.read_namespaced_pod(
+        name=pod_name, namespace=namespace, async_req=True
+    )  # type: ignore
+    pod = await asyncio.to_thread(res.get)
+
+    # pod conditions: https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/#pod-conditions
+    conditions = pod.status.conditions or []
+    for condition in conditions:
+        if condition.type.lower() == "ready" and condition.status.lower() == "true":
+            return True
+    return False
+
+
 async def wait_for_pod(pod_name: str, max_retries: int = 10, wait_interval: int = 5) -> None:
-    # TODO: this should wait for the harness_runner container of the pod to be live
+    """Polls pod to check for readiness"""
     for attempt in range(max_retries):
-        if await is_container_ready(pod_name):
+        if await is_pod_ready(pod_name):
+            logger.debug(f"pod ({pod_name}) is ready.")
             return
+        logger.debug(f"pod ({pod_name}) is not ready. retry..")
         await asyncio.sleep(wait_interval)
 
     raise CactusOrchestratorException(f"{pod_name} failed to start.")

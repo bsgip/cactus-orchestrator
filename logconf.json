@@ -1,0 +1,60 @@
+{
+    "version": 1,
+    "disable_existing_loggers": false,
+    "formatters": {
+        "default": {
+            "format": "[%(asctime)s] %(levelname)s:%(name)s %(message)s"
+        }
+    },
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+            "formatter": "default",
+            "level": "DEBUG",
+            "stream": "ext://sys.stdout"
+        }
+    },
+    "root": {
+        "level": "WARNING",
+        "handlers": [
+            "console"
+        ]
+    },
+    "loggers": {
+        "uvicorn": {
+            "level": "INFO",
+            "handlers": [
+                "console"
+            ],
+            "propagate": false
+        },
+        "uvicorn.error": {
+            "level": "INFO",
+            "handlers": [
+                "console"
+            ],
+            "propagate": false
+        },
+        "uvicorn.access": {
+            "level": "INFO",
+            "handlers": [
+                "console"
+            ],
+            "propagate": false
+        },
+        "cactus_orchestrator": {
+            "level": "DEBUG",
+            "handlers": [
+                "console"
+            ],
+            "propagate": false
+        },
+        "kubernetes": {
+            "level": "WARNING",
+            "handlers": [
+                "console"
+            ],
+            "propagate": false
+        }
+    }
+}
