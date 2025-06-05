@@ -1,4 +1,5 @@
 from enum import StrEnum, auto
+
 from cactus_test_definitions import TestProcedureId
 from pydantic import BaseModel
 
@@ -40,3 +41,7 @@ class TestProcedureResponse(BaseModel):
     test_procedure_id: TestProcedureId
     description: str
     category: str
+
+
+class UserSubscriptionDomain(BaseModel):
+    subscription_domain: str

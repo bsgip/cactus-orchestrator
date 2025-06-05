@@ -27,14 +27,14 @@ from cactus_orchestrator.crud import (
 from cactus_orchestrator.k8s.resource import get_resource_names
 from cactus_orchestrator.k8s.resource.create import add_ingress_rule, clone_service, clone_statefulset, wait_for_pod
 from cactus_orchestrator.k8s.resource.delete import delete_service, delete_statefulset, remove_ingress_rule
-from cactus_orchestrator.model import RunStatus, Run, RunArtifact, User
+from cactus_orchestrator.model import Run, RunArtifact, RunStatus, User
 from cactus_orchestrator.schema import (
-    RunResponse,
     InitRunRequest,
     InitRunResponse,
+    RunResponse,
+    RunStatusResponse,
     StartRunResponse,
     UserContext,
-    RunStatusResponse,
 )
 from cactus_orchestrator.settings import (
     CLONED_RESOURCE_NAME_FORMAT,
@@ -141,7 +141,10 @@ async def spawn_teststack_and_init_run(
             timeout=ClientTimeout(30),
         ) as s:
             await RunnerClient.init(
-                s, test.test_procedure_id, client_cert.public_bytes(serialization.Encoding.PEM).decode("utf-8")
+                session=s,
+                test_id=test.test_procedure_id,
+                aggregator_certificate=client_cert.public_bytes(serialization.Encoding.PEM).decode("utf-8"),
+                subscription_domain=user.subscription_domain,
             )
 
         # finally, include new service in ingress rule
