@@ -8,7 +8,6 @@ from fastapi_async_sqlalchemy import db
 
 from cactus_orchestrator.api.run import select_user_or_raise
 from cactus_orchestrator.auth import AuthScopes, jwt_validator
-from cactus_orchestrator.crud import select_user
 from cactus_orchestrator.schema import UserContext, UserSubscriptionDomain
 
 logger = logging.getLogger(__name__)
