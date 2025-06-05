@@ -1,17 +1,25 @@
 import base64
 import json
+import os
 
 import pytest
+from assertical.fixtures.environment import environment_snapshot
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives.serialization import Encoding, NoEncryption, PrivateFormat, load_pem_public_key
 from jose import exceptions, jwt
 
 from cactus_orchestrator.auth import JWTClaims, JWTValidator
 
+TEST_JWT_AUDIENCE = "my-audience"
+TEST_JWT_ISSUER = "my.issuer"
+
 
 @pytest.fixture
 def jwt_validator():
-    return JWTValidator()
+    with environment_snapshot():
+        os.environ["JWTAUTH_AUDIENCE"] = TEST_JWT_AUDIENCE
+        os.environ["JWTAUTH_ISSUER"] = TEST_JWT_ISSUER
+        yield JWTValidator()
 
 
 def test_extract_kid_from_jwt(jwt_validator):
@@ -59,8 +67,8 @@ async def test_verify_jwt(jwt_validator, kid_and_jwks_stub, ca_cert_key_pair):
 
     claims = {
         "sub": "user123",
-        "aud": "cactus_orchestrator",
-        "iss": "auth-server",
+        "aud": TEST_JWT_AUDIENCE,
+        "iss": TEST_JWT_ISSUER,
         "exp": 9999999999,
         "iat": 1700000000,
         "scope": "user:read user:create",
@@ -71,7 +79,6 @@ async def test_verify_jwt(jwt_validator, kid_and_jwks_stub, ca_cert_key_pair):
         encryption_algorithm=NoEncryption(),
     )
     token = jwt.encode(claims, private_pem, algorithm="RS256", headers={"kid": kid})
-    jwt_validator._settings.issuer = "auth-server"
 
     # Act
     res = await jwt_validator._verify_jwt(token)
