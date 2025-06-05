@@ -70,8 +70,8 @@ async def test_is_container_ready(mock_v1_core_api, generate_k8s_class_instance,
     mock_pod = client.V1Pod(
         status=client.V1PodStatus(
             container_statuses=[
-                generate_k8s_class_instance(client.V1ContainerStatus, name="envoy-db", ready=True),
                 generate_k8s_class_instance(client.V1ContainerStatus, name="blah", ready=True),
+                generate_k8s_class_instance(client.V1ContainerStatus, name="envoy", ready=True),
             ]
         )
     )
@@ -102,22 +102,22 @@ async def test_is_container_ready_not_found(mock_v1_core_api, mock_thread_cls):
 
 
 @pytest.mark.asyncio
-@patch("cactus_orchestrator.k8s.resource.create.is_container_ready", return_value=True)
-async def test_wait_for_pod(mock_is_container_ready):
+@patch("cactus_orchestrator.k8s.resource.create.is_pod_ready", return_value=True)
+async def test_wait_for_pod(mock_is_pod_ready):
     """Test waiting for a pod to be ready."""
     await wait_for_pod("test-pod")
-    mock_is_container_ready.assert_called_once()
+    mock_is_pod_ready.assert_called_once()
 
 
 @pytest.mark.asyncio
-@patch("cactus_orchestrator.k8s.resource.create.is_container_ready", return_value=False)
-async def test_wait_for_pod_retries(mock_is_container_ready):
+@patch("cactus_orchestrator.k8s.resource.create.is_pod_ready", return_value=False)
+async def test_wait_for_pod_retries(mock_is_pod_ready):
     """Test waiting for a pod to be ready."""
 
     with pytest.raises(CactusOrchestratorException):
         await wait_for_pod("test-pod", 2, wait_interval=1)
 
-    assert mock_is_container_ready.call_count == 2
+    assert mock_is_pod_ready.call_count == 2
 
 
 @pytest.mark.asyncio

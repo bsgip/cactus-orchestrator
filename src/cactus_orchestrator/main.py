@@ -1,5 +1,8 @@
+import json
 import logging
 from functools import partial
+import logging.config
+import os
 
 from fastapi import FastAPI
 from fastapi.middleware.gzip import GZipMiddleware
@@ -11,7 +14,12 @@ from cactus_orchestrator.settings import CactusOrchestratorSettings, get_current
 from cactus_orchestrator.tasks import lifespan
 
 # Setup logs
-logging.basicConfig(style="{", level=logging.INFO)
+logconf_fp = "./logconf.json"
+if os.path.exists(logconf_fp):
+    with open(logconf_fp, "r") as f:
+        logging.config.dictConfig(json.load(f))
+else:
+    logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 

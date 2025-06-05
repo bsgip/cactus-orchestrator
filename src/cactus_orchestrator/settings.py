@@ -71,6 +71,9 @@ class CactusOrchestratorSettings(BaseSettings):
     idleteardowntask_idle_timeout_seconds: int = 3600
     idleteardowntask_repeat_every_seconds: int = 120
 
+    # readiness
+    pod_readiness_check_container_name: str = "envoy"
+
 
 class JWTAuthSettings(BaseSettings):
     jwks_url: str

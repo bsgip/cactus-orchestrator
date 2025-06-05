@@ -19,5 +19,10 @@ COPY ./pyproject.toml /app/pyproject.toml
 
 RUN pip install --no-cache-dir -e /app && pip install --no-cache-dir uvicorn
 
+WORKDIR /app
+
+# logging configuration
+COPY logconf.json /app/logconf.json
+
 # Entrypoint
 CMD ["uvicorn", "--host", "0.0.0.0", "--port", "8080", "--workers", "1", "cactus_orchestrator.main:app"]
