@@ -6,19 +6,22 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 from cactus_test_definitions import TestProcedureId
+from cryptography.hazmat.primitives import serialization
 from fastapi.testclient import TestClient
 from fastapi_pagination import Params, set_params
-from cryptography.hazmat.primitives import serialization
 
-from cactus_orchestrator.api.certificate import (
-    update_ca_certificate_cache,
-    _ca_crt_cachekey,
-)
+from cactus_orchestrator.api.certificate import _ca_crt_cachekey, update_ca_certificate_cache
 from cactus_orchestrator.api.run import finalise_run, teardown_teststack
 from cactus_orchestrator.cache import AsyncCache, ExpiringValue
 from cactus_orchestrator.main import app
-from cactus_orchestrator.model import RunStatus, Run, RunArtifact, User
-from cactus_orchestrator.schema import InitRunRequest, InitRunResponse, StartRunResponse, TestProcedureResponse
+from cactus_orchestrator.model import Run, RunArtifact, RunStatus, User
+from cactus_orchestrator.schema import (
+    InitRunRequest,
+    InitRunResponse,
+    StartRunResponse,
+    TestProcedureResponse,
+    UserSubscriptionDomain,
+)
 from cactus_orchestrator.settings import CactusOrchestratorException
 
 
@@ -40,12 +43,7 @@ def client() -> Generator[TestClient, None, None]:
 def test_post_spawn_test_created(client, valid_user_p12_and_der, valid_user_jwt):
     """Just a simple test, with all k8s functions stubbed, to catch anything silly in the handler"""
     # Arrange
-    from cactus_orchestrator.api.run import (
-        RunnerClient,
-        clone_statefulset,
-        insert_run_for_user,
-        select_user,
-    )
+    from cactus_orchestrator.api.run import RunnerClient, clone_statefulset, insert_run_for_user, select_user
 
     select_user.return_value = User(
         user_id=1,
@@ -84,7 +82,7 @@ def test_post_spawn_test_created(client, valid_user_p12_and_der, valid_user_jwt)
 def test_start_run(client, valid_user_p12_and_der, valid_user_jwt):
     """Just a simple test, with all k8s functions stubbed, to catch anything silly in the handler"""
     # Arrange
-    from cactus_orchestrator.api.run import RunnerClient, select_user_run, select_user, update_run_run_status
+    from cactus_orchestrator.api.run import RunnerClient, select_user, select_user_run, update_run_run_status
 
     select_user.return_value = User(
         user_id=1,
@@ -129,12 +127,7 @@ def test_start_run(client, valid_user_p12_and_der, valid_user_jwt):
 def test_post_spawn_test_teardown_on_failure(client, valid_user_jwt, valid_user_p12_and_der):
     """Asserts teardown is triggered on spawn failure"""
     # Arrange
-    from cactus_orchestrator.api.run import (
-        clone_statefulset,
-        insert_run_for_user,
-        select_user,
-        teardown_teststack,
-    )
+    from cactus_orchestrator.api.run import clone_statefulset, insert_run_for_user, select_user, teardown_teststack
 
     clone_statefulset.side_effect = CactusOrchestratorException("fail")
     select_user.return_value = User(
@@ -380,3 +373,67 @@ async def test_finalise_run_and_teardown_teststack_success(
     mock_finalise_run.assert_called_once()
     mock_teardown_teststack.assert_called_once()
     assert response.status_code == 200
+
+
+@patch("cactus_orchestrator.api.domain.select_user")
+def test_fetch_existing_domain_notfound(mock_select_user, client, valid_user_jwt):
+    # Arrange
+    mock_select_user.return_value = None
+
+    # Act
+    res = client.get("/domain", headers={"Authorization": f"Bearer {valid_user_jwt}"})
+
+    # Assert
+    assert res.status_code == HTTPStatus.NOT_FOUND
+
+
+@patch("cactus_orchestrator.api.domain.select_user")
+def test_fetch_existing_domain(mock_select_user, client, valid_user_jwt):
+    # Arrange
+    domain = "my.custom.domain"
+    mock_select_user.return_value = User(subscription_domain=domain)
+
+    # Act
+    res = client.get("/domain", headers={"Authorization": f"Bearer {valid_user_jwt}"})
+
+    # Assert
+    assert res.status_code == HTTPStatus.OK
+    data = res.json()
+    assert data["subscription_domain"] == domain
+
+
+@patch("cactus_orchestrator.api.domain.select_user")
+def test_update_existing_domain_no_user(mock_select_user, client, valid_user_jwt):
+    # Arrange
+    mock_select_user.return_value = None
+
+    # Act
+    req = UserSubscriptionDomain(subscription_domain="example.com")
+    res = client.post("/domain", headers={"Authorization": f"Bearer {valid_user_jwt}"}, json=req.model_dump())
+
+    # Assert
+    assert res.status_code == HTTPStatus.NOT_FOUND
+
+
+@pytest.mark.parametrize(
+    "input_domain, expected",
+    [
+        ("my.domain.example", "my.domain.example"),
+        ("http://my.other.example:123/foo/bar", "my.other.example"),
+        ("http://my.other.example2/", "my.other.example2"),
+    ],
+)
+@patch("cactus_orchestrator.api.domain.select_user")
+def test_update_existing_domain(mock_select_user, client, valid_user_jwt, input_domain: str, expected: str):
+    # Arrange
+    domain = "original.domain"
+    mock_select_user.return_value = User(subscription_domain=domain)
+
+    # Act
+    req = UserSubscriptionDomain(subscription_domain=input_domain)
+    res = client.post("/domain", headers={"Authorization": f"Bearer {valid_user_jwt}"}, json=req.model_dump())
+
+    # Assert
+    assert res.status_code == HTTPStatus.CREATED
+    data = res.json()
+    assert data["subscription_domain"] == expected

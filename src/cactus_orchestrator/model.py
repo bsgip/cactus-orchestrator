@@ -36,6 +36,8 @@ class User(Base):
         LargeBinary, nullable=False, unique=False, deferred=True
     )  # x509 DER-encoded
 
+    subscription_domain: Mapped[str] = mapped_column(String, nullable=True)  # What FQDN is allowed to be subscribed
+
     runs: Mapped[list["Run"]] = relationship(lazy="raise")
 
 
