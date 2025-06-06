@@ -203,6 +203,7 @@ async def start_run(
 
     # update status
     await update_run_run_status(session=db.session, run_id=run.run_id, run_status=RunStatus.started)
+    await db.session.commit()
 
     return StartRunResponse(
         test_url=TEST_EXECUTION_URL_FORMAT.format(fqdn=get_current_settings().test_execution_fqdn, svc_name=svc_name),
@@ -231,6 +232,7 @@ async def finalise_run(
 
     artifact = await create_runartifact(session, compression, file_data)
     await update_run_with_runartifact_and_finalise(session, run, artifact.run_artifact_id, run_status, finalised_at)
+    await db.session.commit()
 
     return artifact
 

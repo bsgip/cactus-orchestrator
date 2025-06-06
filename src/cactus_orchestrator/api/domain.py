@@ -28,7 +28,9 @@ async def fetch_existing_domain(
     user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_scopes({AuthScopes.user_all}))],
 ) -> UserSubscriptionDomain:
     user = await select_user_or_raise(db.session, user_context)
-    return UserSubscriptionDomain(subscription_domain=user.subscription_domain)
+    return UserSubscriptionDomain(
+        subscription_domain="" if user.subscription_domain is None else user.subscription_domain
+    )
 
 
 @router.post("/domain", status_code=HTTPStatus.CREATED)

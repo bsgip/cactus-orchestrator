@@ -5,6 +5,7 @@ from typing import Generator
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
+from assertical.fake.sqlalchemy import assert_mock_session, create_mock_session
 from cactus_test_definitions import TestProcedureId
 from cryptography.hazmat.primitives import serialization
 from fastapi.testclient import TestClient
@@ -79,10 +80,14 @@ def test_post_spawn_test_created(client, valid_user_p12_and_der, valid_user_jwt)
     select_user_run=AsyncMock(),
     update_run_run_status=AsyncMock(),
 )
-def test_start_run(client, valid_user_p12_and_der, valid_user_jwt):
+@patch("cactus_orchestrator.api.run.db")
+def test_start_run(mock_db, client, valid_user_p12_and_der, valid_user_jwt):
     """Just a simple test, with all k8s functions stubbed, to catch anything silly in the handler"""
     # Arrange
     from cactus_orchestrator.api.run import RunnerClient, select_user, select_user_run, update_run_run_status
+
+    mock_db_session = create_mock_session()
+    mock_db.session = mock_db_session
 
     select_user.return_value = User(
         user_id=1,
@@ -105,7 +110,7 @@ def test_start_run(client, valid_user_p12_and_der, valid_user_jwt):
     res = client.post("run/1", headers={"Authorization": f"Bearer {valid_user_jwt}"})
 
     # Assert
-    res
+    assert_mock_session(mock_db_session, committed=True)
     assert res.status_code == HTTPStatus.OK
     resmdl = StartRunResponse.model_validate(res.json())
     assert os.environ["TEST_EXECUTION_FQDN"] in resmdl.test_url
@@ -293,6 +298,7 @@ def test_get_runs_paginated(client, valid_user_jwt):
         created_at=datetime(2025, 1, 1, tzinfo=timezone.utc),
         finalised_at=datetime(2025, 1, 2, tzinfo=timezone.utc),
         run_artifact_id=1,
+        run_status=RunStatus.started,
     )
     select_user_runs.return_value = [mock_run]
 
@@ -333,18 +339,23 @@ async def test_teardown_teststack(mock_delete_statefulset, mock_delete_service, 
 @patch("cactus_orchestrator.api.run.RunnerClient.finalize")
 @patch("cactus_orchestrator.api.run.create_runartifact")
 @patch("cactus_orchestrator.api.run.update_run_with_runartifact_and_finalise")
+@patch("cactus_orchestrator.api.run.db")
 async def test_finalise_run_creates_run_artifact_and_updates_run(
-    mock_update_run_with_runartifact_and_finalise, mock_create_runartifact, mock_finalize
+    mock_db, mock_update_run_with_runartifact_and_finalise, mock_create_runartifact, mock_finalize
 ):
     # Arrange
     mock_finalize.return_value = "file_data"  # TODO: this should be bytes, fix in client
     mock_create_runartifact.return_value = RunArtifact(run_artifact_id=1)
+
+    mock_db_session = create_mock_session()
+    mock_db.session = mock_db_session
 
     # Act
     run = Run(teststack_id=1)
     await finalise_run(run, "http://mockurl", Mock(), RunStatus.finalised_by_client, datetime.now(timezone.utc))
 
     # Assert
+    assert_mock_session(mock_db_session, committed=True)
     mock_finalize.assert_called_once()
     mock_create_runartifact.assert_called_once()
     mock_update_run_with_runartifact_and_finalise.assert_called_once()
@@ -388,6 +399,20 @@ def test_fetch_existing_domain(mock_select_user_or_raise, client, valid_user_jwt
     assert res.status_code == HTTPStatus.OK
     data = res.json()
     assert data["subscription_domain"] == domain
+
+
+@patch("cactus_orchestrator.api.domain.select_user_or_raise")
+def test_fetch_existing_domain_none_value(mock_select_user_or_raise, client, valid_user_jwt):
+    # Arrange
+    mock_select_user_or_raise.return_value = User(subscription_domain=None)
+
+    # Act
+    res = client.get("/domain", headers={"Authorization": f"Bearer {valid_user_jwt}"})
+
+    # Assert
+    assert res.status_code == HTTPStatus.OK
+    data = res.json()
+    assert data["subscription_domain"] == ""
 
 
 @pytest.mark.parametrize(
