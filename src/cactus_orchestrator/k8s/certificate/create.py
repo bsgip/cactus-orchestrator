@@ -7,7 +7,7 @@ from cryptography.hazmat.primitives.asymmetric.types import CertificateIssuerPri
 from cryptography.hazmat.primitives.serialization import pkcs12
 from cryptography.x509.oid import NameOID
 
-VALIDITY_DAYS = 10
+VALIDITY_DAYS = 365
 
 
 def generate_client_p12(
