@@ -43,5 +43,10 @@ class TestProcedureResponse(BaseModel):
     category: str
 
 
-class UserSubscriptionDomain(BaseModel):
-    subscription_domain: str
+class UserConfigurationRequest(BaseModel):
+    subscription_domain: str  # What domain will outgoing notifications be scoped to?
+    is_static_uri: bool  # If true - all test instances will share the same URI (limit to 1 test at a time)
+
+
+class UserConfigurationResponse(UserConfigurationRequest):
+    static_uri: str | None  # What the static URI will be for this user (readonly and only set if is_static_uri is True)

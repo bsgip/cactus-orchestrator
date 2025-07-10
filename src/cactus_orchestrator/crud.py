@@ -5,7 +5,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload, undefer
 
-from cactus_orchestrator.model import RunStatus, Run, RunArtifact, User, UserUniqueConstraintName
+from cactus_orchestrator.model import Run, RunArtifact, RunStatus, User, UserUniqueConstraintName
 from cactus_orchestrator.schema import UserContext
 
 
@@ -118,7 +118,7 @@ async def insert_run_for_user(
 
 async def select_user_runs(
     session: AsyncSession, user_id: int, finalised: bool | None, created_at_gte: datetime | None
-) -> list[Run | None]:
+) -> list[Run]:
     # runs statement
     stmt = select(Run).where(Run.user_id == user_id)
     filters = []

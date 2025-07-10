@@ -5,6 +5,7 @@ from typing import Generator
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
+from assertical.fake.generator import generate_class_instance
 from assertical.fake.sqlalchemy import assert_mock_session, create_mock_session
 from cactus_test_definitions import TestProcedureId
 from cryptography.hazmat.primitives import serialization
@@ -14,6 +15,7 @@ from fastapi_pagination import Params, set_params
 from cactus_orchestrator.api.certificate import _ca_crt_cachekey, update_ca_certificate_cache
 from cactus_orchestrator.api.run import finalise_run, teardown_teststack
 from cactus_orchestrator.cache import AsyncCache, ExpiringValue
+from cactus_orchestrator.k8s.run_id import generate_envoy_dcap_uri, generate_static_test_stack_id
 from cactus_orchestrator.main import app
 from cactus_orchestrator.model import Run, RunArtifact, RunStatus, User
 from cactus_orchestrator.schema import (
@@ -21,7 +23,8 @@ from cactus_orchestrator.schema import (
     InitRunResponse,
     StartRunResponse,
     TestProcedureResponse,
-    UserSubscriptionDomain,
+    UserConfigurationRequest,
+    UserConfigurationResponse,
 )
 from cactus_orchestrator.settings import CactusOrchestratorException
 
@@ -40,11 +43,18 @@ def client() -> Generator[TestClient, None, None]:
     clone_service=AsyncMock(),
     select_user=AsyncMock(),
     insert_run_for_user=AsyncMock(),
+    select_user_runs=AsyncMock(),
 )
 def test_post_spawn_test_created(client, valid_user_p12_and_der, valid_user_jwt):
     """Just a simple test, with all k8s functions stubbed, to catch anything silly in the handler"""
     # Arrange
-    from cactus_orchestrator.api.run import RunnerClient, clone_statefulset, insert_run_for_user, select_user
+    from cactus_orchestrator.api.run import (
+        RunnerClient,
+        clone_statefulset,
+        insert_run_for_user,
+        select_user,
+        select_user_runs,
+    )
 
     select_user.return_value = User(
         user_id=1,
@@ -52,10 +62,12 @@ def test_post_spawn_test_created(client, valid_user_p12_and_der, valid_user_jwt)
         issuer_id="iss",
         certificate_p12_bundle=None,
         certificate_x509_der=valid_user_p12_and_der[1],
+        is_static_uri=False,
     )
     RunnerClient.init = AsyncMock()
     clone_statefulset.return_value = "pod_name"
     insert_run_for_user.return_value = 1
+    select_user_runs.return_value = []
 
     # Act
     req = InitRunRequest(test_procedure_id=TestProcedureId.ALL_01.value)
@@ -67,6 +79,100 @@ def test_post_spawn_test_created(client, valid_user_p12_and_der, valid_user_jwt)
     assert os.environ["TEST_EXECUTION_FQDN"] in resmdl.test_url
     assert res.headers["Location"] == "/run/1"
     insert_run_for_user.assert_called_once()
+    select_user_runs.assert_not_called()  # This isn't a static_uri test so we shouldn't be checking
+
+
+@patch.multiple(
+    "cactus_orchestrator.api.run",
+    RunnerClient=Mock(),
+    clone_statefulset=AsyncMock(),
+    wait_for_pod=AsyncMock(),
+    add_ingress_rule=AsyncMock(),
+    clone_service=AsyncMock(),
+    select_user=AsyncMock(),
+    insert_run_for_user=AsyncMock(),
+    select_user_runs=AsyncMock(),
+)
+def test_post_spawn_test_created_static_uri(client, valid_user_p12_and_der, valid_user_jwt):
+    """Just a simple test, with all k8s functions stubbed, to catch anything silly in the handler"""
+    # Arrange
+    from cactus_orchestrator.api.run import (
+        RunnerClient,
+        clone_statefulset,
+        insert_run_for_user,
+        select_user,
+        select_user_runs,
+    )
+
+    select_user.return_value = User(
+        user_id=1,
+        subject_id="sub",
+        issuer_id="iss",
+        certificate_p12_bundle=None,
+        certificate_x509_der=valid_user_p12_and_der[1],
+        is_static_uri=True,
+    )
+    RunnerClient.init = AsyncMock()
+    clone_statefulset.return_value = "pod_name"
+    insert_run_for_user.return_value = 1
+    select_user_runs.return_value = []  # no existing runs
+
+    # Act
+    req = InitRunRequest(test_procedure_id=TestProcedureId.ALL_01.value)
+    res = client.post("run", json=req.model_dump(), headers={"Authorization": f"Bearer {valid_user_jwt}"})
+
+    # Assert
+    assert res.status_code == HTTPStatus.CREATED
+    resmdl = InitRunResponse.model_validate(res.json())
+    assert os.environ["TEST_EXECUTION_FQDN"] in resmdl.test_url
+    assert res.headers["Location"] == "/run/1"
+    insert_run_for_user.assert_called_once()
+    select_user_runs.assert_called_once()
+
+
+@patch.multiple(
+    "cactus_orchestrator.api.run",
+    RunnerClient=Mock(),
+    clone_statefulset=AsyncMock(),
+    wait_for_pod=AsyncMock(),
+    add_ingress_rule=AsyncMock(),
+    clone_service=AsyncMock(),
+    select_user=AsyncMock(),
+    insert_run_for_user=AsyncMock(),
+    select_user_runs=AsyncMock(),
+)
+def test_post_spawn_test_created_static_uri_existing_run(client, valid_user_p12_and_der, valid_user_jwt):
+    """Attempting to spawn a test run with an existing run (if this is a static URI user) should raise an error"""
+    # Arrange
+    from cactus_orchestrator.api.run import (
+        RunnerClient,
+        clone_statefulset,
+        insert_run_for_user,
+        select_user,
+        select_user_runs,
+    )
+
+    select_user.return_value = User(
+        user_id=1,
+        subject_id="sub",
+        issuer_id="iss",
+        certificate_p12_bundle=None,
+        certificate_x509_der=valid_user_p12_and_der[1],
+        is_static_uri=True,
+    )
+    RunnerClient.init = AsyncMock()
+    clone_statefulset.return_value = "pod_name"
+    insert_run_for_user.return_value = 1
+    select_user_runs.return_value = [generate_class_instance(Run)]  # an existing run - should cause CONFLICT error
+
+    # Act
+    req = InitRunRequest(test_procedure_id=TestProcedureId.ALL_01.value)
+    res = client.post("run", json=req.model_dump(), headers={"Authorization": f"Bearer {valid_user_jwt}"})
+
+    # Assert
+    assert res.status_code == HTTPStatus.CONFLICT
+    insert_run_for_user.assert_not_called()
+    select_user_runs.assert_called_once()
 
 
 @patch.multiple(
@@ -386,54 +492,83 @@ async def test_finalise_run_and_teardown_teststack_success(
     assert response.status_code == 200
 
 
-@patch("cactus_orchestrator.api.domain.select_user_or_raise")
-def test_fetch_existing_domain(mock_select_user_or_raise, client, valid_user_jwt):
+@pytest.mark.parametrize("is_static_uri", [True, False])
+@patch("cactus_orchestrator.api.config.select_user_or_raise")
+def test_fetch_existing_config(mock_select_user_or_raise, client, valid_user_jwt, is_static_uri: bool):
     # Arrange
     domain = "my.custom.domain"
-    mock_select_user_or_raise.return_value = User(subscription_domain=domain)
+    user = User(subscription_domain=domain, is_static_uri=is_static_uri, user_id=123)
+    mock_select_user_or_raise.return_value = user
 
     # Act
-    res = client.get("/domain", headers={"Authorization": f"Bearer {valid_user_jwt}"})
+    res = client.get("/config", headers={"Authorization": f"Bearer {valid_user_jwt}"})
 
     # Assert
     assert res.status_code == HTTPStatus.OK
     data = res.json()
     assert data["subscription_domain"] == domain
+    assert data["is_static_uri"] is is_static_uri
+    if is_static_uri:
+        assert data["static_uri"] == generate_envoy_dcap_uri(generate_static_test_stack_id(user))
+    else:
+        assert data["static_uri"] is None
 
 
-@patch("cactus_orchestrator.api.domain.select_user_or_raise")
-def test_fetch_existing_domain_none_value(mock_select_user_or_raise, client, valid_user_jwt):
+@pytest.mark.parametrize("is_static_uri", [True, False])
+@patch("cactus_orchestrator.api.config.select_user_or_raise")
+def test_fetch_existing_config_domain_none_value(
+    mock_select_user_or_raise, client, valid_user_jwt, is_static_uri: bool
+):
     # Arrange
-    mock_select_user_or_raise.return_value = User(subscription_domain=None)
+    user = User(subscription_domain=None, is_static_uri=is_static_uri, user_id=123)
+    mock_select_user_or_raise.return_value = user
 
     # Act
-    res = client.get("/domain", headers={"Authorization": f"Bearer {valid_user_jwt}"})
+    res = client.get("/config", headers={"Authorization": f"Bearer {valid_user_jwt}"})
 
     # Assert
     assert res.status_code == HTTPStatus.OK
     data = res.json()
     assert data["subscription_domain"] == ""
+    assert data["is_static_uri"] is is_static_uri
+
+    if is_static_uri:
+        assert data["static_uri"] == generate_envoy_dcap_uri(generate_static_test_stack_id(user))
+    else:
+        assert data["static_uri"] is None
 
 
 @pytest.mark.parametrize(
-    "input_domain, expected",
+    "input_domain, input_is_static_uri, expected",
     [
-        ("my.domain.example", "my.domain.example"),
-        ("http://my.other.example:123/foo/bar", "my.other.example"),
-        ("http://my.other.example2/", "my.other.example2"),
+        ("my.domain.example", True, "my.domain.example"),
+        ("my.domain.example", False, "my.domain.example"),
+        ("http://my.other.example:123/foo/bar", True, "my.other.example"),
+        ("http://my.other.example:123/foo/bar", False, "my.other.example"),
+        ("http://my.other.example2/", True, "my.other.example2"),
+        ("http://my.other.example2/", False, "my.other.example2"),
     ],
 )
-@patch("cactus_orchestrator.api.domain.select_user_or_raise")
-def test_update_existing_domain(mock_select_user_or_raise, client, valid_user_jwt, input_domain: str, expected: str):
+@patch("cactus_orchestrator.api.config.select_user_or_raise")
+def test_update_existing_config(
+    mock_select_user_or_raise, client, valid_user_jwt, input_domain: str, input_is_static_uri: bool, expected: str
+):
     # Arrange
     domain = "original.domain"
-    mock_select_user_or_raise.return_value = User(subscription_domain=domain)
+    user = User(subscription_domain=domain, is_static_uri=False)
+    mock_select_user_or_raise.return_value = user
 
     # Act
-    req = UserSubscriptionDomain(subscription_domain=input_domain)
-    res = client.post("/domain", headers={"Authorization": f"Bearer {valid_user_jwt}"}, json=req.model_dump())
+    req = UserConfigurationRequest(subscription_domain=input_domain, is_static_uri=input_is_static_uri)
+    res = client.post("/config", headers={"Authorization": f"Bearer {valid_user_jwt}"}, json=req.model_dump())
 
     # Assert
     assert res.status_code == HTTPStatus.CREATED
     data = res.json()
     assert data["subscription_domain"] == expected
+    assert data["is_static_uri"] == input_is_static_uri
+
+    if input_is_static_uri:
+        assert data["static_uri"] == generate_envoy_dcap_uri(generate_static_test_stack_id(user))
+    else:
+        assert data["static_uri"] is None
