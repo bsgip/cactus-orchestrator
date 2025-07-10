@@ -5,7 +5,7 @@ import logging
 from multiprocessing.pool import ApplyResult
 
 from kubernetes import client
-from kubernetes.client import V1StatefulSet
+from kubernetes.client import V1EnvVar, V1StatefulSet
 
 from cactus_orchestrator.k8s.resource import async_k8s_api_retry
 from cactus_orchestrator.settings import (
@@ -49,17 +49,46 @@ async def clone_service(new_svc_name: str, new_app_label: str) -> None:
 
 @async_k8s_api_retry()
 async def clone_statefulset(new_statefulset_name: str, new_service_name: str, new_app_label: str) -> None:
+    template_set_name = get_current_settings().template_statefulset_name
+    template_namespace = get_current_settings().teststack_templates_namespace
     res: ApplyResult = v1_app_api.read_namespaced_stateful_set(
-        name=get_current_settings().template_statefulset_name,
-        namespace=get_current_settings().teststack_templates_namespace,
+        name=template_set_name,
+        namespace=template_namespace,
         async_req=True,
     )  # type: ignore
-    existing = await asyncio.to_thread(res.get)
+    existing: V1StatefulSet = await asyncio.to_thread(res.get)
 
+    # Rework the discovered spec into a new spec that's specific to the new service/labels
     new_spec = existing.spec
+    if new_spec is None:
+        raise CactusOrchestratorException(f"{template_namespace} {template_set_name} - missing top level spec")
     new_spec.service_name = new_service_name
-    new_spec.selector.match_labels["app"] = new_app_label
-    new_spec.template.metadata.labels["app"] = new_app_label
+    if new_spec.selector.match_labels is None:
+        new_spec.selector.match_labels = {"app": new_app_label}
+    else:
+        new_spec.selector.match_labels["app"] = new_app_label
+    if new_spec.template.metadata is None:
+        raise CactusOrchestratorException(f"{template_namespace} {template_set_name} - missing spec.template.metadata")
+    if new_spec.template.metadata.labels is None:
+        new_spec.template.metadata.labels = {"app": new_app_label}
+    else:
+        new_spec.template.metadata.labels["app"] = new_app_label
+
+    # We will need to also inject the HREF_PREFIX env variable for the "envoy" container to ensure that all generated
+    # hrefs properly include the prefix such that /edev will be encoded as /envoy-svc-abc123/edev
+    href_env = V1EnvVar(name="HREF_PREFIX", value=f"/{new_service_name}", value_from=None)
+    if new_spec.template.spec is None:
+        raise CactusOrchestratorException(f"{template_namespace} {template_set_name} - missing template spec")
+    envoy_containers = [c for c in new_spec.template.spec.containers if c.name == "envoy"]
+    if len(envoy_containers) != 1:
+        raise CactusOrchestratorException(
+            f"{template_namespace} {template_set_name} - Expected 1 but found {len(envoy_containers)} envoy containers."
+        )
+    container_to_update = envoy_containers[0]
+    if container_to_update.env is None:
+        container_to_update.env = [href_env]
+    else:
+        container_to_update.env.append(href_env)
 
     new_set = V1StatefulSet(
         api_version=existing.api_version,

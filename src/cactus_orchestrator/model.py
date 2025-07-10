@@ -1,7 +1,7 @@
 from datetime import datetime
 from enum import IntEnum, auto
 
-from sqlalchemy import DateTime, ForeignKey, Index, Integer, LargeBinary, String, UniqueConstraint, func
+from sqlalchemy import BOOLEAN, DateTime, ForeignKey, Index, Integer, LargeBinary, String, UniqueConstraint, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -37,6 +37,9 @@ class User(Base):
     )  # x509 DER-encoded
 
     subscription_domain: Mapped[str] = mapped_column(String, nullable=True)  # What FQDN is allowed to be subscribed
+    is_static_uri: Mapped[bool] = mapped_column(
+        BOOLEAN, server_default="0"
+    )  # If True - always use the same URI for all spawned instances (this will limit them to a single run at a time)
 
     runs: Mapped[list["Run"]] = relationship(lazy="raise")
 
@@ -58,11 +61,18 @@ class Run(Base):
             "created_at",
             "testprocedure_id",
         ),
+        Index(
+            "user_id_run_status_idx",
+            "user_id",
+            "run_status",
+        ),
     )
 
     run_id: Mapped[int] = mapped_column(name="id", primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("user_.id"))
-    teststack_id: Mapped[str] = mapped_column(String, nullable=False, unique=True, index=True)
+    teststack_id: Mapped[str] = mapped_column(
+        String, nullable=False, index=True
+    )  # We can't guarantee uniqueness as some users have "is_static_uri" set. Enforce uniqueness for running instances
 
     testprocedure_id: Mapped[str] = mapped_column(String, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

@@ -42,6 +42,8 @@ async def test_clone_service(mock_v1_core_api, mock_thread_cls):
 @patch("cactus_orchestrator.k8s.resource.create.v1_app_api")
 async def test_clone_statefulset(mock_v1_app_api, mock_thread_cls):
     """Test cloning a Kubernetes StatefulSet."""
+    container_foo = client.V1Container(name="foo")
+    container_envoy = client.V1Container(name="envoy")
     mock_statefulset = client.V1StatefulSet(
         api_version="apps/v1",
         kind="StatefulSet",
@@ -49,7 +51,10 @@ async def test_clone_statefulset(mock_v1_app_api, mock_thread_cls):
         spec=client.V1StatefulSetSpec(
             service_name="template-service",
             selector=client.V1LabelSelector(match_labels={"app": "template-app"}),
-            template=client.V1PodTemplateSpec(metadata=client.V1ObjectMeta(labels={"app": "template-app"})),
+            template=client.V1PodTemplateSpec(
+                metadata=client.V1ObjectMeta(labels={"app": "template-app"}),
+                spec=client.V1PodSpec(containers=[container_foo, container_envoy]),
+            ),
         ),
     )
 
@@ -60,6 +65,13 @@ async def test_clone_statefulset(mock_v1_app_api, mock_thread_cls):
 
     mock_v1_app_api.read_namespaced_stateful_set.assert_called_once()
     mock_v1_app_api.create_namespaced_stateful_set.assert_called_once()
+
+    # Ensure the HREF_PREFIX env var got injected (to the correct container)
+    assert container_foo.env is None
+    assert container_envoy.env is not None
+    assert len(container_envoy.env) == 1
+    assert container_envoy.env[0].name == "HREF_PREFIX"
+    assert container_envoy.env[0].value == "/new-service"
 
 
 @pytest.mark.asyncio

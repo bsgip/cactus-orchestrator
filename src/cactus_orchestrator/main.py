@@ -9,7 +9,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi_async_sqlalchemy import SQLAlchemyMiddleware
 from fastapi_pagination import add_pagination
 
-from cactus_orchestrator.api import domain_router, procedure_router, run_router, user_router
+from cactus_orchestrator.api import config_router, procedure_router, run_router, user_router
 from cactus_orchestrator.settings import CactusOrchestratorSettings, get_current_settings
 from cactus_orchestrator.tasks import lifespan
 
@@ -38,7 +38,7 @@ def generate_app(new_main_settings: CactusOrchestratorSettings) -> FastAPI:
     app.include_router(user_router)
     app.include_router(run_router)
     app.include_router(procedure_router)
-    app.include_router(domain_router)
+    app.include_router(config_router)
 
     return app
 

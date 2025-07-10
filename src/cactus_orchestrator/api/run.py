@@ -3,7 +3,6 @@ from datetime import datetime, timedelta, timezone
 from http import HTTPStatus
 from typing import Annotated
 
-import shortuuid
 from cactus_runner.client import ClientSession, ClientTimeout, RunnerClient, RunnerClientException
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization
@@ -27,6 +26,11 @@ from cactus_orchestrator.crud import (
 from cactus_orchestrator.k8s.resource import get_resource_names
 from cactus_orchestrator.k8s.resource.create import add_ingress_rule, clone_service, clone_statefulset, wait_for_pod
 from cactus_orchestrator.k8s.resource.delete import delete_service, delete_statefulset, remove_ingress_rule
+from cactus_orchestrator.k8s.run_id import (
+    generate_dynamic_test_stack_id,
+    generate_envoy_dcap_uri,
+    generate_static_test_stack_id,
+)
 from cactus_orchestrator.model import Run, RunArtifact, RunStatus, User
 from cactus_orchestrator.schema import (
     InitRunRequest,
@@ -36,14 +40,7 @@ from cactus_orchestrator.schema import (
     StartRunResponse,
     UserContext,
 )
-from cactus_orchestrator.settings import (
-    CLONED_RESOURCE_NAME_FORMAT,
-    POD_HARNESS_RUNNER_MANAGEMENT_PORT,
-    RUNNER_POD_URL,
-    TEST_EXECUTION_URL_FORMAT,
-    CactusOrchestratorException,
-    get_current_settings,
-)
+from cactus_orchestrator.settings import POD_HARNESS_RUNNER_MANAGEMENT_PORT, RUNNER_POD_URL, CactusOrchestratorException
 
 logger = logging.getLogger(__name__)
 
@@ -52,9 +49,6 @@ router = APIRouter()
 
 
 def map_run_to_run_response(run: Run) -> RunResponse:
-    svc_name = CLONED_RESOURCE_NAME_FORMAT.format(
-        resource_name=get_current_settings().template_service_name, uuid=run.teststack_id
-    )
     status = RunStatusResponse.finalised
     if run.run_status == RunStatus.initialised:
         status = RunStatusResponse.initialised
@@ -64,7 +58,7 @@ def map_run_to_run_response(run: Run) -> RunResponse:
     return RunResponse(
         run_id=run.run_id,
         test_procedure_id=run.testprocedure_id,
-        test_url=TEST_EXECUTION_URL_FORMAT.format(fqdn=get_current_settings().test_execution_fqdn, svc_name=svc_name),
+        test_url=generate_envoy_dcap_uri(run.teststack_id),
         status=status,
     )
 
@@ -124,8 +118,25 @@ async def spawn_teststack_and_init_run(
             detail="Your certificate has expired. Please regenerate your certificate and try again.",
         )
 
-    # new resource ids
-    teststack_id: str = shortuuid.uuid().lower()  # This uuid is referenced in all new resource ids
+    # Discover the test stack ID - check for potential conflicts
+    teststack_id: str | None = None
+    if user.is_static_uri:
+        teststack_id = generate_static_test_stack_id(user)
+
+        # Because this is a static URI - we need to make sure there are no running test instances with this value set
+        # (otherwise we are going to cause a collision and problems)
+        # This is a limitation of enabling static URIs and the user will be warned about it when enabling things
+        runs = await select_user_runs(db.session, user.user_id, finalised=False, created_at_gte=None)
+        if len(runs) > 0:
+            run_ids_str = ",".join((str(r.run_id) for r in runs))
+            raise HTTPException(
+                HTTPStatus.CONFLICT,
+                detail=f"Static URIs are enabled therefore only a single run can be active. The following run IDs are still active and will need to be finalised first: {run_ids_str}.",  # noqa: E501
+            )
+
+    else:
+        teststack_id = generate_dynamic_test_stack_id()
+
     new_svc_name, new_statefulset_name, new_app_label, pod_name, pod_fqdn = get_resource_names(teststack_id)
     try:
         # duplicate resources
@@ -164,12 +175,7 @@ async def spawn_teststack_and_init_run(
     # set location header
     response.headers["Location"] = f"/run/{run_id}"
 
-    return InitRunResponse(
-        run_id=run_id,
-        test_url=TEST_EXECUTION_URL_FORMAT.format(
-            fqdn=get_current_settings().test_execution_fqdn, svc_name=new_svc_name
-        ),
-    )
+    return InitRunResponse(run_id=run_id, test_url=generate_envoy_dcap_uri(teststack_id))
 
 
 @router.post(
@@ -192,7 +198,7 @@ async def start_run(
         raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Not Found")
 
     # resource ids
-    svc_name, _, _, _, pod_fqdn = get_resource_names(run.teststack_id)
+    _, _, _, _, pod_fqdn = get_resource_names(run.teststack_id)
 
     # request runner starts run
     async with ClientSession(
@@ -206,7 +212,7 @@ async def start_run(
     await db.session.commit()
 
     return StartRunResponse(
-        test_url=TEST_EXECUTION_URL_FORMAT.format(fqdn=get_current_settings().test_execution_fqdn, svc_name=svc_name),
+        test_url=generate_envoy_dcap_uri(run.teststack_id),
     )
 
 
