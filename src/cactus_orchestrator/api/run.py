@@ -4,6 +4,7 @@ from http import HTTPStatus
 from typing import Annotated
 
 from cactus_runner.client import ClientSession, ClientTimeout, RunnerClient, RunnerClientException
+from cactus_runner.models import RunnerStatus
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
@@ -298,3 +299,42 @@ async def get_run_artifact(
         content=run.run_artifact.file_data,
         media_type=f"application/{run.run_artifact.compression}",
     )
+
+
+@router.get("/run/{run_id}/status", status_code=HTTPStatus.OK)
+async def get_run_status(
+    run_id: int,
+    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_scopes({AuthScopes.user_all}))],
+) -> RunnerStatus:
+    """Can only fetch the status of a currently operating run.
+
+    returns HTTP 200 on success with"""
+
+    user = await select_user_or_raise(db.session, user_context)
+
+    # get the run - make sure it's still "running"
+    try:
+        run = await select_user_run(db.session, user.user_id, run_id)
+    except NoResultFound as exc:
+        logger.debug(exc)
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Run does not exist.")
+    if run.run_status not in [RunStatus.started, RunStatus.initialised]:
+        raise HTTPException(
+            status_code=HTTPStatus.GONE,
+            detail=f"Run {run_id} has terminated. Please download the final artifacts for status information.",
+        )
+
+    # Connect to the pod and talk to the runner's "status" endpoint. Forward the result along
+    _, _, _, _, pod_fqdn = get_resource_names(run.teststack_id)
+    async with ClientSession(
+        base_url=RUNNER_POD_URL.format(pod_fqdn=pod_fqdn, pod_port=POD_HARNESS_RUNNER_MANAGEMENT_PORT),
+        timeout=ClientTimeout(30),
+    ) as s:
+        try:
+            return await RunnerClient.status(s)
+        except Exception as exc:
+            logger.error(f"Error fetching runner status for run {run.run_id} @ {pod_fqdn}.", exc_info=exc)
+            raise HTTPException(
+                status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
+                detail=f"Unable to connect to run {run.run_id}'s pod to fetch status.",
+            )
