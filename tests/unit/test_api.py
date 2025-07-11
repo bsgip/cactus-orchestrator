@@ -26,7 +26,6 @@ from cactus_orchestrator.schema import (
     StartRunResponse,
     TestProcedureResponse,
     UserConfigurationRequest,
-    UserConfigurationResponse,
 )
 from cactus_orchestrator.settings import CactusOrchestratorException
 
@@ -582,13 +581,12 @@ def test_update_existing_config(
     RunnerClient=Mock(),
     select_user=AsyncMock(),
     select_user_run=AsyncMock(),
-    update_run_run_status=AsyncMock(),
 )
 @patch("cactus_orchestrator.api.run.db")
 def test_get_run_status(mock_db, client, valid_user_jwt, runner_status):
     """Does fetching the run status work under success conditions"""
     # Arrange
-    from cactus_orchestrator.api.run import RunnerClient, select_user, select_user_run, update_run_run_status
+    from cactus_orchestrator.api.run import RunnerClient, select_user, select_user_run
 
     mock_db_session = create_mock_session()
     mock_db.session = mock_db_session
@@ -629,13 +627,12 @@ def test_get_run_status(mock_db, client, valid_user_jwt, runner_status):
     RunnerClient=Mock(),
     select_user=AsyncMock(),
     select_user_run=AsyncMock(),
-    update_run_run_status=AsyncMock(),
 )
 @patch("cactus_orchestrator.api.run.db")
 def test_get_run_status_bad_run_state(mock_db, client, valid_user_jwt, runner_status):
     """fetching the run status for a run that has finished should fail"""
     # Arrange
-    from cactus_orchestrator.api.run import RunnerClient, select_user, select_user_run, update_run_run_status
+    from cactus_orchestrator.api.run import RunnerClient, select_user, select_user_run
 
     mock_db_session = create_mock_session()
     mock_db.session = mock_db_session
@@ -671,13 +668,12 @@ def test_get_run_status_bad_run_state(mock_db, client, valid_user_jwt, runner_st
     RunnerClient=Mock(),
     select_user=AsyncMock(),
     select_user_run=AsyncMock(),
-    update_run_run_status=AsyncMock(),
 )
 @patch("cactus_orchestrator.api.run.db")
 def test_get_run_status_missing_run(mock_db, client, valid_user_jwt):
     """fetching the run status for a run that has finished should fail"""
     # Arrange
-    from cactus_orchestrator.api.run import RunnerClient, select_user, select_user_run, update_run_run_status
+    from cactus_orchestrator.api.run import RunnerClient, select_user, select_user_run
 
     mock_db_session = create_mock_session()
     mock_db.session = mock_db_session
