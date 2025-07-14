@@ -245,7 +245,7 @@ async def finalise_run(
 
 
 @router.get("/run/{run_id}", status_code=HTTPStatus.OK)
-async def get_run_status(
+async def get_individual_run(
     run_id: int,
     user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_scopes({AuthScopes.user_all}))],
 ) -> RunResponse:
