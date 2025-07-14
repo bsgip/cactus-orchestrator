@@ -46,6 +46,7 @@ def client() -> Generator[TestClient, None, None]:
     select_user=AsyncMock(),
     insert_run_for_user=AsyncMock(),
     select_user_runs=AsyncMock(),
+    update_run_run_status=AsyncMock(),
 )
 def test_post_spawn_test_created(client, valid_user_p12_and_der, valid_user_jwt):
     """Just a simple test, with all k8s functions stubbed, to catch anything silly in the handler"""
@@ -56,6 +57,7 @@ def test_post_spawn_test_created(client, valid_user_p12_and_der, valid_user_jwt)
         insert_run_for_user,
         select_user,
         select_user_runs,
+        update_run_run_status,
     )
 
     select_user.return_value = User(
@@ -81,6 +83,7 @@ def test_post_spawn_test_created(client, valid_user_p12_and_der, valid_user_jwt)
     assert os.environ["TEST_EXECUTION_FQDN"] in resmdl.test_url
     assert res.headers["Location"] == "/run/1"
     insert_run_for_user.assert_called_once()
+    update_run_run_status.assert_called_once()
     select_user_runs.assert_not_called()  # This isn't a static_uri test so we shouldn't be checking
 
 
@@ -94,6 +97,7 @@ def test_post_spawn_test_created(client, valid_user_p12_and_der, valid_user_jwt)
     select_user=AsyncMock(),
     insert_run_for_user=AsyncMock(),
     select_user_runs=AsyncMock(),
+    update_run_run_status=AsyncMock(),
 )
 def test_post_spawn_test_created_static_uri(client, valid_user_p12_and_der, valid_user_jwt):
     """Just a simple test, with all k8s functions stubbed, to catch anything silly in the handler"""
@@ -104,6 +108,7 @@ def test_post_spawn_test_created_static_uri(client, valid_user_p12_and_der, vali
         insert_run_for_user,
         select_user,
         select_user_runs,
+        update_run_run_status,
     )
 
     select_user.return_value = User(
@@ -129,6 +134,7 @@ def test_post_spawn_test_created_static_uri(client, valid_user_p12_and_der, vali
     assert os.environ["TEST_EXECUTION_FQDN"] in resmdl.test_url
     assert res.headers["Location"] == "/run/1"
     insert_run_for_user.assert_called_once()
+    update_run_run_status.assert_called_once()
     select_user_runs.assert_called_once()
 
 
@@ -142,6 +148,7 @@ def test_post_spawn_test_created_static_uri(client, valid_user_p12_and_der, vali
     select_user=AsyncMock(),
     insert_run_for_user=AsyncMock(),
     select_user_runs=AsyncMock(),
+    update_run_run_status=AsyncMock(),
 )
 def test_post_spawn_test_created_static_uri_existing_run(client, valid_user_p12_and_der, valid_user_jwt):
     """Attempting to spawn a test run with an existing run (if this is a static URI user) should raise an error"""
@@ -152,6 +159,7 @@ def test_post_spawn_test_created_static_uri_existing_run(client, valid_user_p12_
         insert_run_for_user,
         select_user,
         select_user_runs,
+        update_run_run_status,
     )
 
     select_user.return_value = User(
@@ -175,6 +183,7 @@ def test_post_spawn_test_created_static_uri_existing_run(client, valid_user_p12_
     assert res.status_code == HTTPStatus.CONFLICT
     insert_run_for_user.assert_not_called()
     select_user_runs.assert_called_once()
+    update_run_run_status.assert_not_called()
 
 
 @patch.multiple(
@@ -236,11 +245,18 @@ def test_start_run(mock_db, client, valid_user_p12_and_der, valid_user_jwt):
     teardown_teststack=AsyncMock(),
     select_user=AsyncMock(),
     insert_run_for_user=AsyncMock(),
+    update_run_run_status=AsyncMock(),
 )
 def test_post_spawn_test_teardown_on_failure(client, valid_user_jwt, valid_user_p12_and_der):
     """Asserts teardown is triggered on spawn failure"""
     # Arrange
-    from cactus_orchestrator.api.run import clone_statefulset, insert_run_for_user, select_user, teardown_teststack
+    from cactus_orchestrator.api.run import (
+        clone_statefulset,
+        insert_run_for_user,
+        select_user,
+        teardown_teststack,
+        update_run_run_status,
+    )
 
     clone_statefulset.side_effect = CactusOrchestratorException("fail")
     select_user.return_value = User(
@@ -258,7 +274,8 @@ def test_post_spawn_test_teardown_on_failure(client, valid_user_jwt, valid_user_
     # Assert
     assert res.status_code == HTTPStatus.INTERNAL_SERVER_ERROR
     teardown_teststack.assert_called_once()
-    insert_run_for_user.assert_not_called()
+    insert_run_for_user.assert_called_once()
+    update_run_run_status.assert_not_called()
 
 
 @patch.multiple(

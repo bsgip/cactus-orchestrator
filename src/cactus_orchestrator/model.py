@@ -50,6 +50,7 @@ class RunStatus(IntEnum):
     finalised_by_client = auto()  # Run has been terminated by client finalisation
     finalised_by_timeout = auto()  # Run has been terminated by timeout finalisation
     terminated = auto()  # Run was never explicitly finalised, shutdown somehow.
+    provisioning = auto()  # Run has just been created - k8s services will be started next.
 
 
 class Run(Base):

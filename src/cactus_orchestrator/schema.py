@@ -8,6 +8,7 @@ class RunStatusResponse(StrEnum):
     initialised = auto()
     started = auto()
     finalised = auto()
+    provisioning = auto()
 
 
 class InitRunRequest(BaseModel):

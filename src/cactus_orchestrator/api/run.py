@@ -55,6 +55,8 @@ def map_run_to_run_response(run: Run) -> RunResponse:
         status = RunStatusResponse.initialised
     elif run.run_status == RunStatus.started:
         status = RunStatusResponse.started
+    elif run.run_status == RunStatus.provisioning:
+        status = RunStatusResponse.provisioning
 
     return RunResponse(
         run_id=run.run_id,
@@ -139,6 +141,12 @@ async def spawn_teststack_and_init_run(
         teststack_id = generate_dynamic_test_stack_id()
 
     new_svc_name, new_statefulset_name, new_app_label, pod_name, pod_fqdn = get_resource_names(teststack_id)
+
+    # Create the run in a "provisioning" state so we can access the run_id
+    run_id = await insert_run_for_user(
+        db.session, user.user_id, teststack_id, test.test_procedure_id, RunStatus.provisioning
+    )
+
     try:
         # duplicate resources
         await clone_statefulset(new_statefulset_name, new_svc_name, new_app_label)
@@ -157,6 +165,7 @@ async def spawn_teststack_and_init_run(
                 test_id=test.test_procedure_id,
                 aggregator_certificate=client_cert.public_bytes(serialization.Encoding.PEM).decode("utf-8"),
                 subscription_domain=user.subscription_domain,
+                run_id=str(run_id),
             )
 
         # finally, include new service in ingress rule
@@ -167,10 +176,8 @@ async def spawn_teststack_and_init_run(
         await teardown_teststack(new_svc_name, new_statefulset_name)
         raise HTTPException(HTTPStatus.INTERNAL_SERVER_ERROR, detail="Internal Server Error")
 
-    # track in DB
-    run_id = await insert_run_for_user(
-        db.session, user.user_id, teststack_id, test.test_procedure_id, RunStatus.initialised
-    )
+    # commit DB changes
+    await update_run_run_status(db.session, run_id, RunStatus.initialised)
     await db.session.commit()
 
     # set location header
