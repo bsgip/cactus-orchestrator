@@ -572,6 +572,7 @@ def test_get_run_exists(client, valid_user_jwt):
         finalised_at=datetime(2025, 1, 2, tzinfo=timezone.utc),
         run_artifact_id=1,
         run_status=RunStatus.started,
+        all_criteria_met=True,
     )
     select_user_run.return_value = mock_run
 
@@ -588,6 +589,7 @@ def test_get_run_exists(client, valid_user_jwt):
     run_response = RunResponse.model_validate_json(res.text)
     assert run_response.run_id == mock_run.run_id
     assert run_response.test_url
+    assert run_response.all_criteria_met is mock_run.all_criteria_met
     select_user.assert_called_once()
     select_user_run.assert_called_once()
 

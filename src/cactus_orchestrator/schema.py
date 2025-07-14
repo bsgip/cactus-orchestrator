@@ -28,6 +28,7 @@ class RunResponse(BaseModel):
     test_procedure_id: str
     test_url: str
     status: RunStatusResponse
+    all_criteria_met: bool | None  # Whether this run has been assessed as successful or not (None means unknown)
 
 
 class UserContext(BaseModel):
