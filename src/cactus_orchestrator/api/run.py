@@ -234,18 +234,42 @@ async def teardown_teststack(svc_name: str, statefulset_name: str) -> None:
     await delete_statefulset(statefulset_name)
 
 
+def is_all_criteria_met(runner_status: RunnerStatus | None) -> bool | None:
+
+    if runner_status is None:
+        return None
+
+    criteria = runner_status.criteria if runner_status.criteria is not None else []
+    request_history = runner_status.request_history if runner_status.request_history is not None else []
+
+    return all((c.success for c in criteria)) and all((not bool(r.body_xml_errors) for r in request_history))
+
+
 async def finalise_run(
     run: Run, url: str, session: AsyncSession, run_status: RunStatus, finalised_at: datetime
 ) -> RunArtifact:
 
     async with ClientSession(base_url=url, timeout=ClientTimeout(30)) as s:
+
+        # We need our final status to evaluate whether all criteria are passing
+        # But we don't want to block the finalisation if there's an issue fetching it
+        try:
+            final_status = await RunnerClient.status(s)
+        except Exception as exc:
+            logger.error("Error fetching final runner status.", exc_info=exc)
+            final_status = None
+
         # NOTE: we are assuming that files are small, consider streaming to file store
         # if sizes increase.
         file_data = await RunnerClient.finalize(s)
         compression = "zip"  # TODO: should also return compression or allow access to response header
 
+    all_criteria_met = is_all_criteria_met(final_status)
+
     artifact = await create_runartifact(session, compression, file_data)
-    await update_run_with_runartifact_and_finalise(session, run, artifact.run_artifact_id, run_status, finalised_at)
+    await update_run_with_runartifact_and_finalise(
+        session, run, artifact.run_artifact_id, run_status, finalised_at, all_criteria_met
+    )
     await db.session.commit()
 
     return artifact

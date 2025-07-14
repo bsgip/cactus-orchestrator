@@ -44,6 +44,15 @@ class TestProcedureResponse(BaseModel):
     category: str
 
 
+class TestProcedureRunSummaryResponse(BaseModel):
+    __test__ = False
+    test_procedure_id: TestProcedureId
+    description: str
+    category: str
+    run_count: int  # Count of runs for this test procedure
+    latest_all_criteria_met: bool | None  # Value for all_criteria_met of the most recent Run
+
+
 class UserConfigurationRequest(BaseModel):
     subscription_domain: str  # What domain will outgoing notifications be scoped to?
     is_static_uri: bool  # If true - all test instances will share the same URI (limit to 1 test at a time)

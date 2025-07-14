@@ -1,13 +1,13 @@
 import os
 from datetime import datetime, timezone
-from http import HTTPStatus
+from http import HTTPMethod, HTTPStatus
 from typing import Generator
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 from assertical.fake.generator import generate_class_instance
 from assertical.fake.sqlalchemy import assert_mock_session, create_mock_session
-from cactus_runner.models import RunnerStatus
+from cactus_runner.models import CriteriaEntry, RequestEntry, RunnerStatus
 from cactus_test_definitions import TestProcedureId
 from cryptography.hazmat.primitives import serialization
 from fastapi.testclient import TestClient
@@ -15,8 +15,9 @@ from fastapi_pagination import Params, set_params
 from sqlalchemy.exc import NoResultFound
 
 from cactus_orchestrator.api.certificate import _ca_crt_cachekey, update_ca_certificate_cache
-from cactus_orchestrator.api.run import finalise_run, teardown_teststack
+from cactus_orchestrator.api.run import finalise_run, is_all_criteria_met, teardown_teststack
 from cactus_orchestrator.cache import AsyncCache, ExpiringValue
+from cactus_orchestrator.crud import ProcedureRunAggregated
 from cactus_orchestrator.k8s.run_id import generate_envoy_dcap_uri, generate_static_test_stack_id
 from cactus_orchestrator.main import app
 from cactus_orchestrator.model import Run, RunArtifact, RunStatus, User
@@ -26,6 +27,7 @@ from cactus_orchestrator.schema import (
     RunResponse,
     StartRunResponse,
     TestProcedureResponse,
+    TestProcedureRunSummaryResponse,
     UserConfigurationRequest,
 )
 from cactus_orchestrator.settings import CactusOrchestratorException
@@ -422,6 +424,91 @@ def test_get_test_procedures_by_id(client, valid_user_jwt, run_id, status):
 
 
 @patch.multiple(
+    "cactus_orchestrator.api.procedure",
+    select_user_or_raise=AsyncMock(),
+    select_user_runs_aggregated_by_procedure=AsyncMock(),
+)
+def test_get_procedure_run_summaries(client, valid_user_jwt):
+    """Test retrieving procedure run summaries"""
+    from cactus_orchestrator.api.procedure import select_user_or_raise, select_user_runs_aggregated_by_procedure
+
+    # Arrange
+    set_params(Params(size=10, page=1))
+    select_user_or_raise.return_value = User(user_id=1, subject_id="sub", issuer_id="iss")
+
+    select_user_runs_aggregated_by_procedure.return_value = [
+        ProcedureRunAggregated(TestProcedureId.LOA_08, 123, True),
+        ProcedureRunAggregated(TestProcedureId.ALL_02, 0, None),
+    ]
+
+    # Act
+    res = client.get("/procedure_runs", headers={"Authorization": f"Bearer {valid_user_jwt}"})
+
+    # Assert
+    assert res.status_code == HTTPStatus.OK
+    data = res.json()
+    assert isinstance(data, list)
+    assert len(data) == 2
+
+    items = [TestProcedureRunSummaryResponse.model_validate(d) for d in data]
+    assert items[0].test_procedure_id == TestProcedureId.LOA_08
+    assert items[0].run_count == 123
+    assert items[0].latest_all_criteria_met is True
+    assert len(items[0].category), "Should not be an empty string"
+    assert len(items[0].description), "Should not be an empty string"
+
+    assert items[1].test_procedure_id == TestProcedureId.ALL_02
+    assert items[1].run_count == 0
+    assert items[1].latest_all_criteria_met is None
+    assert len(items[1].category), "Should not be an empty string"
+    assert len(items[1].description), "Should not be an empty string"
+
+    assert items[0].category != items[1].category
+    assert items[0].description != items[1].description
+
+    select_user_or_raise.assert_called_once()
+    select_user_runs_aggregated_by_procedure.assert_called_once()
+
+
+@patch.multiple(
+    "cactus_orchestrator.api.procedure",
+    select_user_or_raise=AsyncMock(),
+    select_user_runs_for_procedure=AsyncMock(),
+)
+def test_get_runs_for_procedure(client, valid_user_jwt):
+    """Test retrieving paginated user runs (underneath a procedure)"""
+    from cactus_orchestrator.api.procedure import select_user_or_raise, select_user_runs_for_procedure
+
+    # Arrange
+    set_params(Params(size=10, page=1))
+    select_user_or_raise.return_value = User(user_id=1, subject_id="sub", issuer_id="iss")
+    mock_run = Run(
+        run_id=1,
+        user_id=1,
+        teststack_id="abc",
+        testprocedure_id="ALL-01",
+        created_at=datetime(2025, 1, 1, tzinfo=timezone.utc),
+        finalised_at=datetime(2025, 1, 2, tzinfo=timezone.utc),
+        run_artifact_id=1,
+        run_status=RunStatus.started,
+    )
+    select_user_runs_for_procedure.return_value = [mock_run]
+
+    # Act
+    res = client.get("/procedure_runs/ALL-01", headers={"Authorization": f"Bearer {valid_user_jwt}"})
+
+    # Assert
+    assert res.status_code == HTTPStatus.OK
+    data = res.json()
+    assert isinstance(data, dict)
+    assert "items" in data
+    assert len(data["items"]) == 1
+    assert data["items"][0]["run_id"] == 1
+    select_user_or_raise.assert_called_once()
+    select_user_runs_for_procedure.assert_called_once()
+
+
+@patch.multiple(
     "cactus_orchestrator.api.run",
     select_user=AsyncMock(),
     select_user_runs=AsyncMock(),
@@ -547,17 +634,92 @@ async def test_teardown_teststack(mock_delete_statefulset, mock_delete_service, 
     mock_delete_statefulset.assert_called_once_with("test-statefulset")
 
 
+@pytest.mark.parametrize(
+    "runner_status, expected",
+    [
+        (None, None),
+        (
+            generate_class_instance(
+                RunnerStatus,
+                step_status={},
+                criteria=[CriteriaEntry(True, "", ""), CriteriaEntry(True, "", "")],
+                request_history=[
+                    RequestEntry("", "", HTTPMethod.GET, HTTPStatus.BAD_REQUEST, datetime.now(), "", []),
+                    RequestEntry("", "", HTTPMethod.POST, HTTPStatus.OK, datetime.now(), "", None),
+                ],
+            ),
+            True,
+        ),
+        (
+            generate_class_instance(
+                RunnerStatus,
+                step_status={},
+                criteria=[],
+                request_history=[],
+            ),
+            True,
+        ),
+        (
+            generate_class_instance(
+                RunnerStatus,
+                step_status={},
+                criteria=None,
+                request_history=None,
+            ),
+            True,
+        ),
+        (
+            generate_class_instance(
+                RunnerStatus,
+                step_status={},
+                criteria=[CriteriaEntry(True, "", ""), CriteriaEntry(True, "", "")],
+                request_history=[
+                    RequestEntry("", "", HTTPMethod.GET, HTTPStatus.BAD_REQUEST, datetime.now(), "", None),
+                    RequestEntry("", "", HTTPMethod.POST, HTTPStatus.OK, datetime.now(), "", ["validation error"]),
+                ],
+            ),
+            False,
+        ),  # validation error
+        (
+            generate_class_instance(
+                RunnerStatus,
+                step_status={},
+                criteria=[CriteriaEntry(True, "", ""), CriteriaEntry(False, "", "")],
+                request_history=[
+                    RequestEntry("", "", HTTPMethod.GET, HTTPStatus.BAD_REQUEST, datetime.now(), "", None),
+                    RequestEntry("", "", HTTPMethod.POST, HTTPStatus.OK, datetime.now(), "", []),
+                ],
+            ),
+            False,
+        ),  # criteria error
+    ],
+)
+def test_is_all_criteria_met(runner_status: RunnerStatus | None, expected: bool | None):
+    actual = is_all_criteria_met(runner_status)
+    assert actual is expected
+
+
 @pytest.mark.asyncio
+@patch("cactus_orchestrator.api.run.is_all_criteria_met")
+@patch("cactus_orchestrator.api.run.RunnerClient.status")
 @patch("cactus_orchestrator.api.run.RunnerClient.finalize")
 @patch("cactus_orchestrator.api.run.create_runartifact")
 @patch("cactus_orchestrator.api.run.update_run_with_runartifact_and_finalise")
 @patch("cactus_orchestrator.api.run.db")
 async def test_finalise_run_creates_run_artifact_and_updates_run(
-    mock_db, mock_update_run_with_runartifact_and_finalise, mock_create_runartifact, mock_finalize
+    mock_db,
+    mock_update_run_with_runartifact_and_finalise,
+    mock_create_runartifact,
+    mock_finalize,
+    mock_status,
+    mock_is_all_criteria_met,
 ):
     # Arrange
+    runner_status = generate_class_instance(RunnerStatus, step_status={})
     mock_finalize.return_value = "file_data"  # TODO: this should be bytes, fix in client
+    mock_status.return_value = runner_status
     mock_create_runartifact.return_value = RunArtifact(run_artifact_id=1)
+    mock_is_all_criteria_met.return_value = True
 
     mock_db_session = create_mock_session()
     mock_db.session = mock_db_session
@@ -568,6 +730,44 @@ async def test_finalise_run_creates_run_artifact_and_updates_run(
 
     # Assert
     assert_mock_session(mock_db_session, committed=True)
+    mock_is_all_criteria_met.assert_called_once_with(runner_status)
+    mock_finalize.assert_called_once()
+    mock_create_runartifact.assert_called_once()
+    mock_update_run_with_runartifact_and_finalise.assert_called_once()
+
+
+@pytest.mark.asyncio
+@patch("cactus_orchestrator.api.run.is_all_criteria_met")
+@patch("cactus_orchestrator.api.run.RunnerClient.status")
+@patch("cactus_orchestrator.api.run.RunnerClient.finalize")
+@patch("cactus_orchestrator.api.run.create_runartifact")
+@patch("cactus_orchestrator.api.run.update_run_with_runartifact_and_finalise")
+@patch("cactus_orchestrator.api.run.db")
+async def test_finalise_run_creates_run_artifact_and_updates_run_status_error(
+    mock_db,
+    mock_update_run_with_runartifact_and_finalise,
+    mock_create_runartifact,
+    mock_finalize,
+    mock_status,
+    mock_is_all_criteria_met,
+):
+    """Tests that even if the status endpoint raises an error - we still proceed"""
+    # Arrange
+    mock_finalize.return_value = "file_data"  # TODO: this should be bytes, fix in client
+    mock_status.side_effect = Exception("mock error during status fetch")
+    mock_create_runartifact.return_value = RunArtifact(run_artifact_id=1)
+    mock_is_all_criteria_met.return_value = True
+
+    mock_db_session = create_mock_session()
+    mock_db.session = mock_db_session
+
+    # Act
+    run = Run(teststack_id=1)
+    await finalise_run(run, "http://mockurl", Mock(), RunStatus.finalised_by_client, datetime.now(timezone.utc))
+
+    # Assert
+    assert_mock_session(mock_db_session, committed=True)
+    mock_is_all_criteria_met.assert_called_once_with(None)
     mock_finalize.assert_called_once()
     mock_create_runartifact.assert_called_once()
     mock_update_run_with_runartifact_and_finalise.assert_called_once()

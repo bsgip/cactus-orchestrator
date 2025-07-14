@@ -2,13 +2,16 @@ from datetime import datetime, timezone
 from itertools import product
 
 import pytest
+from assertical.asserts.type import assert_list_type
 from assertical.fixtures.postgres import generate_async_session
+from cactus_test_definitions.test_procedures import TestProcedureId
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
 from cactus_orchestrator.crud import (
+    ProcedureRunAggregated,
     insert_run_for_user,
     insert_user,
     select_nonfinalised_runs,
@@ -16,12 +19,14 @@ from cactus_orchestrator.crud import (
     select_user_run,
     select_user_run_with_artifact,
     select_user_runs,
+    select_user_runs_aggregated_by_procedure,
+    select_user_runs_for_procedure,
     update_run_run_status,
     update_run_with_runartifact_and_finalise,
     upsert_user,
 )
 from cactus_orchestrator.k8s.certificate.create import generate_client_p12
-from cactus_orchestrator.model import RunStatus, Run
+from cactus_orchestrator.model import Run, RunStatus
 from cactus_orchestrator.schema import UserContext
 
 
@@ -374,12 +379,19 @@ async def test_select_user_run(pg_empty_conn):
     assert run.run_id == 1
 
 
+@pytest.mark.parametrize(
+    "run_status, finalised_at, all_criteria_met",
+    [
+        (RunStatus.finalised_by_client, datetime(2025, 1, 1, tzinfo=timezone.utc), True),
+        (RunStatus.finalised_by_timeout, datetime(2025, 2, 2, tzinfo=timezone.utc), False),
+        (RunStatus.finalised_by_client, datetime(2025, 3, 3, tzinfo=timezone.utc), None),
+    ],
+)
 @pytest.mark.asyncio
-async def test_update_run_with_runartifact_and_finalise(pg_empty_conn):
+async def test_update_run_with_runartifact_and_finalise(pg_empty_conn, run_status, finalised_at, all_criteria_met):
     """Test updating a run with a run artifact and finalisation status."""
     # Arrange
     run = Run(user_id=1, teststack_id="teststack1", testprocedure_id="ALL01", run_status=0)
-    finalised_at = datetime(2025, 1, 1, tzinfo=timezone.utc)
     pg_empty_conn.execute(
         text(
             """
@@ -409,14 +421,17 @@ async def test_update_run_with_runartifact_and_finalise(pg_empty_conn):
     # Act
     async with generate_async_session(pg_empty_conn.connection) as session:
         run = await select_user_run(session, 1, 1)
-        await update_run_with_runartifact_and_finalise(session, run, 1, RunStatus.finalised_by_client, finalised_at)
+        await update_run_with_runartifact_and_finalise(session, run, 1, run_status, finalised_at, all_criteria_met)
         await session.commit()
 
     # Assert
-    result = pg_empty_conn.execute(text("SELECT run_artifact_id, run_status, finalised_at FROM run")).fetchone()
+    result = pg_empty_conn.execute(
+        text("SELECT run_artifact_id, run_status, finalised_at, all_criteria_met FROM run")
+    ).fetchone()
     assert result[0] == 1
-    assert result[1] == RunStatus.finalised_by_client.value
+    assert result[1] == run_status.value
     assert result[2] == finalised_at
+    assert result[3] == all_criteria_met
 
 
 @pytest.mark.asyncio
@@ -492,3 +507,150 @@ async def test_select_user(pg_empty_conn, with_der: bool, with_p12: bool):
         else:
             with pytest.raises(Exception):
                 user.certificate_p12_bundle
+
+
+@pytest.mark.asyncio
+async def test_select_user_runs_aggregated_by_procedure(pg_empty_conn):
+    # Arrange
+    pg_empty_conn.execute(
+        text(
+            """
+            INSERT INTO user_ (id, subject_id, issuer_id, certificate_p12_bundle, certificate_x509_der)
+            VALUES (1, 'user1', 'issuer1', E'\\x', E'\\x');
+            INSERT INTO user_ (id, subject_id, issuer_id, certificate_p12_bundle, certificate_x509_der)
+            VALUES (2, 'user2', 'issuer2', E'\\x', E'\\x');
+
+            INSERT INTO run (user_id, teststack_id, testprocedure_id, run_status, all_criteria_met)
+            VALUES (1, '', 'NOT-A-TEST-ID', 1, true);
+
+            INSERT INTO run (user_id, teststack_id, testprocedure_id, run_status, all_criteria_met)
+            VALUES (1, '', 'ALL-01', 1, true);
+            INSERT INTO run (user_id, teststack_id, testprocedure_id, run_status, all_criteria_met)
+            VALUES (1, '', 'ALL-01', 1, false);
+
+            INSERT INTO run (user_id, teststack_id, testprocedure_id, run_status, all_criteria_met)
+            VALUES (1, '', 'ALL-02', 1, NULL);
+
+            INSERT INTO run (user_id, teststack_id, testprocedure_id, run_status, all_criteria_met)
+            VALUES (1, '', 'ALL-03', 1, true);
+
+            INSERT INTO run (user_id, teststack_id, testprocedure_id, run_status, all_criteria_met)
+            VALUES (1, '', 'ALL-04', 1, NULL);
+            INSERT INTO run (user_id, teststack_id, testprocedure_id, run_status, all_criteria_met)
+            VALUES (1, '', 'ALL-04', 1, true);
+
+            INSERT INTO run (user_id, teststack_id, testprocedure_id, run_status, all_criteria_met)
+            VALUES (1, '', 'ALL-05', 1, true);
+            INSERT INTO run (user_id, teststack_id, testprocedure_id, run_status, all_criteria_met)
+            VALUES (1, '', 'ALL-05', 1, true);
+
+            INSERT INTO run (user_id, teststack_id, testprocedure_id, run_status, all_criteria_met)
+            VALUES (1, '', 'ALL-06', 1, true);
+            INSERT INTO run (user_id, teststack_id, testprocedure_id, run_status, all_criteria_met)
+            VALUES (1, '', 'ALL-06', 1, NULL);
+
+            INSERT INTO run (user_id, teststack_id, testprocedure_id, run_status, all_criteria_met)
+            VALUES (2, '', 'ALL-01', 1, false);
+            INSERT INTO run (user_id, teststack_id, testprocedure_id, run_status, all_criteria_met)
+            VALUES (2, '', 'ALL-01', 1, NULL);
+            INSERT INTO run (user_id, teststack_id, testprocedure_id, run_status, all_criteria_met)
+            VALUES (2, '', 'ALL-01', 1, true);
+            
+            """
+        )
+    )
+    pg_empty_conn.commit()
+
+    # Act
+    async with generate_async_session(pg_empty_conn.connection) as session:
+        user_1_result = await select_user_runs_aggregated_by_procedure(session, 1)
+        assert_list_type(ProcedureRunAggregated, user_1_result, len(TestProcedureId))
+        assert ProcedureRunAggregated(TestProcedureId.ALL_01, 2, False) in user_1_result
+        assert ProcedureRunAggregated(TestProcedureId.ALL_02, 1, None) in user_1_result
+        assert ProcedureRunAggregated(TestProcedureId.ALL_03, 1, True) in user_1_result
+        assert ProcedureRunAggregated(TestProcedureId.ALL_04, 2, True) in user_1_result
+        assert ProcedureRunAggregated(TestProcedureId.ALL_05, 2, True) in user_1_result
+        assert ProcedureRunAggregated(TestProcedureId.ALL_06, 2, None) in user_1_result
+        assert ProcedureRunAggregated(TestProcedureId.GEN_01, 0, None) in user_1_result
+
+        user_2_result = await select_user_runs_aggregated_by_procedure(session, 2)
+        assert_list_type(ProcedureRunAggregated, user_2_result, len(TestProcedureId))
+        assert ProcedureRunAggregated(TestProcedureId.ALL_01, 3, True) in user_2_result
+        assert ProcedureRunAggregated(TestProcedureId.ALL_02, 0, None) in user_2_result
+
+        user_3_result = await select_user_runs_aggregated_by_procedure(session, 3)
+        assert_list_type(ProcedureRunAggregated, user_3_result, len(TestProcedureId))
+        assert ProcedureRunAggregated(TestProcedureId.ALL_01, 0, None) in user_3_result
+
+
+@pytest.mark.asyncio
+async def test_select_user_runs_for_procedure(pg_empty_conn):
+    # Arrange
+    pg_empty_conn.execute(
+        text(
+            """
+            INSERT INTO user_ (id, subject_id, issuer_id, certificate_p12_bundle, certificate_x509_der)
+            VALUES (1, 'user1', 'issuer1', E'\\x', E'\\x');
+            INSERT INTO user_ (id, subject_id, issuer_id, certificate_p12_bundle, certificate_x509_der)
+            VALUES (2, 'user2', 'issuer2', E'\\x', E'\\x');
+
+            INSERT INTO run (user_id, teststack_id, testprocedure_id, run_status, all_criteria_met)
+            VALUES (1, '', 'NOT-A-TEST-ID', 1, true);
+
+            INSERT INTO run (user_id, teststack_id, testprocedure_id, run_status, all_criteria_met)
+            VALUES (1, '', 'ALL-01', 1, true);
+            INSERT INTO run (user_id, teststack_id, testprocedure_id, run_status, all_criteria_met)
+            VALUES (1, '', 'ALL-01', 1, false);
+
+            INSERT INTO run (user_id, teststack_id, testprocedure_id, run_status, all_criteria_met)
+            VALUES (1, '', 'ALL-02', 1, NULL);
+
+            INSERT INTO run (user_id, teststack_id, testprocedure_id, run_status, all_criteria_met)
+            VALUES (1, '', 'ALL-03', 1, true);
+
+            INSERT INTO run (user_id, teststack_id, testprocedure_id, run_status, all_criteria_met)
+            VALUES (1, '', 'ALL-04', 1, NULL);
+            INSERT INTO run (user_id, teststack_id, testprocedure_id, run_status, all_criteria_met)
+            VALUES (1, '', 'ALL-04', 1, true);
+
+            INSERT INTO run (user_id, teststack_id, testprocedure_id, run_status, all_criteria_met)
+            VALUES (1, '', 'ALL-05', 1, true);
+            INSERT INTO run (user_id, teststack_id, testprocedure_id, run_status, all_criteria_met)
+            VALUES (1, '', 'ALL-05', 1, true);
+
+            INSERT INTO run (user_id, teststack_id, testprocedure_id, run_status, all_criteria_met)
+            VALUES (1, '', 'ALL-06', 1, true);
+            INSERT INTO run (user_id, teststack_id, testprocedure_id, run_status, all_criteria_met)
+            VALUES (1, '', 'ALL-06', 1, NULL);
+
+            INSERT INTO run (user_id, teststack_id, testprocedure_id, run_status, all_criteria_met)
+            VALUES (2, '', 'ALL-01', 1, false);
+            INSERT INTO run (user_id, teststack_id, testprocedure_id, run_status, all_criteria_met)
+            VALUES (2, '', 'ALL-01', 1, NULL);
+            INSERT INTO run (user_id, teststack_id, testprocedure_id, run_status, all_criteria_met)
+            VALUES (2, '', 'ALL-01', 1, true);
+            
+            """
+        )
+    )
+    pg_empty_conn.commit()
+
+    # Act
+    async with generate_async_session(pg_empty_conn.connection) as session:
+        all01_1_result = await select_user_runs_for_procedure(session, 1, "ALL-01")
+        assert_list_type(Run, all01_1_result, 2)
+        assert [run.run_id for run in all01_1_result] == [3, 2]
+
+        all02_1_result = await select_user_runs_for_procedure(session, 1, "ALL-02")
+        assert_list_type(Run, all02_1_result, 1)
+        assert [run.run_id for run in all02_1_result] == [4]
+
+        all01_2_result = await select_user_runs_for_procedure(session, 2, "ALL-01")
+        assert_list_type(Run, all01_2_result, 3)
+        assert [run.run_id for run in all01_2_result] == [14, 13, 12]
+
+        all01_3_result = await select_user_runs_for_procedure(session, 3, "ALL-01")
+        assert_list_type(Run, all01_3_result, 0)
+
+        all01yaml_1_result = await select_user_runs_for_procedure(session, 1, "ALL-01.yaml")
+        assert_list_type(Run, all01yaml_1_result, 0)

@@ -1,7 +1,7 @@
 from datetime import datetime
 from enum import IntEnum, auto
 
-from sqlalchemy import BOOLEAN, DateTime, ForeignKey, Index, Integer, LargeBinary, String, UniqueConstraint, func
+from sqlalchemy import BOOLEAN, DateTime, ForeignKey, Index, Integer, LargeBinary, String, UniqueConstraint, desc, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -67,6 +67,12 @@ class Run(Base):
             "user_id",
             "run_status",
         ),
+        Index(
+            "user_id_testprocedure_id_run_id_idx",
+            "user_id",
+            "testprocedure_id",
+            desc("id"),
+        ),
     )
 
     run_id: Mapped[int] = mapped_column(name="id", primary_key=True, autoincrement=True)
@@ -80,6 +86,10 @@ class Run(Base):
 
     finalised_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, default=None)
     run_status: Mapped[RunStatus] = mapped_column(Integer, nullable=False)
+
+    all_criteria_met: Mapped[bool | None] = mapped_column(
+        BOOLEAN, nullable=True
+    )  # True if EVERY criteria was met at run finalisation. False if there were issues. None if no data/still running
 
     run_artifact_id: Mapped[int] = mapped_column(ForeignKey("run_artifact.id"), nullable=True)
     run_artifact: Mapped["RunArtifact"] = relationship(lazy="raise")
