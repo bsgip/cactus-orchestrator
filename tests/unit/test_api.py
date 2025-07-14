@@ -403,6 +403,24 @@ def test_get_test_procedure_list_populated(client, valid_user_jwt):
     assert data["items"][0]["test_procedure_id"] == "ALL-01"
 
 
+@pytest.mark.parametrize(
+    "run_id, status", [("ALL-01", 200), ("LOA-02", 200), ("GEN-03", 200), ("../ALL-01", 404), ("./ALL-01.yaml", 404)]
+)
+def test_get_test_procedures_by_id(client, valid_user_jwt, run_id, status):
+    """Test we can fetch individual test procedures by id"""
+    # Arrange
+    set_params(Params(size=10, page=1))
+
+    # Act
+    res = client.get(f"/procedure/{run_id}", headers={"Authorization": f"Bearer {valid_user_jwt}"})
+
+    # Assert
+    assert res.status_code == status
+    if status == 200:
+        res.headers["Content-Type"] == "application/yaml"
+        assert len(res.text) > 10
+
+
 @patch.multiple(
     "cactus_orchestrator.api.run",
     select_user=AsyncMock(),
