@@ -244,6 +244,25 @@ async def finalise_run(
     return artifact
 
 
+@router.get("/run/{run_id}", status_code=HTTPStatus.OK)
+async def get_individual_run(
+    run_id: int,
+    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_scopes({AuthScopes.user_all}))],
+) -> RunResponse:
+
+    # get user
+    user = await select_user_or_raise(db.session, user_context)
+
+    # get run
+    try:
+        run = await select_user_run(db.session, user.user_id, run_id)
+    except NoResultFound as exc:
+        logger.debug(exc)
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Not Found")
+
+    return map_run_to_run_response(run)
+
+
 @router.post("/run/{run_id}/finalise", status_code=HTTPStatus.OK)
 async def finalise_run_and_teardown_teststack(
     run_id: int,

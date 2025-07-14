@@ -23,6 +23,7 @@ from cactus_orchestrator.model import Run, RunArtifact, RunStatus, User
 from cactus_orchestrator.schema import (
     InitRunRequest,
     InitRunResponse,
+    RunResponse,
     StartRunResponse,
     TestProcedureResponse,
     UserConfigurationRequest,
@@ -426,6 +427,75 @@ def test_get_runs_paginated(client, valid_user_jwt):
     assert data["items"][0]["run_id"] == 1
     select_user.assert_called_once()
     select_user_runs.assert_called_once()
+
+
+@patch.multiple(
+    "cactus_orchestrator.api.run",
+    select_user=AsyncMock(),
+    select_user_run=AsyncMock(),
+)
+def test_get_run_exists(client, valid_user_jwt):
+    """Test retrieving paginated user runs"""
+    from cactus_orchestrator.api.run import select_user, select_user_run
+
+    # Arrange
+    set_params(Params(size=10, page=1))
+    select_user.return_value = User(user_id=1, subject_id="sub", issuer_id="iss")
+    mock_run = Run(
+        run_id=123,
+        user_id=1,
+        teststack_id="abc",
+        testprocedure_id="ALL-01",
+        created_at=datetime(2025, 1, 1, tzinfo=timezone.utc),
+        finalised_at=datetime(2025, 1, 2, tzinfo=timezone.utc),
+        run_artifact_id=1,
+        run_status=RunStatus.started,
+    )
+    select_user_run.return_value = mock_run
+
+    params = {
+        "finalised": True,
+        "created_after": datetime(2025, 1, 1, tzinfo=timezone.utc).isoformat(),
+    }
+
+    # Act
+    res = client.get("/run/123", params=params, headers={"Authorization": f"Bearer {valid_user_jwt}"})
+
+    # Assert
+    assert res.status_code == HTTPStatus.OK
+    run_response = RunResponse.model_validate_json(res.text)
+    assert run_response.run_id == mock_run.run_id
+    assert run_response.test_url
+    select_user.assert_called_once()
+    select_user_run.assert_called_once()
+
+
+@patch.multiple(
+    "cactus_orchestrator.api.run",
+    select_user=AsyncMock(),
+    select_user_run=AsyncMock(),
+)
+def test_get_run_missing(client, valid_user_jwt):
+    """Test retrieving paginated user runs"""
+    from cactus_orchestrator.api.run import select_user, select_user_run
+
+    # Arrange
+    set_params(Params(size=10, page=1))
+    select_user.return_value = User(user_id=1, subject_id="sub", issuer_id="iss")
+    select_user_run.side_effect = NoResultFound()
+
+    params = {
+        "finalised": True,
+        "created_after": datetime(2025, 1, 1, tzinfo=timezone.utc).isoformat(),
+    }
+
+    # Act
+    res = client.get("/run/123", params=params, headers={"Authorization": f"Bearer {valid_user_jwt}"})
+
+    # Assert
+    assert res.status_code == HTTPStatus.NOT_FOUND
+    select_user.assert_called_once()
+    select_user_run.assert_called_once()
 
 
 @pytest.mark.asyncio
