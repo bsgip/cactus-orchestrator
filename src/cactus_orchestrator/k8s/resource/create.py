@@ -139,19 +139,26 @@ async def is_pod_ready(pod_name: str, namespace: str | None = None) -> bool:
 
     # pod conditions: https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/#pod-conditions
     conditions = pod.status.conditions or []
+    logger.error(f"{namespace} {pod_name}: len(conditions): {len(conditions)}")  # bacon
     for condition in conditions:
+        logger.error(f"condition {condition}")  # bacon
+        logger.error(f"condition.type {condition.type}")  # bacon
+        logger.error(f"condition.status {condition.status}")  # bacon
         if condition.type.lower() == "ready" and condition.status.lower() == "true":
             return True
     return False
 
 
-async def wait_for_pod(pod_name: str, max_retries: int = 10, wait_interval: int = 5) -> None:
+# async def wait_for_pod(pod_name: str, max_retries: int = 10, wait_interval: int = 5) -> None:
+async def wait_for_pod(pod_name: str, max_retries: int = 9999, wait_interval: int = 5) -> None:  # bacon
     """Polls pod to check for readiness"""
     for attempt in range(max_retries):
         if await is_pod_ready(pod_name):
-            logger.debug(f"pod ({pod_name}) is ready.")
+            # logger.debug(f"pod ({pod_name}) is ready.")
+            logger.error(f"pod ({pod_name}) is ready.")  # bacon
             return
-        logger.debug(f"pod ({pod_name}) is not ready. retry..")
+        # logger.debug(f"pod ({pod_name}) is not ready. retry..")
+        logger.error(f"pod ({pod_name}) is not ready. retry..")  # bacon
         await asyncio.sleep(wait_interval)
 
     raise CactusOrchestratorException(f"{pod_name} failed to start.")
