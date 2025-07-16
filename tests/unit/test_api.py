@@ -590,6 +590,8 @@ def test_get_run_exists(client, valid_user_jwt):
     assert run_response.run_id == mock_run.run_id
     assert run_response.test_url
     assert run_response.all_criteria_met is mock_run.all_criteria_met
+    assert run_response.created_at == mock_run.created_at
+    assert run_response.finalised_at == mock_run.finalised_at
     select_user.assert_called_once()
     select_user_run.assert_called_once()
 

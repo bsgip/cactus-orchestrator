@@ -1,3 +1,4 @@
+from datetime import datetime
 from enum import StrEnum, auto
 
 from cactus_test_definitions import TestProcedureId
@@ -29,6 +30,8 @@ class RunResponse(BaseModel):
     test_url: str
     status: RunStatusResponse
     all_criteria_met: bool | None  # Whether this run has been assessed as successful or not (None means unknown)
+    created_at: datetime
+    finalised_at: datetime | None
 
 
 class UserContext(BaseModel):
