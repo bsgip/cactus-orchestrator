@@ -64,6 +64,8 @@ def map_run_to_run_response(run: Run) -> RunResponse:
         test_url=generate_envoy_dcap_uri(run.teststack_id),
         status=status,
         all_criteria_met=run.all_criteria_met,
+        created_at=run.created_at,
+        finalised_at=run.finalised_at,
     )
 
 
