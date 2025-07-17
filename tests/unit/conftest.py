@@ -6,18 +6,18 @@ from typing import Any, Generator
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
+from assertical.fixtures.postgres import generate_async_conn_str_from_connection
 from cryptography import x509
 from cryptography.hazmat.primitives import asymmetric, hashes, serialization
 from cryptography.x509.oid import NameOID
 from jose import jwt
 from kubernetes.client import V1Secret
 from sqlalchemy import Connection, NullPool, create_engine
-from assertical.fixtures.postgres import generate_async_conn_str_from_connection
 
-from cactus_orchestrator.settings import get_current_settings, _reset_current_settings
-from cactus_orchestrator.main import generate_app
 from cactus_orchestrator.k8s.certificate.create import generate_client_p12
+from cactus_orchestrator.main import generate_app
 from cactus_orchestrator.model import Base
+from cactus_orchestrator.settings import _reset_current_settings, get_current_settings
 
 
 @pytest.fixture(scope="function", autouse=True)
@@ -71,6 +71,21 @@ def ca_cert_key_pair():
 def valid_user_p12_and_der(ca_cert_key_pair) -> tuple[bytes, bytes]:
     ca_cert, ca_key = ca_cert_key_pair
     cl_p12, cl_x509 = generate_client_p12(ca_key, ca_cert, "test", "abc")
+    cl_der = cl_x509.public_bytes(encoding=serialization.Encoding.DER)
+    return cl_p12, cl_der
+
+
+@pytest.fixture(scope="function")
+def expired_user_p12_and_der(ca_cert_key_pair) -> tuple[bytes, bytes]:
+    ca_cert, ca_key = ca_cert_key_pair
+    cl_p12, cl_x509 = generate_client_p12(
+        ca_key,
+        ca_cert,
+        "test",
+        "abc",
+        not_before=datetime.now(timezone.utc) - timedelta(days=3),
+        not_after=datetime.now(timezone.utc) - timedelta(minutes=1),
+    )
     cl_der = cl_x509.public_bytes(encoding=serialization.Encoding.DER)
     return cl_p12, cl_der
 

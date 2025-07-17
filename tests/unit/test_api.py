@@ -91,6 +91,50 @@ def test_post_spawn_test_created(client, valid_user_p12_and_der, valid_user_jwt)
 
 @patch.multiple(
     "cactus_orchestrator.api.run",
+    clone_statefulset=AsyncMock(),
+    wait_for_pod=AsyncMock(),
+    add_ingress_rule=AsyncMock(),
+    clone_service=AsyncMock(),
+    select_user=AsyncMock(),
+    insert_run_for_user=AsyncMock(),
+    select_user_runs=AsyncMock(),
+    update_run_run_status=AsyncMock(),
+)
+def test_post_spawn_test_expired_cert(client, expired_user_p12_and_der, valid_user_jwt):
+    """An expired cert should NOT start any services"""
+    # Arrange
+    from cactus_orchestrator.api.run import (
+        clone_statefulset,
+        insert_run_for_user,
+        select_user,
+        select_user_runs,
+        update_run_run_status,
+    )
+
+    select_user.return_value = User(
+        user_id=1,
+        subject_id="sub",
+        issuer_id="iss",
+        certificate_p12_bundle=None,
+        certificate_x509_der=expired_user_p12_and_der[1],
+        is_static_uri=False,
+    )
+
+    # Act
+    req = InitRunRequest(test_procedure_id=TestProcedureId.ALL_01.value)
+    res = client.post("run", json=req.model_dump(), headers={"Authorization": f"Bearer {valid_user_jwt}"})
+
+    # Assert
+    assert res.status_code == HTTPStatus.EXPECTATION_FAILED
+
+    insert_run_for_user.assert_not_called()
+    update_run_run_status.assert_not_called()
+    select_user_runs.assert_not_called()
+    clone_statefulset.assert_not_called()
+
+
+@patch.multiple(
+    "cactus_orchestrator.api.run",
     RunnerClient=Mock(),
     clone_statefulset=AsyncMock(),
     wait_for_pod=AsyncMock(),

@@ -120,7 +120,7 @@ async def spawn_teststack_and_init_run(
 
     if client_cert.not_valid_after_utc < datetime.now(timezone.utc):
         raise HTTPException(
-            HTTPStatus.CONFLICT,
+            HTTPStatus.EXPECTATION_FAILED,
             detail="Your certificate has expired. Please regenerate your certificate and try again.",
         )
 
