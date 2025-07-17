@@ -15,6 +15,8 @@ def generate_client_p12(
     ca_cert: x509.Certificate,
     client_common_name: str,
     p12_password: str,
+    not_before: datetime | None = None,
+    not_after: datetime | None = None,
 ) -> tuple[bytes, x509.Certificate]:
     """Generate a signed cert for client in base64 encoded pcks#12 format.
     Returns a tuple of (p12 bytes, x509.Certificate).
@@ -29,6 +31,11 @@ def generate_client_p12(
         .sign(client_key, hashes.SHA256())
     )
 
+    if not_before is None:
+        not_before = datetime.now(timezone.utc)
+    if not_after is None:
+        not_after = datetime.now(timezone.utc) + timedelta(days=VALIDITY_DAYS)
+
     # Sign it with the CA's key to generate cert
     client_cert: x509.Certificate = (
         x509.CertificateBuilder()
@@ -36,8 +43,8 @@ def generate_client_p12(
         .issuer_name(ca_cert.subject)
         .public_key(csr.public_key())
         .serial_number(x509.random_serial_number())
-        .not_valid_before(datetime.now(timezone.utc))
-        .not_valid_after(datetime.now(timezone.utc) + timedelta(days=VALIDITY_DAYS))
+        .not_valid_before(not_before)
+        .not_valid_after(not_after)
         .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
         .sign(ca_key, hashes.SHA256())
     )
