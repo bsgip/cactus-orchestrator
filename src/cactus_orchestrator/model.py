@@ -36,7 +36,9 @@ class User(Base):
         LargeBinary, nullable=False, unique=False, deferred=True
     )  # x509 DER-encoded
 
-    subscription_domain: Mapped[str] = mapped_column(String, nullable=True)  # What FQDN is allowed to be subscribed
+    subscription_domain: Mapped[str | None] = mapped_column(
+        String, nullable=True
+    )  # What FQDN is allowed to be subscribed
     is_static_uri: Mapped[bool] = mapped_column(
         BOOLEAN, server_default="0"
     )  # If True - always use the same URI for all spawned instances (this will limit them to a single run at a time)
