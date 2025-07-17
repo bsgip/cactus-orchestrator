@@ -895,6 +895,7 @@ def test_fetch_existing_config_domain_none_value(
 @pytest.mark.parametrize(
     "input_domain, input_is_static_uri, expected",
     [
+        ("", True, ""),
         ("my.domain.example", True, "my.domain.example"),
         ("my.domain.example", False, "my.domain.example"),
         ("http://my.other.example:123/foo/bar", True, "my.other.example"),

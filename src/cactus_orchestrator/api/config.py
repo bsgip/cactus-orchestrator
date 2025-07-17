@@ -47,15 +47,19 @@ async def fetch_existing_config(
 
 
 @router.post("/config", status_code=HTTPStatus.CREATED)
-async def create_subscription_domain(
+async def update_config(
     body: UserConfigurationRequest,
     user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_scopes({AuthScopes.user_all}))],
 ) -> UserConfigurationResponse:
     user = await select_user_or_raise(db.session, user_context)
-    parsed_domain = parse_domain(body.subscription_domain)
-    if not parsed_domain:
-        raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail="Expected a FQDN like 'my.example.domain'")
-    user.subscription_domain = parsed_domain
+
+    if body.subscription_domain:
+        parsed_domain = parse_domain(body.subscription_domain)
+        if not parsed_domain:
+            raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail="Expected a FQDN like 'my.example.domain'")
+        user.subscription_domain = parsed_domain
+    else:
+        user.subscription_domain = None
     user.is_static_uri = body.is_static_uri
     await db.session.commit()
 
