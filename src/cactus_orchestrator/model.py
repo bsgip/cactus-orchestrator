@@ -93,7 +93,7 @@ class Run(Base):
         BOOLEAN, nullable=True
     )  # True if EVERY criteria was met at run finalisation. False if there were issues. None if no data/still running
 
-    run_artifact_id: Mapped[int] = mapped_column(ForeignKey("run_artifact.id"), nullable=True)
+    run_artifact_id: Mapped[int | None] = mapped_column(ForeignKey("run_artifact.id"), nullable=True)
     run_artifact: Mapped["RunArtifact"] = relationship(lazy="raise")
 
 
