@@ -163,7 +163,7 @@ async def create_runartifact(session: AsyncSession, compression: str, file_data:
 async def update_run_with_runartifact_and_finalise(
     session: AsyncSession,
     run: Run,
-    run_artifact_id: int,
+    run_artifact_id: int | None,
     run_status: RunStatus,
     finalised_at: datetime,
     all_criteria_met: bool | None,
