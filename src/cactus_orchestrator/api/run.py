@@ -250,7 +250,7 @@ def is_all_criteria_met(runner_status: RunnerStatus | None) -> bool | None:
 
 async def finalise_run(
     run: Run, url: str, session: AsyncSession, run_status: RunStatus, finalised_at: datetime
-) -> RunArtifact:
+) -> RunArtifact | None:
 
     async with ClientSession(base_url=url, timeout=ClientTimeout(30)) as s:
 
@@ -264,14 +264,23 @@ async def finalise_run(
 
         # NOTE: we are assuming that files are small, consider streaming to file store
         # if sizes increase.
-        file_data = await RunnerClient.finalize(s)
+        try:
+            file_data = await RunnerClient.finalize(s)
+        except Exception as exc:
+            logger.error(f"Error finalizing run {run.run_id}", exc_info=exc)
+            file_data = None
         compression = "zip"  # TODO: should also return compression or allow access to response header
 
     all_criteria_met = is_all_criteria_met(final_status)
 
-    artifact = await create_runartifact(session, compression, file_data)
+    # If we were able to finalize - save the data. If not, we will still shut it down - people will be forced to redo
+    if file_data:
+        artifact = await create_runartifact(session, compression, file_data)
+    else:
+        artifact = None
+
     await update_run_with_runartifact_and_finalise(
-        session, run, artifact.run_artifact_id, run_status, finalised_at, all_criteria_met
+        session, run, None if artifact is None else artifact.run_artifact_id, run_status, finalised_at, all_criteria_met
     )
     await db.session.commit()
 
@@ -302,6 +311,8 @@ async def finalise_run_and_teardown_teststack(
     run_id: int,
     user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_scopes({AuthScopes.user_all}))],
 ) -> Response:
+    """Returns 200 and a binary zip stream on success. Returns 201 if the finalize succeeded but there was an error
+    fetching the finalized data."""
     # get user
     user = await select_user_or_raise(db.session, user_context)
 
@@ -323,10 +334,14 @@ async def finalise_run_and_teardown_teststack(
     # teardown
     await teardown_teststack(svc_name=svc_name, statefulset_name=statefulset_name)
 
-    return Response(
-        content=artifact.file_data,
-        media_type=f"application/{artifact.compression}",
-    )
+    if artifact is None:
+        return Response(status_code=HTTPStatus.NO_CONTENT)
+    else:
+        return Response(
+            status_code=HTTPStatus.OK,
+            content=artifact.file_data,
+            media_type=f"application/{artifact.compression}",
+        )
 
 
 @router.get("/run/{run_id}/artifact", status_code=HTTPStatus.OK)

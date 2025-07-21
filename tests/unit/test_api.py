@@ -763,10 +763,11 @@ async def test_finalise_run_creates_run_artifact_and_updates_run(
     mock_is_all_criteria_met,
 ):
     # Arrange
+    run_artifact = RunArtifact(run_artifact_id=1)
     runner_status = generate_class_instance(RunnerStatus, step_status={})
     mock_finalize.return_value = "file_data"  # TODO: this should be bytes, fix in client
     mock_status.return_value = runner_status
-    mock_create_runartifact.return_value = RunArtifact(run_artifact_id=1)
+    mock_create_runartifact.return_value = run_artifact
     mock_is_all_criteria_met.return_value = True
 
     mock_db_session = create_mock_session()
@@ -774,13 +775,57 @@ async def test_finalise_run_creates_run_artifact_and_updates_run(
 
     # Act
     run = Run(teststack_id=1)
-    await finalise_run(run, "http://mockurl", Mock(), RunStatus.finalised_by_client, datetime.now(timezone.utc))
+    result = await finalise_run(
+        run, "http://mockurl", Mock(), RunStatus.finalised_by_client, datetime.now(timezone.utc)
+    )
 
     # Assert
+    assert result is run_artifact
     assert_mock_session(mock_db_session, committed=True)
     mock_is_all_criteria_met.assert_called_once_with(runner_status)
     mock_finalize.assert_called_once()
     mock_create_runartifact.assert_called_once()
+    mock_update_run_with_runartifact_and_finalise.assert_called_once()
+
+
+@pytest.mark.asyncio
+@patch("cactus_orchestrator.api.run.is_all_criteria_met")
+@patch("cactus_orchestrator.api.run.RunnerClient.status")
+@patch("cactus_orchestrator.api.run.RunnerClient.finalize")
+@patch("cactus_orchestrator.api.run.create_runartifact")
+@patch("cactus_orchestrator.api.run.update_run_with_runartifact_and_finalise")
+@patch("cactus_orchestrator.api.run.db")
+async def test_finalise_run_failure_to_finalize(
+    mock_db,
+    mock_update_run_with_runartifact_and_finalise,
+    mock_create_runartifact,
+    mock_finalize,
+    mock_status,
+    mock_is_all_criteria_met,
+):
+    """If the finalize "fails" but the test stack was still torn down - make sure we return None"""
+    # Arrange
+    runner_status = generate_class_instance(RunnerStatus, step_status={})
+    mock_status.return_value = runner_status
+    mock_finalize.side_effect = Exception("mock error during finalize")
+    mock_create_runartifact.return_value = None  #
+    mock_is_all_criteria_met.return_value = True
+
+    mock_db_session = create_mock_session()
+    mock_db.session = mock_db_session
+
+    # Act
+    run = Run(teststack_id=1)
+    result = await finalise_run(
+        run, "http://mockurl", Mock(), RunStatus.finalised_by_client, datetime.now(timezone.utc)
+    )
+
+    # Assert
+    assert result is None
+    assert_mock_session(mock_db_session, committed=True)
+    mock_is_all_criteria_met.assert_called_once_with(runner_status)
+    mock_finalize.assert_called_once()
+    mock_create_runartifact.assert_not_called()
     mock_update_run_with_runartifact_and_finalise.assert_called_once()
 
 
@@ -844,6 +889,29 @@ async def test_finalise_run_and_teardown_teststack_success(
     mock_finalise_run.assert_called_once()
     mock_teardown_teststack.assert_called_once()
     assert response.status_code == 200
+
+
+@pytest.mark.asyncio
+@patch("cactus_orchestrator.api.run.select_user_or_raise")
+@patch("cactus_orchestrator.api.run.select_user_run")
+@patch("cactus_orchestrator.api.run.finalise_run")
+@patch("cactus_orchestrator.api.run.teardown_teststack")
+async def test_finalise_run_and_teardown_teststack_failure_to_fetch_artifact(
+    mock_teardown_teststack, mock_finalise_run, mock_select_user_run, mock_select_user_or_raise, client, valid_user_jwt
+):
+    """If the finalize artifact couldn't be fetched - return a HTTP NO_CONTENT"""
+    # Arrange
+    mock_select_user_or_raise.return_value = User(user_id=1)
+    mock_select_user_run.return_value = Run(teststack_id=1)
+    mock_finalise_run.return_value = None
+
+    # Act
+    response = client.post("/run/1/finalise", headers={"Authorization": f"Bearer {valid_user_jwt}"})
+
+    # Assert
+    mock_finalise_run.assert_called_once()
+    mock_teardown_teststack.assert_called_once()
+    assert response.status_code == 204
 
 
 @pytest.mark.parametrize("is_static_uri", [True, False])
