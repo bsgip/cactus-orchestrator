@@ -58,9 +58,15 @@ class TestProcedureRunSummaryResponse(BaseModel):
 
 
 class UserConfigurationRequest(BaseModel):
-    subscription_domain: str  # What domain will outgoing notifications be scoped to?
-    is_static_uri: bool  # If true - all test instances will share the same URI (limit to 1 test at a time)
+    subscription_domain: str | None  # What domain will outgoing notifications be scoped to? If None - no update
+    is_static_uri: (
+        bool | None
+    )  # If true - all test instances will share the same URI (limit to 1 test at a time). If None - no update
 
 
-class UserConfigurationResponse(UserConfigurationRequest):
+class UserConfigurationResponse(BaseModel):
+    subscription_domain: str  # What domain will outgoing notifications be scoped to? Empty string = no value configured
+    is_static_uri: bool  # If true - all test instances will share the same URI (limit to 1 test at a time).
     static_uri: str | None  # What the static URI will be for this user (readonly and only set if is_static_uri is True)
+    aggregator_certificate_expiry: datetime | None  # When the current user aggregator cert expires. None = expired
+    device_certificate_expiry: datetime | None  # When the current user device cert expires. None = expired

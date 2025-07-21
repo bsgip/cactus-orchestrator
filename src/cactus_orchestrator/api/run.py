@@ -70,11 +70,24 @@ def map_run_to_run_response(run: Run) -> RunResponse:
 
 
 async def select_user_or_raise(
-    session: AsyncSession, user_context: UserContext, with_der: bool = False, with_p12: bool = False
+    session: AsyncSession,
+    user_context: UserContext,
+    with_aggregator_der: bool = False,
+    with_aggregator_p12: bool = False,
+    with_device_der: bool = False,
+    with_device_p12: bool = False,
 ) -> User:
-    user = await select_user(session, user_context, with_der, with_p12)
+    user = await select_user(
+        session,
+        user_context,
+        with_aggregator_der=with_aggregator_der,
+        with_aggregator_p12=with_aggregator_p12,
+        with_device_der=with_device_der,
+        with_device_p12=with_device_p12,
+    )
 
     if user is None:
+        logger.error(f"Cannot find user for user context {user_context}")
         raise HTTPException(status_code=HTTPStatus.FORBIDDEN, detail="Certificate has not been registered.")
     return user
 
@@ -114,14 +127,19 @@ async def spawn_teststack_and_init_run(
         (3) Update the ingress with a path to the envoy environment.
     """
     # get user
-    user = await select_user_or_raise(db.session, user_context, with_der=True)
+    user = await select_user_or_raise(db.session, user_context, with_aggregator_der=True)
+    if not user.aggregator_certificate_x509_der:
+        raise HTTPException(
+            HTTPStatus.EXPECTATION_FAILED,
+            detail="Your aggregator certificate needs to be generated before starting a test run.",
+        )
 
-    client_cert = x509.load_der_x509_certificate(user.certificate_x509_der)
+    client_cert = x509.load_der_x509_certificate(user.aggregator_certificate_x509_der)
 
     if client_cert.not_valid_after_utc < datetime.now(timezone.utc):
         raise HTTPException(
             HTTPStatus.EXPECTATION_FAILED,
-            detail="Your certificate has expired. Please regenerate your certificate and try again.",
+            detail="Your aggregator certificate has expired. Please regenerate your certificate and try again.",
         )
 
     # Discover the test stack ID - check for potential conflicts

@@ -4,80 +4,35 @@ from typing import Sequence
 
 from cactus_test_definitions.test_procedures import TestProcedureId
 from sqlalchemy import and_, func, select, update
-from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload, undefer
 
-from cactus_orchestrator.model import Run, RunArtifact, RunStatus, User, UserUniqueConstraintName
+from cactus_orchestrator.model import Run, RunArtifact, RunStatus, User
 from cactus_orchestrator.schema import UserContext
 
 
-async def insert_user(
-    session: AsyncSession, user_context: UserContext, client_p12: bytes, client_x509_der: bytes
-) -> User:
+async def insert_user(session: AsyncSession, user_context: UserContext) -> User:
+    """Inserts a new user with no certificate details and default config. Returns the new User ID. Raises exceptions
+    if a user with the same user_context already exists in the database. Returns a User with all props being
+    undeferred"""
 
-    user = User(
-        subject_id=user_context.subject_id,
-        issuer_id=user_context.issuer_id,
-        certificate_p12_bundle=client_p12,
-        certificate_x509_der=client_x509_der,
-    )
-
-    session.add(user)
+    session.add(User(subject_id=user_context.subject_id, issuer_id=user_context.issuer_id))
     await session.flush()
-    return user
 
+    new_user = await select_user(session, user_context, True, True, True, True)
+    if new_user is None:
+        raise Exception(f"Unable to insert new user for user_context {user_context}")
 
-async def update_user(
-    session: AsyncSession, user_context: UserContext, client_p12: bytes, client_x509_der: bytes
-) -> int | None:
-    """Update an existing user's certificate. Returns user_id if successful, None if user does not exist."""
-
-    stmt = (
-        update(User)
-        .where((User.subject_id == user_context.subject_id) & (User.issuer_id == user_context.issuer_id))
-        .values(
-            certificate_x509_der=client_x509_der,
-            certificate_p12_bundle=client_p12,
-        )
-        .returning(User.user_id)
-    )
-
-    resp = await session.execute(stmt)
-    user_id = resp.scalar_one_or_none()
-
-    if user_id:
-        await session.commit()
-
-    return user_id
-
-
-async def upsert_user(
-    session: AsyncSession, user_context: UserContext, client_p12: bytes, client_x509_der: bytes
-) -> int:
-    """We have to use sqlalchemy-core with postgres dialect for upserts"""
-    # form statement
-    stmt = insert(User).values(
-        subject_id=user_context.subject_id,
-        issuer_id=user_context.issuer_id,
-        certificate_x509_der=client_x509_der,
-        certificate_p12_bundle=client_p12,
-    )
-
-    resp = await session.execute(
-        stmt.on_conflict_do_update(
-            constraint=UserUniqueConstraintName,
-            set_=dict(
-                certificate_x509_der=client_x509_der,
-                certificate_p12_bundle=client_p12,
-            ),
-        ).returning(User.user_id)
-    )
-    return resp.scalar_one()
+    return new_user
 
 
 async def select_user(
-    session: AsyncSession, user_context: UserContext, with_der: bool = False, with_p12: bool = False
+    session: AsyncSession,
+    user_context: UserContext,
+    with_aggregator_der: bool = False,
+    with_aggregator_p12: bool = False,
+    with_device_der: bool = False,
+    with_device_p12: bool = False,
 ) -> User | None:
 
     stmt = select(User).where(
@@ -85,24 +40,20 @@ async def select_user(
     )
 
     options_list = []
-    if with_p12:
-        options_list.append(undefer(User.certificate_p12_bundle))
-    if with_der:
-        options_list.append(undefer(User.certificate_x509_der))
+    if with_aggregator_p12:
+        options_list.append(undefer(User.aggregator_certificate_p12_bundle))
+    if with_aggregator_der:
+        options_list.append(undefer(User.aggregator_certificate_x509_der))
+    if with_device_p12:
+        options_list.append(undefer(User.device_certificate_p12_bundle))
+    if with_device_der:
+        options_list.append(undefer(User.device_certificate_x509_der))
 
     if options_list:
         stmt = stmt.options(*options_list)
 
     res = await session.execute(stmt)
     return res.scalar_one_or_none()
-
-
-async def select_user_certificate_x509_der(session: AsyncSession, user_context: UserContext) -> bytes | None:
-    stmt = select(User.certificate_x509_der).where(
-        and_(User.subject_id == user_context.subject_id, User.issuer_id == user_context.issuer_id)
-    )
-    res = await session.execute(stmt)
-    return res.scalar_one()
 
 
 async def insert_run_for_user(

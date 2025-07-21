@@ -1,6 +1,7 @@
 import os
 from datetime import datetime, timezone
 from http import HTTPMethod, HTTPStatus
+from itertools import product
 from typing import Generator
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -14,7 +15,7 @@ from fastapi.testclient import TestClient
 from fastapi_pagination import Params, set_params
 from sqlalchemy.exc import NoResultFound
 
-from cactus_orchestrator.api.certificate import _ca_crt_cachekey, update_ca_certificate_cache
+from cactus_orchestrator.api.certificate import CertificateType, _ca_crt_cachekey, update_ca_certificate_cache
 from cactus_orchestrator.api.run import finalise_run, is_all_criteria_met, teardown_teststack
 from cactus_orchestrator.cache import AsyncCache, ExpiringValue
 from cactus_orchestrator.crud import ProcedureRunAggregated
@@ -29,6 +30,7 @@ from cactus_orchestrator.schema import (
     TestProcedureResponse,
     TestProcedureRunSummaryResponse,
     UserConfigurationRequest,
+    UserConfigurationResponse,
 )
 from cactus_orchestrator.settings import CactusOrchestratorException
 
@@ -66,8 +68,7 @@ def test_post_spawn_test_created(client, valid_user_p12_and_der, valid_user_jwt)
         user_id=1,
         subject_id="sub",
         issuer_id="iss",
-        certificate_p12_bundle=None,
-        certificate_x509_der=valid_user_p12_and_der[1],
+        aggregator_certificate_x509_der=valid_user_p12_and_der[1],
         is_static_uri=False,
     )
     RunnerClient.init = AsyncMock()
@@ -324,57 +325,194 @@ def test_post_spawn_test_teardown_on_failure(client, valid_user_jwt, valid_user_
     update_run_run_status.assert_not_called()
 
 
-@patch.multiple(
-    "cactus_orchestrator.api.certificate",
-    fetch_certificate_key_pair=AsyncMock(),
-    generate_client_p12=Mock(),
-    upsert_user=AsyncMock(return_value=1),
-)
-def test_create_new_certificate(client, valid_user_jwt, ca_cert_key_pair):
-    """Test creating a new certificate for a user"""
+@pytest.mark.parametrize("cert_type", CertificateType)
+@patch("cactus_orchestrator.api.certificate.select_user")
+def test_fetch_existing_certificate(mock_select_user, client, valid_user_jwt, cert_type: CertificateType):
     # Arrange
-    from cactus_orchestrator.api.certificate import fetch_certificate_key_pair, generate_client_p12
-
-    mock_p12 = b"mock_p12_data"
-    mock_cert = AsyncMock()
-    mock_cert.public_bytes.return_value = b"mock_cert_data"
-
-    generate_client_p12.return_value = (mock_p12, mock_cert)
-    fetch_certificate_key_pair.return_value = ca_cert_key_pair
+    device_cert_data = b"device cert data"
+    agg_cert_data = b"agg cert data"
+    mock_select_user.return_value = User(
+        aggregator_certificate_p12_bundle=agg_cert_data, device_certificate_p12_bundle=device_cert_data
+    )
 
     # Act
-    res = client.put("/certificate", headers={"Authorization": f"Bearer {valid_user_jwt}"})
+    res = client.get(f"/certificate/{cert_type.value}", headers={"Authorization": f"Bearer {valid_user_jwt}"})
 
     # Assert
     assert res.status_code == HTTPStatus.OK
-    assert res.content == b"mock_p12_data"
     assert res.headers["content-type"] == "application/x-pkcs12"
+    if cert_type == CertificateType.aggregator:
+        assert res.content == agg_cert_data
+    else:
+        assert res.content == device_cert_data
 
 
-@patch("cactus_orchestrator.api.certificate.select_user")
-def test_fetch_existing_certificate(mock_select_user, client, valid_user_jwt):
-    # Arrange
-    mock_select_user.return_value = User(certificate_p12_bundle=b"mock_p12_data")
+def test_fetch_existing_certificate_bad_cert_type(valid_user_jwt, client):
 
     # Act
-    res = client.get("/certificate", headers={"Authorization": f"Bearer {valid_user_jwt}"})
+    res = client.get("/certificate/agg_not_a_real_cert", headers={"Authorization": f"Bearer {valid_user_jwt}"})
 
     # Assert
-    assert res.status_code == HTTPStatus.OK
-    assert res.content == b"mock_p12_data"
-    assert res.headers["content-type"] == "application/x-pkcs12"
+    assert res.status_code == HTTPStatus.NOT_FOUND
 
 
+@pytest.mark.parametrize("cert_type", CertificateType)
 @patch("cactus_orchestrator.api.certificate.select_user")
-def test_fetch_existing_certificate_notfound(mock_select_user, client, valid_user_jwt):
+def test_fetch_existing_certificate_no_user(mock_select_user, client, valid_user_jwt, cert_type: CertificateType):
     # Arrange
     mock_select_user.return_value = None
 
     # Act
-    res = client.get("/certificate", headers={"Authorization": f"Bearer {valid_user_jwt}"})
+    res = client.get(f"/certificate/{cert_type.value}", headers={"Authorization": f"Bearer {valid_user_jwt}"})
 
     # Assert
     assert res.status_code == HTTPStatus.NOT_FOUND
+
+
+@pytest.mark.parametrize("cert_type, existing_bytes", product(CertificateType, [bytes([0, 1, 99]), None]))
+@patch.multiple(
+    "cactus_orchestrator.api.certificate",
+    fetch_certificate_key_pair=AsyncMock(),
+    generate_client_p12=Mock(),
+    select_user=AsyncMock(),
+    insert_user=AsyncMock(),
+)
+def test_create_new_certificate_existing_user(client, valid_user_jwt, ca_cert_key_pair, cert_type, existing_bytes):
+    """Test creating a new certificate for a user"""
+    # Arrange
+    from cactus_orchestrator.api.certificate import (
+        fetch_certificate_key_pair,
+        generate_client_p12,
+        insert_user,
+        select_user,
+    )
+
+    mock_p12 = b"mock_p12_data"
+    mock_der = b"mock_cert_data"
+    mock_cert = AsyncMock()
+    mock_cert.public_bytes = Mock(return_value=mock_der)
+
+    mock_user = generate_class_instance(
+        User,
+        optional_is_none=True,
+        aggregator_certificate_p12_bundle=existing_bytes,
+        aggregator_certificate_x509_der=existing_bytes,
+        device_certificate_p12_bundle=existing_bytes,
+        device_certificate_x509_der=existing_bytes,
+    )
+    select_user.return_value = mock_user
+    generate_client_p12.return_value = (mock_p12, mock_cert)
+    fetch_certificate_key_pair.return_value = ca_cert_key_pair
+
+    # Act
+    res = client.put(f"/certificate/{cert_type.value}", headers={"Authorization": f"Bearer {valid_user_jwt}"})
+
+    # Assert
+    assert res.status_code == HTTPStatus.OK
+    assert res.content == mock_p12
+    assert res.headers["content-type"] == "application/x-pkcs12"
+
+    if cert_type == CertificateType.aggregator:
+        assert mock_user.aggregator_certificate_p12_bundle == mock_p12
+        assert mock_user.aggregator_certificate_x509_der == mock_der
+        assert mock_user.device_certificate_p12_bundle == existing_bytes
+        assert mock_user.device_certificate_x509_der == existing_bytes
+    else:
+        assert mock_user.aggregator_certificate_p12_bundle == existing_bytes
+        assert mock_user.aggregator_certificate_x509_der == existing_bytes
+        assert mock_user.device_certificate_p12_bundle == mock_p12
+        assert mock_user.device_certificate_x509_der == mock_der
+
+    select_user.assert_called()
+    insert_user.assert_not_called()  # Should not be inserting a user if we find an existing one
+
+
+@pytest.mark.parametrize("cert_type, existing_bytes", product(CertificateType, [bytes([0, 1, 99]), None]))
+@patch.multiple(
+    "cactus_orchestrator.api.certificate",
+    fetch_certificate_key_pair=AsyncMock(),
+    generate_client_p12=Mock(),
+    select_user=AsyncMock(),
+    insert_user=AsyncMock(),
+)
+def test_create_new_certificate_new_user(client, valid_user_jwt, ca_cert_key_pair, cert_type, existing_bytes):
+    """Test creating a new certificate for a user that doesn't exist in the DB"""
+    # Arrange
+    from cactus_orchestrator.api.certificate import (
+        fetch_certificate_key_pair,
+        generate_client_p12,
+        insert_user,
+        select_user,
+    )
+
+    mock_p12 = b"mock_p12_data"
+    mock_der = b"mock_cert_data"
+    mock_cert = AsyncMock()
+    mock_cert.public_bytes = Mock(return_value=mock_der)
+
+    mock_user = generate_class_instance(
+        User,
+        optional_is_none=True,
+        aggregator_certificate_p12_bundle=existing_bytes,
+        aggregator_certificate_x509_der=existing_bytes,
+        device_certificate_p12_bundle=existing_bytes,
+        device_certificate_x509_der=existing_bytes,
+    )
+    select_user.return_value = None
+    insert_user.return_value = mock_user
+    generate_client_p12.return_value = (mock_p12, mock_cert)
+    fetch_certificate_key_pair.return_value = ca_cert_key_pair
+
+    # Act
+    res = client.put(f"/certificate/{cert_type.value}", headers={"Authorization": f"Bearer {valid_user_jwt}"})
+
+    # Assert
+    assert res.status_code == HTTPStatus.OK
+    assert res.content == mock_p12
+    assert res.headers["content-type"] == "application/x-pkcs12"
+
+    if cert_type == CertificateType.aggregator:
+        assert mock_user.aggregator_certificate_p12_bundle == mock_p12
+        assert mock_user.aggregator_certificate_x509_der == mock_der
+        assert mock_user.device_certificate_p12_bundle == existing_bytes
+        assert mock_user.device_certificate_x509_der == existing_bytes
+    else:
+        assert mock_user.aggregator_certificate_p12_bundle == existing_bytes
+        assert mock_user.aggregator_certificate_x509_der == existing_bytes
+        assert mock_user.device_certificate_p12_bundle == mock_p12
+        assert mock_user.device_certificate_x509_der == mock_der
+
+    select_user.assert_called()
+    insert_user.assert_called()
+
+
+@patch.multiple(
+    "cactus_orchestrator.api.certificate",
+    fetch_certificate_key_pair=AsyncMock(),
+    generate_client_p12=Mock(),
+    select_user=AsyncMock(),
+    insert_user=AsyncMock(),
+)
+def test_create_new_certificate_bad_cert_type(client, valid_user_jwt):
+    """Test that regenerating a cert that DNE results in a failure"""
+    # Arrange
+    from cactus_orchestrator.api.certificate import (
+        fetch_certificate_key_pair,
+        generate_client_p12,
+        insert_user,
+        select_user,
+    )
+
+    # Act
+    res = client.put("/certificate/agg_dne_cert", headers={"Authorization": f"Bearer {valid_user_jwt}"})
+
+    # Assert
+    assert res.status_code == HTTPStatus.NOT_FOUND
+
+    fetch_certificate_key_pair.assert_not_called()
+    generate_client_p12.assert_not_called()
+    select_user.assert_not_called()
+    insert_user.assert_not_called()
 
 
 # NOTE: not api route handler, Controller/Managment layer
@@ -915,71 +1053,108 @@ async def test_finalise_run_and_teardown_teststack_failure_to_fetch_artifact(
 
 
 @pytest.mark.parametrize("is_static_uri", [True, False])
-@patch("cactus_orchestrator.api.config.select_user_or_raise")
-def test_fetch_existing_config(mock_select_user_or_raise, client, valid_user_jwt, is_static_uri: bool):
+@patch("cactus_orchestrator.api.config.select_user_or_create")
+def test_fetch_existing_config_no_certs(mock_select_user_or_create, client, valid_user_jwt, is_static_uri: bool):
     # Arrange
     domain = "my.custom.domain"
-    user = User(subscription_domain=domain, is_static_uri=is_static_uri, user_id=123)
-    mock_select_user_or_raise.return_value = user
+    user = User(
+        subscription_domain=domain,
+        is_static_uri=is_static_uri,
+        user_id=123,
+        aggregator_certificate_x509_der=None,
+        device_certificate_x509_der=None,
+    )
+    mock_select_user_or_create.return_value = user
 
     # Act
     res = client.get("/config", headers={"Authorization": f"Bearer {valid_user_jwt}"})
 
     # Assert
     assert res.status_code == HTTPStatus.OK
-    data = res.json()
-    assert data["subscription_domain"] == domain
-    assert data["is_static_uri"] is is_static_uri
+    data = UserConfigurationResponse.model_validate_json(res.content)
+    assert data.subscription_domain == domain
+    assert data.is_static_uri is is_static_uri
     if is_static_uri:
-        assert data["static_uri"] == generate_envoy_dcap_uri(generate_static_test_stack_id(user))
+        assert data.static_uri == generate_envoy_dcap_uri(generate_static_test_stack_id(user))
     else:
-        assert data["static_uri"] is None
+        assert data.static_uri is None
+    assert data.aggregator_certificate_expiry is None
+    assert data.device_certificate_expiry is None
 
 
 @pytest.mark.parametrize("is_static_uri", [True, False])
-@patch("cactus_orchestrator.api.config.select_user_or_raise")
+@patch("cactus_orchestrator.api.config.select_user_or_create")
 def test_fetch_existing_config_domain_none_value(
-    mock_select_user_or_raise, client, valid_user_jwt, is_static_uri: bool
+    mock_select_user_or_create, client, valid_user_jwt, is_static_uri: bool
 ):
     # Arrange
-    user = User(subscription_domain=None, is_static_uri=is_static_uri, user_id=123)
-    mock_select_user_or_raise.return_value = user
+    user = User(
+        subscription_domain=None,
+        is_static_uri=is_static_uri,
+        user_id=123,
+        aggregator_certificate_x509_der=None,
+        device_certificate_x509_der=None,
+    )
+    mock_select_user_or_create.return_value = user
 
     # Act
     res = client.get("/config", headers={"Authorization": f"Bearer {valid_user_jwt}"})
 
     # Assert
     assert res.status_code == HTTPStatus.OK
-    data = res.json()
-    assert data["subscription_domain"] == ""
-    assert data["is_static_uri"] is is_static_uri
-
+    data = UserConfigurationResponse.model_validate_json(res.content)
+    assert data.subscription_domain == ""
+    assert data.is_static_uri is is_static_uri
     if is_static_uri:
-        assert data["static_uri"] == generate_envoy_dcap_uri(generate_static_test_stack_id(user))
+        assert data.static_uri == generate_envoy_dcap_uri(generate_static_test_stack_id(user))
     else:
-        assert data["static_uri"] is None
+        assert data.static_uri is None
+    assert data.aggregator_certificate_expiry is None
+    assert data.device_certificate_expiry is None
 
 
 @pytest.mark.parametrize(
-    "input_domain, input_is_static_uri, expected",
+    "user, input_domain, input_is_static_uri, expected_domain, expected_is_static_uri",
     [
-        ("", True, ""),
-        ("my.domain.example", True, "my.domain.example"),
-        ("my.domain.example", False, "my.domain.example"),
-        ("http://my.other.example:123/foo/bar", True, "my.other.example"),
-        ("http://my.other.example:123/foo/bar", False, "my.other.example"),
-        ("http://my.other.example2/", True, "my.other.example2"),
-        ("http://my.other.example2/", False, "my.other.example2"),
+        (User(subscription_domain="", is_static_uri=False), "", True, "", True),
+        (
+            User(subscription_domain="my.domain.example", is_static_uri=True),
+            "my.domain.example",
+            None,
+            "my.domain.example",
+            True,
+        ),
+        (
+            User(subscription_domain="my.domain.example", is_static_uri=True),
+            "my.domain.example",
+            False,
+            "my.domain.example",
+            False,
+        ),
+        (
+            User(subscription_domain="foo", is_static_uri=False),
+            "http://my.other.example:123/foo/bar",
+            None,
+            "my.other.example",
+            False,
+        ),
+        (User(subscription_domain="foo", is_static_uri=True), None, True, "foo", True),
+        (User(subscription_domain="foo", is_static_uri=False), None, True, "foo", True),
     ],
 )
-@patch("cactus_orchestrator.api.config.select_user_or_raise")
+@patch("cactus_orchestrator.api.config.select_user_or_create")
 def test_update_existing_config(
-    mock_select_user_or_raise, client, valid_user_jwt, input_domain: str, input_is_static_uri: bool, expected: str
+    mock_select_user_or_create,
+    client,
+    valid_user_jwt,
+    user,
+    input_domain: str | None,
+    input_is_static_uri: bool | None,
+    expected_domain: str,
+    expected_is_static_uri: bool,
 ):
     # Arrange
-    domain = "original.domain"
-    user = User(subscription_domain=domain, is_static_uri=False)
-    mock_select_user_or_raise.return_value = user
+    mock_select_user_or_create.return_value = user
 
     # Act
     req = UserConfigurationRequest(subscription_domain=input_domain, is_static_uri=input_is_static_uri)
@@ -987,14 +1162,16 @@ def test_update_existing_config(
 
     # Assert
     assert res.status_code == HTTPStatus.CREATED
-    data = res.json()
-    assert data["subscription_domain"] == expected
-    assert data["is_static_uri"] == input_is_static_uri
 
-    if input_is_static_uri:
-        assert data["static_uri"] == generate_envoy_dcap_uri(generate_static_test_stack_id(user))
+    data = UserConfigurationResponse.model_validate_json(res.content)
+    assert data.subscription_domain == expected_domain
+    assert data.is_static_uri == expected_is_static_uri
+    if expected_is_static_uri:
+        assert data.static_uri == generate_envoy_dcap_uri(generate_static_test_stack_id(user))
     else:
-        assert data["static_uri"] is None
+        assert data.static_uri is None
+    data.device_certificate_expiry = None
+    data.aggregator_certificate_expiry = None
 
 
 @pytest.mark.parametrize("runner_status", [RunStatus.initialised, RunStatus.started])

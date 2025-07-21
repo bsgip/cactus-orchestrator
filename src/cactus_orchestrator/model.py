@@ -28,13 +28,19 @@ class User(Base):
     subject_id: Mapped[str] = mapped_column(String, nullable=False)  # JWT sub
     issuer_id: Mapped[str] = mapped_column(String, nullable=False)  # JWT iss
 
-    # NOTE: We assume these are unique, too big to enfoce
-    certificate_p12_bundle: Mapped[bytes] = mapped_column(
-        LargeBinary, nullable=False, unique=False, deferred=True
-    )  # p12
-    certificate_x509_der: Mapped[bytes] = mapped_column(
-        LargeBinary, nullable=False, unique=False, deferred=True
-    )  # x509 DER-encoded
+    # NOTE: We assume these are unique, too big to enforce
+    aggregator_certificate_p12_bundle: Mapped[bytes | None] = mapped_column(
+        LargeBinary, nullable=True, unique=False, deferred=True
+    )  # p12 - Aggregator certificate + key
+    aggregator_certificate_x509_der: Mapped[bytes | None] = mapped_column(
+        LargeBinary, nullable=True, unique=False, deferred=True
+    )  # x509 DER-encoded - Aggregator certificate
+    device_certificate_p12_bundle: Mapped[bytes | None] = mapped_column(
+        LargeBinary, nullable=True, unique=False, deferred=True
+    )  # p12 - Device certificate + key
+    device_certificate_x509_der: Mapped[bytes | None] = mapped_column(
+        LargeBinary, nullable=True, unique=False, deferred=True
+    )  # x509 DER-encoded - Device certificate
 
     subscription_domain: Mapped[str | None] = mapped_column(
         String, nullable=True

@@ -1,6 +1,7 @@
 import base64
 import json
 import os
+from datetime import timedelta
 
 import pytest
 from assertical.fixtures.environment import environment_snapshot
@@ -19,7 +20,7 @@ def jwt_validator():
     with environment_snapshot():
         os.environ["JWTAUTH_AUDIENCE"] = TEST_JWT_AUDIENCE
         os.environ["JWTAUTH_ISSUER"] = TEST_JWT_ISSUER
-        yield JWTValidator()
+        yield JWTValidator(cache_length=timedelta(days=999))
 
 
 def test_extract_kid_from_jwt(jwt_validator):

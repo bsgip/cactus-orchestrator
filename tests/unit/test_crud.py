@@ -23,7 +23,6 @@ from cactus_orchestrator.crud import (
     select_user_runs_for_procedure,
     update_run_run_status,
     update_run_with_runartifact_and_finalise,
-    upsert_user,
 )
 from cactus_orchestrator.k8s.certificate.create import generate_client_p12
 from cactus_orchestrator.model import Run, RunStatus
@@ -31,24 +30,63 @@ from cactus_orchestrator.schema import UserContext
 
 
 @pytest.mark.asyncio
-async def test_add_user(pg_empty_conn, ca_cert_key_pair):
-    """basic success test"""
+async def test_insert_user(pg_empty_conn):
+    """Tests that a new user can be inserted and that rollback/commit interact with it as expected"""
     # Arrange
-    ca_cert, ca_key = ca_cert_key_pair
-    cl_p12, cl_x509 = generate_client_p12(ca_key, ca_cert, "test", "abc")
-    cl_der = cl_x509.public_bytes(encoding=serialization.Encoding.DER)
-    uc = UserContext(subject_id="a", issuer_id="a")
+    uc1 = UserContext(subject_id="sub1", issuer_id="issuer1")
+    uc2 = UserContext(subject_id="sub2", issuer_id="issuer2")
 
     # Act
     async with generate_async_session(pg_empty_conn.connection) as s:
-        user = await insert_user(s, uc, cl_p12, cl_der)
+        user1 = await insert_user(s, uc1)
 
-    # Assert
-    assert user.user_id == 1
-    assert user.certificate_p12_bundle == cl_p12
-    assert user.certificate_x509_der == cl_der
-    assert user.subject_id == uc.subject_id
-    assert user.issuer_id == uc.issuer_id
+        assert user1.user_id == 1
+        assert user1.aggregator_certificate_p12_bundle is None
+        assert user1.aggregator_certificate_x509_der is None
+        assert user1.device_certificate_p12_bundle is None
+        assert user1.device_certificate_x509_der is None
+        assert user1.subscription_domain is None
+        assert isinstance(user1.is_static_uri, bool)
+        assert user1.subject_id == uc1.subject_id
+        assert user1.issuer_id == uc1.issuer_id
+
+        await s.commit()
+
+    # Test we can rollback
+    async with generate_async_session(pg_empty_conn.connection) as s:
+        user2 = await insert_user(s, uc2)
+
+        assert user2.user_id == 2
+        assert user2.aggregator_certificate_p12_bundle is None
+        assert user2.aggregator_certificate_x509_der is None
+        assert user2.device_certificate_p12_bundle is None
+        assert user2.device_certificate_x509_der is None
+        assert user2.subscription_domain is None
+        assert isinstance(user2.is_static_uri, bool)
+        assert user2.subject_id == uc2.subject_id
+        assert user2.issuer_id == uc2.issuer_id
+
+        await s.rollback()
+
+    async with generate_async_session(pg_empty_conn.connection) as s:
+        with pytest.raises(IntegrityError):
+            await insert_user(s, uc1)
+
+    # Test we can insert as expected
+    async with generate_async_session(pg_empty_conn.connection) as s:
+        user3 = await insert_user(s, uc2)
+
+        assert user3.user_id == 4, "The sequence would have been incremented for the above two insert attempts"
+        assert user3.aggregator_certificate_p12_bundle is None
+        assert user3.aggregator_certificate_x509_der is None
+        assert user3.device_certificate_p12_bundle is None
+        assert user3.device_certificate_x509_der is None
+        assert user3.subscription_domain is None
+        assert isinstance(user3.is_static_uri, bool)
+        assert user3.subject_id == uc2.subject_id
+        assert user3.issuer_id == uc2.issuer_id
+
+        await s.commit()
 
 
 @pytest.mark.asyncio
@@ -68,31 +106,6 @@ async def test_add_or_update_user_unique_constraint(pg_empty_conn, ca_cert_key_p
         async with generate_async_session(pg_empty_conn.connection) as s:
             _ = await insert_user(s, uc, cl_p12, cl_der)
             await s.commit()
-
-
-@pytest.mark.asyncio
-async def test_add_or_update_user(pg_empty_conn, ca_cert_key_pair):
-    """Create a user, then update their certs"""
-    # Arrange
-    ca_cert, ca_key = ca_cert_key_pair
-    cl_p12, cl_x509 = generate_client_p12(ca_key, ca_cert, "test", "abc")
-    cl_der = cl_x509.public_bytes(encoding=serialization.Encoding.DER)
-    uc = UserContext(subject_id="a", issuer_id="a")
-
-    async with generate_async_session(pg_empty_conn.connection) as s:
-        _ = await insert_user(s, uc, cl_p12, cl_der)
-        await s.commit()
-
-    cl_p12, cl_x509 = generate_client_p12(ca_key, ca_cert, "test1", "abc")
-    cl_der = cl_x509.public_bytes(encoding=serialization.Encoding.DER)
-    # Act
-    async with generate_async_session(pg_empty_conn.connection) as s:
-        await upsert_user(s, uc, cl_p12, cl_der)
-        await s.commit()
-    # Assert
-    cert_x509_der = pg_empty_conn.execute(text("select certificate_x509_der from user_;")).fetchone()[0]
-    cert_x509 = x509.load_der_x509_certificate(cert_x509_der)
-    assert cert_x509.subject.get_attributes_for_oid(x509.NameOID.COMMON_NAME)[0].value == "test1"
 
 
 @pytest.mark.asyncio
@@ -475,38 +488,101 @@ async def test_select_user_run_with_artifact(pg_empty_conn):
     assert run.run_artifact.compression == "gzip"
 
 
-@pytest.mark.parametrize(("with_der", "with_p12"), product((True, False), (True, False)))
+@pytest.mark.parametrize(
+    "with_aggregator_der, with_aggregator_p12, with_device_der, with_device_p12",
+    [(True, True, True, True), (False, False, False, False), (True, False, True, False), (False, True, False, True)],
+)
 @pytest.mark.asyncio
-async def test_select_user(pg_empty_conn, with_der: bool, with_p12: bool):
+async def test_select_user(
+    pg_empty_conn, with_aggregator_der: bool, with_aggregator_p12: bool, with_device_der: bool, with_device_p12: bool
+):
     # Arrange
     pg_empty_conn.execute(
         text(
             """
-            INSERT INTO user_ (subject_id, issuer_id, certificate_p12_bundle, certificate_x509_der)
-            VALUES ('user1', 'issuer1', E'\\x', E'\\x')
+            INSERT INTO user_ (subject_id, issuer_id, aggregator_certificate_p12_bundle, aggregator_certificate_x509_der, device_certificate_p12_bundle, device_certificate_x509_der)
+            VALUES ('user1', 'issuer1', E'\\x01', E'\\x02', E'\\x03', E'\\x04');
+
+            INSERT INTO user_ (subject_id, issuer_id, aggregator_certificate_p12_bundle, aggregator_certificate_x509_der, device_certificate_p12_bundle, device_certificate_x509_der)
+            VALUES ('user2', 'issuer2', NULL, NULL, NULL, NULL);
             """
         )
     )
     pg_empty_conn.commit()
-    uc = UserContext(subject_id="user1", issuer_id="issuer1")
+    uc1 = UserContext(subject_id="user1", issuer_id="issuer1")
+    uc2 = UserContext(subject_id="user2", issuer_id="issuer2")
 
     # Act
     async with generate_async_session(pg_empty_conn.connection) as session:
-        user = await select_user(session, uc, with_der, with_p12)
+        user1 = await select_user(
+            session, uc1, with_aggregator_der, with_aggregator_p12, with_device_der, with_device_p12
+        )
+
+        user2 = await select_user(
+            session, uc2, with_aggregator_der, with_aggregator_p12, with_device_der, with_device_p12
+        )
 
         # Assert
-        assert user is not None
-        if with_der:
-            assert user.certificate_x509_der is not None
+        assert user1 is not None
+        assert user2 is not None
+        if with_aggregator_p12:
+            assert user1.aggregator_certificate_p12_bundle == bytes([1])
+            assert user2.aggregator_certificate_p12_bundle is None
         else:
             with pytest.raises(Exception):
-                user.certificate_x509_der
+                user1.aggregator_certificate_p12_bundle
+            with pytest.raises(Exception):
+                user2.aggregator_certificate_p12_bundle
 
-        if with_p12:
-            assert user.certificate_p12_bundle is not None
+        if with_aggregator_der:
+            assert user1.aggregator_certificate_x509_der == bytes([2])
+            assert user2.aggregator_certificate_x509_der is None
         else:
             with pytest.raises(Exception):
-                user.certificate_p12_bundle
+                user1.aggregator_certificate_x509_der
+            with pytest.raises(Exception):
+                user2.aggregator_certificate_x509_der
+
+        if with_device_p12:
+            assert user1.device_certificate_p12_bundle == bytes([3])
+            assert user2.device_certificate_p12_bundle is None
+        else:
+            with pytest.raises(Exception):
+                user1.device_certificate_p12_bundle
+            with pytest.raises(Exception):
+                user2.device_certificate_p12_bundle
+
+        if with_device_der:
+            assert user1.device_certificate_x509_der == bytes([4])
+            assert user2.device_certificate_x509_der is None
+        else:
+            with pytest.raises(Exception):
+                user1.device_certificate_x509_der
+            with pytest.raises(Exception):
+                user2.device_certificate_x509_der
+
+
+@pytest.mark.asyncio
+async def test_select_user_missing(pg_empty_conn):
+    # Arrange
+    pg_empty_conn.execute(
+        text(
+            """
+            INSERT INTO user_ (subject_id, issuer_id, aggregator_certificate_p12_bundle, aggregator_certificate_x509_der, device_certificate_p12_bundle, device_certificate_x509_der)
+            VALUES ('user1', 'issuer1', E'\\x01', E'\\x02', E'\\x03', E'\\x04');
+
+            INSERT INTO user_ (subject_id, issuer_id, aggregator_certificate_p12_bundle, aggregator_certificate_x509_der, device_certificate_p12_bundle, device_certificate_x509_der)
+            VALUES ('user2', 'issuer2', NULL, NULL, NULL, NULL);
+            """
+        )
+    )
+    pg_empty_conn.commit()
+
+    async with generate_async_session(pg_empty_conn.connection) as session:
+        assert (await select_user(session, UserContext(subject_id="user1", issuer_id="issuer2"))) is None
+        assert (await select_user(session, UserContext(subject_id="user2", issuer_id="issuer1"))) is None
+        assert (await select_user(session, UserContext(subject_id="", issuer_id=""))) is None
+        assert (await select_user(session, UserContext(subject_id="dne", issuer_id="dne"))) is None
 
 
 @pytest.mark.asyncio
@@ -555,7 +631,6 @@ async def test_select_user_runs_aggregated_by_procedure(pg_empty_conn):
             VALUES (2, '', 'ALL-01', 1, NULL);
             INSERT INTO run (user_id, teststack_id, testprocedure_id, run_status, all_criteria_met)
             VALUES (2, '', 'ALL-01', 1, true);
-            
             """
         )
     )
@@ -629,7 +704,6 @@ async def test_select_user_runs_for_procedure(pg_empty_conn):
             VALUES (2, '', 'ALL-01', 1, NULL);
             INSERT INTO run (user_id, teststack_id, testprocedure_id, run_status, all_criteria_met)
             VALUES (2, '', 'ALL-01', 1, true);
-            
             """
         )
     )

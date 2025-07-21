@@ -1,4 +1,5 @@
 import logging
+from enum import StrEnum, auto
 from http import HTTPStatus
 from typing import Annotated, Any
 
@@ -12,13 +13,18 @@ from pydantic import SecretStr
 
 from cactus_orchestrator.auth import AuthScopes, jwt_validator
 from cactus_orchestrator.cache import AsyncCache, ExpiringValue
-from cactus_orchestrator.crud import select_user, upsert_user
+from cactus_orchestrator.crud import insert_user, select_user
 from cactus_orchestrator.k8s.certificate.create import generate_client_p12
 from cactus_orchestrator.k8s.certificate.fetch import fetch_certificate_key_pair, fetch_certificate_only
 from cactus_orchestrator.schema import UserContext
 from cactus_orchestrator.settings import CactusOrchestratorException, get_current_settings
 
 logger = logging.getLogger(__name__)
+
+
+class CertificateType(StrEnum):
+    aggregator = auto()
+    device = auto()
 
 
 router = APIRouter()
@@ -42,9 +48,7 @@ _ca_crt_cache = AsyncCache(update_fn=update_ca_certificate_cache, force_update_d
 async def create_client_cert_binary(
     user_context: UserContext, client_cert_passphrase: SecretStr
 ) -> tuple[bytes, bytes]:
-    ca_cert, ca_key = await fetch_certificate_key_pair(
-        get_current_settings().tls_ca_tls_secret_name
-    )  # TODO: cache maybe?
+    ca_cert, ca_key = await fetch_certificate_key_pair(get_current_settings().tls_ca_tls_secret_name)
 
     # create client certificate
     client_p12, client_cert = generate_client_p12(
@@ -54,59 +58,6 @@ async def create_client_cert_binary(
         p12_password=client_cert_passphrase.get_secret_value(),
     )
     return client_p12, client_cert.public_bytes(encoding=serialization.Encoding.DER)
-
-
-@router.get(
-    "/certificate",
-    response_class=Response,
-    responses={HTTPStatus.OK: {"content": {MEDIA_TYPE_P12: {}}}},
-)
-async def fetch_existing_certificate(
-    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_scopes({AuthScopes.user_all}))],
-) -> Response:
-
-    # get user with p12
-    user = await select_user(db.session, user_context, with_p12=True)
-
-    if user is None:
-        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="No certificate exists, please register.")
-
-    return Response(
-        content=user.certificate_p12_bundle,
-        media_type=MEDIA_TYPE_P12,
-    )
-
-
-@router.put(
-    "/certificate",
-    status_code=HTTPStatus.OK,
-    response_class=Response,
-    responses={
-        HTTPStatus.OK: {
-            "headers": {"X-Certificate-Password": {"description": "Password for .p12 certificate bundle."}},
-            "content": {MEDIA_TYPE_P12: {}},
-        }
-    },
-)
-async def create_user_certificate(
-    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_scopes({AuthScopes.user_all}))],
-) -> Response:
-    # generate client passphrase
-    pphrase = SecretStr(shortuuid.random(length=20))
-
-    # create certs
-    client_p12, client_x509_der = await create_client_cert_binary(user_context, pphrase)
-
-    # insert or update user with new cert
-    _ = await upsert_user(db.session, user_context, client_p12=client_p12, client_x509_der=client_x509_der)
-
-    await db.session.commit()
-
-    return Response(
-        content=client_p12,
-        media_type=MEDIA_TYPE_P12,
-        headers={"X-Certificate-Password": pphrase.get_secret_value()},
-    )
 
 
 @router.get(
@@ -128,4 +79,114 @@ async def fetch_current_certificate_authority_der(
     return Response(
         content=ca_cert.public_bytes(serialization.Encoding.DER),
         media_type=MEDIA_TYPE_CA_CRT,
+    )
+
+
+@router.get(
+    "/certificate/{cert_type}",
+    response_class=Response,
+    responses={HTTPStatus.OK: {"content": {MEDIA_TYPE_P12: {}}}},
+)
+async def fetch_client_certificate(
+    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_scopes({AuthScopes.user_all}))],
+    cert_type: str,
+) -> Response:
+    """Fetches the certificate as a p12/pfx encoded stream of bytes
+
+    cert_type=device Returns the device certificate
+    cert_type=aggregator Returns the aggregator certificate"""
+
+    if cert_type == CertificateType.aggregator:
+        with_aggregator_p12 = True
+        with_device_p12 = False
+    elif cert_type == CertificateType.device:
+        with_aggregator_p12 = False
+        with_device_p12 = True
+    else:
+        raise HTTPException(
+            status_code=HTTPStatus.NOT_FOUND,
+            detail=f"cert_type '{cert_type}' is not valid. Please use 'aggregator' or 'device'",
+        )
+
+    # get user with the appropriate p12 selected
+    user = await select_user(
+        db.session, user_context, with_aggregator_p12=with_aggregator_p12, with_device_p12=with_device_p12
+    )
+    if user is None:
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="No certificate exists, please register.")
+
+    # Extract the appropriate stream of bytes
+    if cert_type == CertificateType.aggregator:
+        return Response(
+            content=user.aggregator_certificate_p12_bundle,
+            media_type=MEDIA_TYPE_P12,
+        )
+    elif cert_type == CertificateType.device:
+        return Response(
+            content=user.device_certificate_p12_bundle,
+            media_type=MEDIA_TYPE_P12,
+        )
+    else:
+        raise HTTPException(
+            status_code=HTTPStatus.NOT_FOUND,
+            detail=f"cert_type '{cert_type}' is not valid. Please use 'aggregator' or 'device'",
+        )
+
+
+@router.put(
+    "/certificate/{cert_type}",
+    status_code=HTTPStatus.OK,
+    response_class=Response,
+    responses={
+        HTTPStatus.OK: {
+            "headers": {"X-Certificate-Password": {"description": "Password for .p12 certificate bundle."}},
+            "content": {MEDIA_TYPE_P12: {}},
+        }
+    },
+)
+async def generate_client_certificate(
+    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_scopes({AuthScopes.user_all}))],
+    cert_type: str,
+) -> Response:
+    """Generates a user's certificate of cert_type. Replacing any existing certificate details
+
+    cert_type=device Returns the device certificate
+    cert_type=aggregator Returns the aggregator certificate"""
+
+    if cert_type not in CertificateType:
+        raise HTTPException(
+            status_code=HTTPStatus.NOT_FOUND,
+            detail=f"cert_type '{cert_type}' is not valid. Please use 'aggregator' or 'device'",
+        )
+
+    # Get (or create) the user
+    user = await select_user(db.session, user_context)
+    if user is None:
+        user = await insert_user(db.session, user_context)
+        logger.info(f"Created new user {user.user_id} for user context {user_context}")
+
+    # generate client passphrase
+    pass_phrase = SecretStr(shortuuid.random(length=20))
+    client_p12, client_x509_der = await create_client_cert_binary(user_context, pass_phrase)
+
+    # update the certificate details on the user
+    if cert_type == CertificateType.aggregator:
+        user.aggregator_certificate_p12_bundle = client_p12
+        user.aggregator_certificate_x509_der = client_x509_der
+    elif cert_type == CertificateType.device:
+        user.device_certificate_p12_bundle = client_p12
+        user.device_certificate_x509_der = client_x509_der
+    else:
+        # Check above should've prevented this from happening
+        raise HTTPException(
+            status_code=HTTPStatus.NOT_FOUND,
+            detail=f"cert_type '{cert_type}' is not valid. Please use 'aggregator' or 'device'",
+        )
+
+    await db.session.commit()
+
+    return Response(
+        content=client_p12,
+        media_type=MEDIA_TYPE_P12,
+        headers={"X-Certificate-Password": pass_phrase.get_secret_value()},
     )
