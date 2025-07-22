@@ -53,7 +53,7 @@ async def teardown_idle_teststack(
             idle = await is_idle(now, pod_url, teardowntask_idle_timeout_seconds)
         except Exception as exc:
             logger.warning("Call to cactus-runner last request endpoint failed.")
-            logger.debug(exc)
+            logger.debug("Exception", exc_info=exc)
 
         if idle or is_maxlive_overtime(now, run.created_at, teardowntask_max_lifetime_seconds):
             logger.info(f"(Idle/Overtime Task) Shutting down {svc_name}")
@@ -85,8 +85,6 @@ def generate_idleteardowntask(
     @repeat_every(seconds=idleteardowntask_repeat_every_seconds)
     async def idleteardowntask() -> None:
         """Task that monitors live teststacks and triggers teardown based on timeout rules."""
-        logger.info("Running idleteardowntask..")
-
         async with db():
             await teardown_idle_teststack(
                 db.session, idleteardowntask_max_lifetime_seconds, idleteardowntask_idle_timeout_seconds

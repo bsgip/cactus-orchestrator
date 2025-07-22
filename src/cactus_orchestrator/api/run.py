@@ -66,17 +66,47 @@ def map_run_to_run_response(run: Run) -> RunResponse:
         all_criteria_met=run.all_criteria_met,
         created_at=run.created_at,
         finalised_at=run.finalised_at,
+        is_device_cert=run.is_device_cert,
     )
 
 
 async def select_user_or_raise(
-    session: AsyncSession, user_context: UserContext, with_der: bool = False, with_p12: bool = False
+    session: AsyncSession,
+    user_context: UserContext,
+    with_aggregator_der: bool = False,
+    with_aggregator_p12: bool = False,
+    with_device_der: bool = False,
+    with_device_p12: bool = False,
 ) -> User:
-    user = await select_user(session, user_context, with_der, with_p12)
+    user = await select_user(
+        session,
+        user_context,
+        with_aggregator_der=with_aggregator_der,
+        with_aggregator_p12=with_aggregator_p12,
+        with_device_der=with_device_der,
+        with_device_p12=with_device_p12,
+    )
 
     if user is None:
+        logger.error(f"Cannot find user for user context {user_context}")
         raise HTTPException(status_code=HTTPStatus.FORBIDDEN, detail="Certificate has not been registered.")
     return user
+
+
+def ensure_certificate_valid(cert_type: str, der_data: bytes | None) -> x509.Certificate:
+    if der_data is None:
+        raise HTTPException(
+            HTTPStatus.EXPECTATION_FAILED,
+            detail=f"Your {cert_type} certificate needs to be generated before starting a test run.",
+        )
+
+    client_cert = x509.load_der_x509_certificate(der_data)
+    if client_cert.not_valid_after_utc < datetime.now(timezone.utc):
+        raise HTTPException(
+            HTTPStatus.EXPECTATION_FAILED,
+            detail=f"Your {cert_type} certificate has expired. Please regenerate your certificate and try again.",
+        )
+    return client_cert
 
 
 @router.get("/run", status_code=HTTPStatus.OK)
@@ -113,16 +143,12 @@ async def spawn_teststack_and_init_run(
         (2) Init any state in the envoy environment.
         (3) Update the ingress with a path to the envoy environment.
     """
-    # get user
-    user = await select_user_or_raise(db.session, user_context, with_der=True)
-
-    client_cert = x509.load_der_x509_certificate(user.certificate_x509_der)
-
-    if client_cert.not_valid_after_utc < datetime.now(timezone.utc):
-        raise HTTPException(
-            HTTPStatus.EXPECTATION_FAILED,
-            detail="Your certificate has expired. Please regenerate your certificate and try again.",
-        )
+    # get user and the preferred certificate
+    user = await select_user_or_raise(db.session, user_context, with_aggregator_der=True, with_device_der=True)
+    if user.is_device_cert:
+        client_cert = ensure_certificate_valid("Device", user.device_certificate_x509_der)
+    else:
+        client_cert = ensure_certificate_valid("Aggregator", user.aggregator_certificate_x509_der)
 
     # Discover the test stack ID - check for potential conflicts
     teststack_id: str | None = None
@@ -147,7 +173,7 @@ async def spawn_teststack_and_init_run(
 
     # Create the run in a "provisioning" state so we can access the run_id
     run_id = await insert_run_for_user(
-        db.session, user.user_id, teststack_id, test.test_procedure_id, RunStatus.provisioning
+        db.session, user.user_id, teststack_id, test.test_procedure_id, RunStatus.provisioning, user.is_device_cert
     )
 
     try:
@@ -158,7 +184,8 @@ async def spawn_teststack_and_init_run(
         # wait for statefulset's pod
         await wait_for_pod(pod_name)
 
-        # inject initial state
+        # inject initial state with either the device or aggregator cert data
+        pem_encoded_cert = client_cert.public_bytes(serialization.Encoding.PEM).decode("utf-8")
         async with ClientSession(
             base_url=RUNNER_POD_URL.format(pod_fqdn=pod_fqdn, pod_port=POD_HARNESS_RUNNER_MANAGEMENT_PORT),
             timeout=ClientTimeout(30),
@@ -166,7 +193,8 @@ async def spawn_teststack_and_init_run(
             await RunnerClient.init(
                 session=s,
                 test_id=test.test_procedure_id,
-                aggregator_certificate=client_cert.public_bytes(serialization.Encoding.PEM).decode("utf-8"),
+                aggregator_certificate=None if user.is_device_cert else pem_encoded_cert,
+                device_certificate=pem_encoded_cert if user.is_device_cert else None,
                 subscription_domain=user.subscription_domain,
                 run_id=str(run_id),
             )

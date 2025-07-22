@@ -28,13 +28,19 @@ class User(Base):
     subject_id: Mapped[str] = mapped_column(String, nullable=False)  # JWT sub
     issuer_id: Mapped[str] = mapped_column(String, nullable=False)  # JWT iss
 
-    # NOTE: We assume these are unique, too big to enfoce
-    certificate_p12_bundle: Mapped[bytes] = mapped_column(
-        LargeBinary, nullable=False, unique=False, deferred=True
-    )  # p12
-    certificate_x509_der: Mapped[bytes] = mapped_column(
-        LargeBinary, nullable=False, unique=False, deferred=True
-    )  # x509 DER-encoded
+    # NOTE: We assume these are unique, too big to enforce
+    aggregator_certificate_p12_bundle: Mapped[bytes | None] = mapped_column(
+        LargeBinary, nullable=True, unique=False, deferred=True
+    )  # p12 - Aggregator certificate + key
+    aggregator_certificate_x509_der: Mapped[bytes | None] = mapped_column(
+        LargeBinary, nullable=True, unique=False, deferred=True
+    )  # x509 DER-encoded - Aggregator certificate
+    device_certificate_p12_bundle: Mapped[bytes | None] = mapped_column(
+        LargeBinary, nullable=True, unique=False, deferred=True
+    )  # p12 - Device certificate + key
+    device_certificate_x509_der: Mapped[bytes | None] = mapped_column(
+        LargeBinary, nullable=True, unique=False, deferred=True
+    )  # x509 DER-encoded - Device certificate
 
     subscription_domain: Mapped[str | None] = mapped_column(
         String, nullable=True
@@ -42,6 +48,9 @@ class User(Base):
     is_static_uri: Mapped[bool] = mapped_column(
         BOOLEAN, server_default="0"
     )  # If True - always use the same URI for all spawned instances (this will limit them to a single run at a time)
+    is_device_cert: Mapped[bool] = mapped_column(
+        BOOLEAN, server_default="0"
+    )  # If True - init test runs using device certificate. Otherwise init using aggregator certificate
 
     runs: Mapped[list["Run"]] = relationship(lazy="raise")
 
@@ -92,6 +101,9 @@ class Run(Base):
     all_criteria_met: Mapped[bool | None] = mapped_column(
         BOOLEAN, nullable=True
     )  # True if EVERY criteria was met at run finalisation. False if there were issues. None if no data/still running
+    is_device_cert: Mapped[bool] = mapped_column(
+        BOOLEAN, server_default="0"
+    )  # If True - this run was initialised using device certificate. Otherwise initialised using aggregator certificate
 
     run_artifact_id: Mapped[int | None] = mapped_column(ForeignKey("run_artifact.id"), nullable=True)
     run_artifact: Mapped["RunArtifact"] = relationship(lazy="raise")

@@ -1,6 +1,7 @@
 import base64
 import json
 import logging
+from datetime import datetime, timedelta, timezone
 from enum import StrEnum
 from http import HTTPStatus
 from typing import Any, Callable, Coroutine, cast
@@ -41,7 +42,10 @@ class JWTClaims(BaseModel):
 
 
 class JWTValidator:
-    def __init__(self) -> None:
+    cache_length: timedelta
+
+    def __init__(self, cache_length: timedelta) -> None:
+        self.cache_length = cache_length  # How long should the
         self._settings = JWTAuthSettings()  # type: ignore  [call-arg]
         self._rsa_jwk_cache = AsyncCache(self._update_rsa_jwk_cache, force_update_delay_seconds=10)
 
@@ -56,9 +60,13 @@ class JWTValidator:
                 response = await client.get(self._settings.jwks_url)
                 response.raise_for_status()
         except httpx.HTTPError as e:
+            logger.error(f"Failed to update JWK cache. jwks_url={self._settings.jwks_url}", exc_info=e)
             raise exceptions.JWKError(f"Failed to fetch JWKS: {str(e)}")
 
         jwks = response.json().get("keys", [])
+        now = datetime.now(tz=timezone.utc)
+        cache_expiry = now + self.cache_length
+        new_cache: dict[str, ExpiringValue[str]] = {}
         for key in jwks:
             if key["kty"].lower() == "rsa":
                 rsa_key = self._deserialise_rsa_jwk(key)
@@ -68,8 +76,17 @@ class JWTValidator:
                 ).decode(
                     "utf-8"
                 )  # NOTE: deserialising here fore cache
-                return {key["kid"]: ExpiringValue(None, pem_key)}
-        raise exceptions.JWKError("No RSAPublicKey found.")
+
+                kid = key["kid"]
+                logger.debug(f"JWK Cache entry update kid={kid} expiring={cache_expiry}")
+                new_cache[kid] = ExpiringValue(now + self.cache_length, pem_key)
+
+        if new_cache:
+            logger.info(f"Updated JWK cache jwks_url={self._settings.jwks_url}. Found RSA kid's={new_cache.keys()}")
+            return new_cache
+        else:
+            logger.error(f"No RSAPublicKey found for jwks_url={self._settings.jwks_url}")
+            raise exceptions.JWKError("No RSAPublicKey found.")
 
     def _deserialise_rsa_jwk(self, jwk: dict[str, str]) -> rsa.RSAPublicKey:
         """We either get base64 url-encoded n/e and convert into an RSAPublicKey
@@ -85,6 +102,7 @@ class JWTValidator:
             cert_der = base64.b64decode(jwk["x5c"][0])
             cert = load_der_x509_certificate(cert_der)
             return cast(rsa.RSAPublicKey, cert.public_key())
+
         raise exceptions.JWKError("JWK has invalid Form.")
 
     def _extract_kid_from_jwt(self, token: str) -> str:
@@ -99,6 +117,7 @@ class JWTValidator:
         rsa_pkey = await self._rsa_jwk_cache.get_value(None, kid)
 
         if rsa_pkey is None:
+            logger.error(f"No matching key-id '{kid}' found in JWKs.")
             raise exceptions.JWKError(f"No matching key-id '{kid}' found in JWKs.")
 
         return cast(rsa.RSAPublicKey, serialization.load_pem_public_key(rsa_pkey.encode("utf-8")))
@@ -106,6 +125,7 @@ class JWTValidator:
     async def _verify_jwt(self, token: str) -> JWTClaims:
         """Extract and verify JWT from Authorization header."""
         kid = self._extract_kid_from_jwt(token)
+        logger.info(f"Validating kid='{kid}'")
 
         public_key = await self.get_pubkey(kid)
 
@@ -141,7 +161,10 @@ class JWTValidator:
                 jwt_claims = await self._verify_jwt(token)
                 validated = self._check_scopes(required_scopes, jwt_claims)
             except (exceptions.JWKError, exceptions.JWTClaimsError, exceptions.JWTError) as exc:
-                logger.info(exc)
+                logger.debug(
+                    f"jwks_url='{self._settings.jwks_url}' issuer='{self._settings.issuer}' audience='{self._settings.audience}'"  # noqa: 501
+                )
+                logger.error(f"Failure validating JWT claims. required_scopes={required_scopes}", exc_info=exc)
                 raise HTTPException(status_code=HTTPStatus.UNAUTHORIZED, detail="Invalid token")
             return UserContext(subject_id=validated.sub, issuer_id=validated.iss)
 
@@ -149,4 +172,4 @@ class JWTValidator:
 
 
 # NOTE: singleton
-jwt_validator = JWTValidator()
+jwt_validator = JWTValidator(cache_length=timedelta(hours=4))
