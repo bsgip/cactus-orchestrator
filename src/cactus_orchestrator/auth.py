@@ -125,7 +125,7 @@ class JWTValidator:
     async def _verify_jwt(self, token: str) -> JWTClaims:
         """Extract and verify JWT from Authorization header."""
         kid = self._extract_kid_from_jwt(token)
-        logger.info(f"Validating kid='{kid}'")
+        logger.debug(f"Validating kid='{kid}'")
 
         public_key = await self.get_pubkey(kid)
 
