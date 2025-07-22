@@ -54,6 +54,7 @@ def user_to_config(user: User) -> UserConfigurationResponse:
         subscription_domain="" if user.subscription_domain is None else user.subscription_domain,
         is_static_uri=user.is_static_uri,
         static_uri=static_uri,
+        is_device_cert=user.is_device_cert,
         aggregator_certificate_expiry=aggregator_certificate_expiry,
         device_certificate_expiry=device_certificate_expiry,
     )
@@ -100,6 +101,9 @@ async def update_config(
 
     if body.is_static_uri is not None:
         user.is_static_uri = body.is_static_uri
+
+    if body.is_device_cert is not None:
+        user.is_device_cert = body.is_device_cert
 
     await db.session.commit()
 

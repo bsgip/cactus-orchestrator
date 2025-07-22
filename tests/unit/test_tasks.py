@@ -1,14 +1,14 @@
 import asyncio
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, patch, Mock
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
+from assertical.fixtures.postgres import generate_async_session
 from fastapi.testclient import TestClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
-from assertical.fixtures.postgres import generate_async_session
 
-from cactus_orchestrator.model import RunStatus, Run
+from cactus_orchestrator.model import Run, RunStatus
 from cactus_orchestrator.tasks import generate_idleteardowntask, teardown_idle_teststack
 
 
@@ -107,13 +107,14 @@ async def test_idleteardowntask_multiple_triggers(mock_teardown_idle_teststack, 
 async def test_teardown_idle_teststack(pg_empty_conn, new_app):
     """Ensure background task triggers actions, with DB unmocked."""
     # Arrange
-    from cactus_orchestrator.tasks import is_idle, teardown_teststack, get_resource_names, finalise_run
+    from cactus_orchestrator.tasks import finalise_run, get_resource_names, is_idle, teardown_teststack
 
     pg_empty_conn.execute(
         text(
             """
-            INSERT INTO user_ (subject_id, issuer_id, certificate_p12_bundle, certificate_x509_der)
-            VALUES ('user1', 'issuer1', E'\\x', E'\\x')
+            INSERT INTO user_ (subject_id, issuer_id, aggregator_certificate_p12_bundle,
+            aggregator_certificate_x509_der, device_certificate_p12_bundle, device_certificate_x509_der)
+            VALUES ('user1', 'issuer1', E'\\x', E'\\x', E'\\x', E'\\x');
             """
         )
     )

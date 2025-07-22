@@ -22,7 +22,7 @@ from cactus_orchestrator.settings import CactusOrchestratorException, get_curren
 logger = logging.getLogger(__name__)
 
 
-class CertificateType(StrEnum):
+class CertificateRouteType(StrEnum):
     aggregator = auto()
     device = auto()
 
@@ -96,10 +96,10 @@ async def fetch_client_certificate(
     cert_type=device Returns the device certificate
     cert_type=aggregator Returns the aggregator certificate"""
 
-    if cert_type == CertificateType.aggregator:
+    if cert_type == CertificateRouteType.aggregator:
         with_aggregator_p12 = True
         with_device_p12 = False
-    elif cert_type == CertificateType.device:
+    elif cert_type == CertificateRouteType.device:
         with_aggregator_p12 = False
         with_device_p12 = True
     else:
@@ -116,12 +116,12 @@ async def fetch_client_certificate(
         raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="No certificate exists, please register.")
 
     # Extract the appropriate stream of bytes
-    if cert_type == CertificateType.aggregator:
+    if cert_type == CertificateRouteType.aggregator:
         return Response(
             content=user.aggregator_certificate_p12_bundle,
             media_type=MEDIA_TYPE_P12,
         )
-    elif cert_type == CertificateType.device:
+    elif cert_type == CertificateRouteType.device:
         return Response(
             content=user.device_certificate_p12_bundle,
             media_type=MEDIA_TYPE_P12,
@@ -153,7 +153,7 @@ async def generate_client_certificate(
     cert_type=device Returns the device certificate
     cert_type=aggregator Returns the aggregator certificate"""
 
-    if cert_type not in CertificateType:
+    if cert_type not in CertificateRouteType:
         raise HTTPException(
             status_code=HTTPStatus.NOT_FOUND,
             detail=f"cert_type '{cert_type}' is not valid. Please use 'aggregator' or 'device'",
@@ -170,10 +170,10 @@ async def generate_client_certificate(
     client_p12, client_x509_der = await create_client_cert_binary(user_context, pass_phrase)
 
     # update the certificate details on the user
-    if cert_type == CertificateType.aggregator:
+    if cert_type == CertificateRouteType.aggregator:
         user.aggregator_certificate_p12_bundle = client_p12
         user.aggregator_certificate_x509_der = client_x509_der
-    elif cert_type == CertificateType.device:
+    elif cert_type == CertificateRouteType.device:
         user.device_certificate_p12_bundle = client_p12
         user.device_certificate_x509_der = client_x509_der
     else:

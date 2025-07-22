@@ -90,21 +90,18 @@ async def test_insert_user(pg_empty_conn):
 
 
 @pytest.mark.asyncio
-async def test_add_or_update_user_unique_constraint(pg_empty_conn, ca_cert_key_pair):
+async def test_add_or_update_user_unique_constraint(pg_empty_conn):
     """test exception raised on unique constraint breach"""
     # Arrange
-    ca_cert, ca_key = ca_cert_key_pair
-    cl_p12, cl_x509 = generate_client_p12(ca_key, ca_cert, "test", "abc")
-    cl_der = cl_x509.public_bytes(encoding=serialization.Encoding.DER)
     uc = UserContext(subject_id="a", issuer_id="a")
 
     async with generate_async_session(pg_empty_conn.connection) as s:
-        _ = await insert_user(s, uc, cl_p12, cl_der)
+        _ = await insert_user(s, uc)
         await s.commit()
 
     with pytest.raises(IntegrityError):
         async with generate_async_session(pg_empty_conn.connection) as s:
-            _ = await insert_user(s, uc, cl_p12, cl_der)
+            _ = await insert_user(s, uc)
             await s.commit()
 
 
@@ -115,8 +112,8 @@ async def test_select_user_runs_all(pg_empty_conn):
     pg_empty_conn.execute(
         text(
             """
-                INSERT INTO user_ (subject_id, issuer_id, certificate_p12_bundle, certificate_x509_der)
-                VALUES ('user1', 'issuer1', E'\\x', E'\\x')
+                INSERT INTO user_ (subject_id, issuer_id, aggregator_certificate_p12_bundle, aggregator_certificate_x509_der, device_certificate_p12_bundle, device_certificate_x509_der)
+                VALUES ('user1', 'issuer1', E'\\x', E'\\x', E'\\x', E'\\x');
             """
         )
     )
@@ -164,8 +161,8 @@ async def test_select_user_runs_finalised_only(pg_empty_conn, run_status):
     pg_empty_conn.execute(
         text(
             """
-                INSERT INTO user_ (subject_id, issuer_id, certificate_p12_bundle, certificate_x509_der)
-                VALUES ('user1', 'issuer1', E'\\x', E'\\x')
+                INSERT INTO user_ (subject_id, issuer_id, aggregator_certificate_p12_bundle, aggregator_certificate_x509_der, device_certificate_p12_bundle, device_certificate_x509_der)
+                VALUES ('user1', 'issuer1', E'\\x', E'\\x', E'\\x', E'\\x');
             """
         )
     )
@@ -201,8 +198,8 @@ async def test_select_user_runs_unfinalised_only(pg_empty_conn, run_status):
     pg_empty_conn.execute(
         text(
             """
-                INSERT INTO user_ (subject_id, issuer_id, certificate_p12_bundle, certificate_x509_der)
-                VALUES ('user1', 'issuer1', E'\\x', E'\\x')
+                INSERT INTO user_ (subject_id, issuer_id, aggregator_certificate_p12_bundle, aggregator_certificate_x509_der, device_certificate_p12_bundle, device_certificate_x509_der)
+                VALUES ('user1', 'issuer1', E'\\x', E'\\x', E'\\x', E'\\x');
             """
         )
     )
@@ -238,8 +235,8 @@ async def test_select_user_runs_created_at_filter(pg_empty_conn):
     pg_empty_conn.execute(
         text(
             """
-                INSERT INTO user_ (subject_id, issuer_id, certificate_p12_bundle, certificate_x509_der)
-                VALUES ('user1', 'issuer1', E'\\x', E'\\x')
+                INSERT INTO user_ (subject_id, issuer_id, aggregator_certificate_p12_bundle, aggregator_certificate_x509_der, device_certificate_p12_bundle, device_certificate_x509_der)
+                VALUES ('user1', 'issuer1', E'\\x', E'\\x', E'\\x', E'\\x')
             """
         )
     )
@@ -275,8 +272,8 @@ async def test_insert_run_for_user(pg_empty_conn):
     pg_empty_conn.execute(
         text(
             """
-            INSERT INTO user_ (subject_id, issuer_id, certificate_p12_bundle, certificate_x509_der)
-            VALUES ('user1', 'issuer1', E'\\x', E'\\x')
+            INSERT INTO user_ (subject_id, issuer_id, aggregator_certificate_p12_bundle, aggregator_certificate_x509_der, device_certificate_p12_bundle, device_certificate_x509_der)
+            VALUES ('user1', 'issuer1', E'\\x', E'\\x', E'\\x', E'\\x')
             """
         )
     )
@@ -284,12 +281,12 @@ async def test_insert_run_for_user(pg_empty_conn):
 
     # Act
     async with generate_async_session(pg_empty_conn.connection) as session:
-        run_id = await insert_run_for_user(session, 1, "teststack1", "ALL_01", RunStatus.initialised)
+        run_id = await insert_run_for_user(session, 1, "teststack1", "ALL_01", RunStatus.initialised, True)
         await session.commit()
 
     # Assert
     assert run_id is not None
-    result = pg_empty_conn.execute(text(f"SELECT COUNT(*) FROM run")).fetchone()
+    result = pg_empty_conn.execute(text("SELECT COUNT(*) FROM run")).fetchone()
     assert result[0] == 1
 
 
@@ -301,8 +298,8 @@ async def test_select_nonfinalised_runs(pg_empty_conn, run_status):
     pg_empty_conn.execute(
         text(
             """
-            INSERT INTO user_ (subject_id, issuer_id, certificate_p12_bundle, certificate_x509_der)
-            VALUES ('user1', 'issuer1', E'\\x', E'\\x')
+            INSERT INTO user_ (subject_id, issuer_id, aggregator_certificate_p12_bundle, aggregator_certificate_x509_der, device_certificate_p12_bundle, device_certificate_x509_der)
+            VALUES ('user1', 'issuer1', E'\\x', E'\\x', E'\\x', E'\\x');
             """
         )
     )
@@ -334,8 +331,8 @@ async def test_update_run_run_status(pg_empty_conn):
     pg_empty_conn.execute(
         text(
             """
-            INSERT INTO user_ (subject_id, issuer_id, certificate_p12_bundle, certificate_x509_der)
-            VALUES ('user1', 'issuer1', E'\\x', E'\\x')
+            INSERT INTO user_ (subject_id, issuer_id, aggregator_certificate_p12_bundle, aggregator_certificate_x509_der, device_certificate_p12_bundle, device_certificate_x509_der)
+            VALUES ('user1', 'issuer1', E'\\x', E'\\x', E'\\x', E'\\x');
             """
         )
     )
@@ -367,8 +364,8 @@ async def test_select_user_run(pg_empty_conn):
     pg_empty_conn.execute(
         text(
             """
-            INSERT INTO user_ (subject_id, issuer_id, certificate_p12_bundle, certificate_x509_der)
-            VALUES ('user1', 'issuer1', E'\\x', E'\\x')
+            INSERT INTO user_ (subject_id, issuer_id, aggregator_certificate_p12_bundle, aggregator_certificate_x509_der, device_certificate_p12_bundle, device_certificate_x509_der)
+            VALUES ('user1', 'issuer1', E'\\x', E'\\x', E'\\x', E'\\x');
             """
         )
     )
@@ -408,8 +405,8 @@ async def test_update_run_with_runartifact_and_finalise(pg_empty_conn, run_statu
     pg_empty_conn.execute(
         text(
             """
-            INSERT INTO user_ (subject_id, issuer_id, certificate_p12_bundle, certificate_x509_der)
-            VALUES ('user1', 'issuer1', E'\\x', E'\\x')
+            INSERT INTO user_ (subject_id, issuer_id, aggregator_certificate_p12_bundle, aggregator_certificate_x509_der, device_certificate_p12_bundle, device_certificate_x509_der)
+            VALUES ('user1', 'issuer1', E'\\x', E'\\x', E'\\x', E'\\x');
             """
         )
     )
@@ -455,8 +452,8 @@ async def test_select_user_run_with_artifact(pg_empty_conn):
     pg_empty_conn.execute(
         text(
             """
-            INSERT INTO user_ (subject_id, issuer_id, certificate_p12_bundle, certificate_x509_der)
-            VALUES ('user1', 'issuer1', E'\\x', E'\\x')
+            INSERT INTO user_ (subject_id, issuer_id, aggregator_certificate_p12_bundle, aggregator_certificate_x509_der, device_certificate_p12_bundle, device_certificate_x509_der)
+            VALUES ('user1', 'issuer1', E'\\x', E'\\x', E'\\x', E'\\x');
             """
         )
     )
@@ -591,10 +588,10 @@ async def test_select_user_runs_aggregated_by_procedure(pg_empty_conn):
     pg_empty_conn.execute(
         text(
             """
-            INSERT INTO user_ (id, subject_id, issuer_id, certificate_p12_bundle, certificate_x509_der)
-            VALUES (1, 'user1', 'issuer1', E'\\x', E'\\x');
-            INSERT INTO user_ (id, subject_id, issuer_id, certificate_p12_bundle, certificate_x509_der)
-            VALUES (2, 'user2', 'issuer2', E'\\x', E'\\x');
+            INSERT INTO user_ (id, subject_id, issuer_id, aggregator_certificate_p12_bundle, aggregator_certificate_x509_der, device_certificate_p12_bundle, device_certificate_x509_der)
+            VALUES (1, 'user1', 'issuer1', E'\\x', E'\\x', E'\\x', E'\\x');
+            INSERT INTO user_ (id, subject_id, issuer_id, aggregator_certificate_p12_bundle, aggregator_certificate_x509_der, device_certificate_p12_bundle, device_certificate_x509_der)
+            VALUES (2, 'user2', 'issuer2', E'\\x', E'\\x', E'\\x', E'\\x');
 
             INSERT INTO run (user_id, teststack_id, testprocedure_id, run_status, all_criteria_met)
             VALUES (1, '', 'NOT-A-TEST-ID', 1, true);
@@ -664,10 +661,10 @@ async def test_select_user_runs_for_procedure(pg_empty_conn):
     pg_empty_conn.execute(
         text(
             """
-            INSERT INTO user_ (id, subject_id, issuer_id, certificate_p12_bundle, certificate_x509_der)
-            VALUES (1, 'user1', 'issuer1', E'\\x', E'\\x');
-            INSERT INTO user_ (id, subject_id, issuer_id, certificate_p12_bundle, certificate_x509_der)
-            VALUES (2, 'user2', 'issuer2', E'\\x', E'\\x');
+            INSERT INTO user_ (id, subject_id, issuer_id, aggregator_certificate_p12_bundle, aggregator_certificate_x509_der, device_certificate_p12_bundle, device_certificate_x509_der)
+            VALUES (1, 'user1', 'issuer1', E'\\x', E'\\x', E'\\x', E'\\x');
+            INSERT INTO user_ (id, subject_id, issuer_id, aggregator_certificate_p12_bundle, aggregator_certificate_x509_der, device_certificate_p12_bundle, device_certificate_x509_der)
+            VALUES (2, 'user2', 'issuer2', E'\\x', E'\\x', E'\\x', E'\\x');
 
             INSERT INTO run (user_id, teststack_id, testprocedure_id, run_status, all_criteria_met)
             VALUES (1, '', 'NOT-A-TEST-ID', 1, true);

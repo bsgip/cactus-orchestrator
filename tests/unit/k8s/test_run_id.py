@@ -20,10 +20,22 @@ def assert_uri_friendly(s: str):
 
 def test_generate_static_test_stack_id():
     u1 = generate_class_instance(
-        User, user_id=1, is_static_uri=True, certificate_p12_bundle=[], certificate_x509_der=[]
+        User,
+        user_id=1,
+        is_static_uri=True,
+        aggregator_certificate_p12_bundle=[],
+        aggregator_certificate_x509_der=[],
+        device_certificate_p12_bundle=[],
+        device_certificate_x509_der=[],
     )
     u2 = generate_class_instance(
-        User, user_id=2, is_static_uri=True, certificate_p12_bundle=[], certificate_x509_der=[]
+        User,
+        user_id=2,
+        is_static_uri=True,
+        aggregator_certificate_p12_bundle=[],
+        aggregator_certificate_x509_der=[],
+        device_certificate_p12_bundle=[],
+        device_certificate_x509_der=[],
     )
 
     u1_id = generate_static_test_stack_id(u1)

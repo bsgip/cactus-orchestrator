@@ -57,13 +57,19 @@ async def select_user(
 
 
 async def insert_run_for_user(
-    session: AsyncSession, user_id: int, teststack_id: str, testprocedure_id: str, run_status: RunStatus
+    session: AsyncSession,
+    user_id: int,
+    teststack_id: str,
+    testprocedure_id: str,
+    run_status: RunStatus,
+    is_device_cert: bool,
 ) -> int:
     run = Run(
         user_id=user_id,
         teststack_id=teststack_id,
         testprocedure_id=testprocedure_id,
         run_status=run_status,
+        is_device_cert=is_device_cert,
     )
     session.add(run)
     await session.flush()
