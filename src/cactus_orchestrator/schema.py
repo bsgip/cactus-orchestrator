@@ -1,7 +1,7 @@
 from datetime import datetime
 from enum import StrEnum, auto
 
-from cactus_test_definitions import TestProcedureId
+from cactus_test_definitions import CSIPAusVersion, TestProcedureId
 from pydantic import BaseModel
 
 

@@ -16,11 +16,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from cactus_orchestrator.auth import AuthScopes, jwt_validator
 from cactus_orchestrator.crud import (
     create_runartifact,
-    insert_run_for_user,
     select_user,
     select_user_run,
     select_user_run_with_artifact,
-    select_user_runs,
     update_run_run_status,
     update_run_with_runartifact_and_finalise,
 )

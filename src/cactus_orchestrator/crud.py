@@ -2,12 +2,12 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Sequence
 
-from cactus_test_definitions.test_procedures import TestProcedureId
+from cactus_test_definitions.test_procedures import CSIPAusVersion, TestProcedureId
 from sqlalchemy import and_, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import joinedload, undefer
+from sqlalchemy.orm import joinedload, selectinload, undefer
 
-from cactus_orchestrator.model import Run, RunArtifact, RunStatus, User
+from cactus_orchestrator.model import Run, RunArtifact, RunGroup, RunStatus, User
 from cactus_orchestrator.schema import UserContext
 
 
@@ -16,7 +16,12 @@ async def insert_user(session: AsyncSession, user_context: UserContext) -> User:
     if a user with the same user_context already exists in the database. Returns a User with all props being
     undeferred"""
 
-    session.add(User(subject_id=user_context.subject_id, issuer_id=user_context.issuer_id))
+    user = User(
+        subject_id=user_context.subject_id,
+        issuer_id=user_context.issuer_id,
+        run_groups=[RunGroup(name="Default Group", csip_aus_version=CSIPAusVersion.RELEASE_1_2.value)],
+    )
+    session.add(user)
     await session.flush()
 
     new_user = await select_user(session, user_context, True, True, True, True)
@@ -56,16 +61,16 @@ async def select_user(
     return res.scalar_one_or_none()
 
 
-async def insert_run_for_user(
+async def insert_run_for_run_group(
     session: AsyncSession,
-    user_id: int,
+    run_group_id: int,
     teststack_id: str,
     testprocedure_id: str,
     run_status: RunStatus,
     is_device_cert: bool,
 ) -> int:
     run = Run(
-        user_id=user_id,
+        run_group_id=run_group_id,
         teststack_id=teststack_id,
         testprocedure_id=testprocedure_id,
         run_status=run_status,
@@ -76,11 +81,16 @@ async def insert_run_for_user(
     return run.run_id
 
 
-async def select_user_runs(
-    session: AsyncSession, user_id: int, finalised: bool | None, created_at_gte: datetime | None
-) -> list[Run]:
+async def select_run_groups_for_user(session: AsyncSession, user_id: int) -> Sequence[RunGroup]:
+    resp = await session.execute(select(RunGroup).where(RunGroup.user_id == user_id).order_by(RunGroup.run_group_id))
+    return resp.scalars().all()
+
+
+async def select_runs_for_group(
+    session: AsyncSession, run_group_id: int, finalised: bool | None, created_at_gte: datetime | None
+) -> Sequence[Run]:
     # runs statement
-    stmt = select(Run).where(Run.user_id == user_id)
+    stmt = select(Run).where(Run.run_group_id == run_group_id)
     filters = []
     if created_at_gte is not None:
         filters.append(Run.created_at >= created_at_gte)
@@ -93,14 +103,14 @@ async def select_user_runs(
     if filters:
         stmt = stmt.where(and_(*filters))
 
-    res = await session.execute(stmt)
-    return list(res.scalars().all())
+    resp = await session.execute(stmt)
+    return resp.scalars().all()
 
 
-async def select_nonfinalised_runs(session: AsyncSession) -> list[Run]:
+async def select_nonfinalised_runs(session: AsyncSession) -> Sequence[Run]:
     stmt = select(Run).where(Run.run_status.in_((RunStatus.started.value, RunStatus.initialised.value)))
-    res = await session.execute(stmt)
-    return list(res.scalars().all())
+    resp = await session.execute(stmt)
+    return resp.scalars().all()
 
 
 async def update_run_run_status(
@@ -133,10 +143,15 @@ async def update_run_with_runartifact_and_finalise(
 
 
 async def select_user_run(session: AsyncSession, user_id: int, run_id: int) -> Run:
-    stmt = select(Run).where(
-        and_(
-            Run.run_id == run_id,
-            Run.user_id == user_id,
+    stmt = (
+        select(Run)
+        .join(RunGroup)
+        .options(selectinload(Run.run_group))
+        .where(
+            and_(
+                Run.run_id == run_id,
+                RunGroup.user_id == user_id,
+            )
         )
     )
 
@@ -148,13 +163,15 @@ async def select_user_run(session: AsyncSession, user_id: int, run_id: int) -> R
 async def select_user_run_with_artifact(session: AsyncSession, user_id: int, run_id: int) -> Run:
     stmt = (
         select(Run)
+        .join(RunGroup)
         .where(
             and_(
                 Run.run_id == run_id,
-                Run.user_id == user_id,
+                RunGroup.user_id == user_id,
             )
         )
         .options(joinedload(Run.run_artifact))
+        .options(selectinload(Run.run_group))
     )
 
     resp = await session.execute(stmt)
@@ -169,7 +186,9 @@ class ProcedureRunAggregated:
     latest_all_criteria_met: bool | None  # Value for all_criteria_met of the most recent Run
 
 
-async def select_user_runs_aggregated_by_procedure(session: AsyncSession, user_id: int) -> list[ProcedureRunAggregated]:
+async def select_group_runs_aggregated_by_procedure(
+    session: AsyncSession, run_group_id: int
+) -> list[ProcedureRunAggregated]:
     """Generates a ProcedureRunAggregated for each TestProcedureId. This will aggregate all runs under each
     TestProcedure and provide top level summary information."""
 
@@ -178,7 +197,7 @@ async def select_user_runs_aggregated_by_procedure(session: AsyncSession, user_i
         select(Run.testprocedure_id, func.count())
         .select_from(Run)
         .where(
-            Run.user_id == user_id,
+            Run.run_group_id == run_group_id,
         )
         .group_by(Run.testprocedure_id)
     )
@@ -189,7 +208,7 @@ async def select_user_runs_aggregated_by_procedure(session: AsyncSession, user_i
         select(Run.testprocedure_id, Run.all_criteria_met)
         .distinct(Run.testprocedure_id)
         .order_by(Run.testprocedure_id, Run.run_id.desc())
-        .where(Run.user_id == user_id)
+        .where(Run.run_group_id == run_group_id)
     )
     distinct_resp = await session.execute(stmt)
     raw_criteria = dict((r.tuple() for r in distinct_resp.all()))
@@ -204,14 +223,16 @@ async def select_user_runs_aggregated_by_procedure(session: AsyncSession, user_i
     ]
 
 
-async def select_user_runs_for_procedure(session: AsyncSession, user_id: int, test_procedure_id: str) -> Sequence[Run]:
-    """Selects all user runs that exist under a test procedure. Will not include deferred data. Returns runs
+async def select_group_runs_for_procedure(
+    session: AsyncSession, run_group_id: int, test_procedure_id: str
+) -> Sequence[Run]:
+    """Selects all RunGroup runs that exist under a test procedure. Will not include deferred data. Returns runs
     returned in run_id descending order (most recent first)."""
 
     # Fetch all runs
     resp = await session.execute(
         select(Run)
-        .where(and_(Run.user_id == user_id, Run.testprocedure_id == test_procedure_id))
+        .where(and_(Run.run_group_id == run_group_id, Run.testprocedure_id == test_procedure_id))
         .order_by(Run.run_id.desc())
     )
 
