@@ -5,6 +5,7 @@ from typing import Annotated
 
 from cactus_runner.client import ClientSession, ClientTimeout, RunnerClient, RunnerClientException
 from cactus_runner.models import RunnerStatus
+from cactus_test_definitions import CSIPAusVersion
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
@@ -16,35 +17,54 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from cactus_orchestrator.auth import AuthScopes, jwt_validator
 from cactus_orchestrator.crud import (
     create_runartifact,
+    insert_run_for_run_group,
+    insert_run_group,
+    select_active_runs_for_user,
+    select_run_group_for_user,
+    select_run_groups_for_user,
+    select_runs_for_group,
     select_user,
     select_user_run,
     select_user_run_with_artifact,
     update_run_run_status,
     update_run_with_runartifact_and_finalise,
 )
-from cactus_orchestrator.k8s.resource import get_resource_names
-from cactus_orchestrator.k8s.resource.create import add_ingress_rule, clone_service, clone_statefulset, wait_for_pod
-from cactus_orchestrator.k8s.resource.delete import delete_service, delete_statefulset, remove_ingress_rule
-from cactus_orchestrator.k8s.run_id import (
+from cactus_orchestrator.k8s.resource import (
+    RunResourceNames,
     generate_dynamic_test_stack_id,
     generate_envoy_dcap_uri,
     generate_static_test_stack_id,
+    get_resource_names,
+    get_template_names,
 )
-from cactus_orchestrator.model import Run, RunArtifact, RunStatus, User
+from cactus_orchestrator.k8s.resource.create import add_ingress_rule, clone_service, clone_statefulset, wait_for_pod
+from cactus_orchestrator.k8s.resource.delete import delete_service, delete_statefulset, remove_ingress_rule
+from cactus_orchestrator.model import Run, RunArtifact, RunGroup, RunStatus, User
 from cactus_orchestrator.schema import (
     InitRunRequest,
     InitRunResponse,
+    RunGroupRequest,
+    RunGroupResponse,
     RunResponse,
     RunStatusResponse,
     StartRunResponse,
     UserContext,
 )
-from cactus_orchestrator.settings import POD_HARNESS_RUNNER_MANAGEMENT_PORT, RUNNER_POD_URL, CactusOrchestratorException
+from cactus_orchestrator.settings import CactusOrchestratorException
 
 logger = logging.getLogger(__name__)
 
 
 router = APIRouter()
+
+
+def map_group_to_group_response(group: RunGroup) -> RunGroupResponse:
+    return RunGroupResponse(
+        run_group_id=group.run_group_id,
+        name=group.name,
+        csip_aus_version=group.csip_aus_version,
+        created_at=group.created_at,
+    )
 
 
 def map_run_to_run_response(run: Run) -> RunResponse:
@@ -59,7 +79,7 @@ def map_run_to_run_response(run: Run) -> RunResponse:
     return RunResponse(
         run_id=run.run_id,
         test_procedure_id=run.testprocedure_id,
-        test_url=generate_envoy_dcap_uri(run.teststack_id),
+        test_url=generate_envoy_dcap_uri(get_resource_names(run.teststack_id)),
         status=status,
         all_criteria_met=run.all_criteria_met,
         created_at=run.created_at,
@@ -91,6 +111,34 @@ async def select_user_or_raise(
     return user
 
 
+async def select_user_run_group_or_raise(
+    session: AsyncSession,
+    user_context: UserContext,
+    run_group_id: int,
+    with_aggregator_der: bool = False,
+    with_aggregator_p12: bool = False,
+    with_device_der: bool = False,
+    with_device_p12: bool = False,
+) -> tuple[User, RunGroup]:
+    user = await select_user_or_raise(
+        session,
+        user_context,
+        with_aggregator_der=with_aggregator_der,
+        with_aggregator_p12=with_aggregator_p12,
+        with_device_der=with_device_der,
+        with_device_p12=with_device_p12,
+    )
+
+    run_group = await select_run_group_for_user(session, user.user_id, run_group_id)
+    if run_group is None:
+        logger.error(f"Cannot find run_group {run_group_id} for user {user.user_id}")
+        raise HTTPException(
+            status_code=HTTPStatus.FORBIDDEN, detail=f"Cannot find run_group {run_group_id} for user {user.user_id}"
+        )
+
+    return (user, run_group)
+
+
 def ensure_certificate_valid(cert_type: str, der_data: bytes | None) -> x509.Certificate:
     if der_data is None:
         raise HTTPException(
@@ -107,17 +155,56 @@ def ensure_certificate_valid(cert_type: str, der_data: bytes | None) -> x509.Cer
     return client_cert
 
 
-@router.get("/run", status_code=HTTPStatus.OK)
-async def get_runs_paginated(
+@router.get("/run_group", status_code=HTTPStatus.OK)
+async def get_groups_paginated(
     user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_scopes({AuthScopes.user_all}))],
-    finalised: bool | None = Query(default=None),
-    created_after: datetime = Query(default=datetime.now(tz=timezone.utc) - timedelta(days=7)),
-) -> Page[RunResponse]:
+) -> Page[RunGroupResponse]:
     # get user
     user = await select_user_or_raise(db.session, user_context)
 
     # get runs
-    runs = await select_user_runs(db.session, user.user_id, finalised=finalised, created_at_gte=created_after)
+    run_groups = await select_run_groups_for_user(db.session, user.user_id)
+
+    if run_groups:
+        resp = [map_group_to_group_response(group) for group in run_groups if group]
+    else:
+        resp = []
+    return paginate(resp)
+
+
+@router.post("/run_group", status_code=HTTPStatus.CREATED)
+async def create_group(
+    group_request: RunGroupRequest,
+    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_scopes({AuthScopes.user_all}))],
+) -> RunGroupResponse:
+
+    # get user
+    user = await select_user_or_raise(db.session, user_context)
+
+    try:
+        csip_aus_version = CSIPAusVersion(group_request.csip_aus_version)
+    except Exception:
+        raise HTTPException(
+            HTTPStatus.BAD_REQUEST, detail=f"'{csip_aus_version}' doesn't map to a known CSIPAusVersion"
+        )
+
+    # get runs
+    run_group = await insert_run_group(db.session, user.user_id, csip_aus_version.value)
+    return map_group_to_group_response(run_group)
+
+
+@router.get("/run_group/{run_group_id}/run", status_code=HTTPStatus.OK)
+async def get_group_runs_paginated(
+    run_group_id: int,
+    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_scopes({AuthScopes.user_all}))],
+    finalised: bool | None = Query(default=None),
+    created_after: datetime = Query(default=datetime.now(tz=timezone.utc) - timedelta(days=7)),
+) -> Page[RunResponse]:
+    # check permissions
+    await select_user_run_group_or_raise(db.session, user_context, run_group_id)
+
+    # get runs
+    runs = await select_runs_for_group(db.session, run_group_id, finalised=finalised, created_at_gte=created_after)
 
     if runs:
         resp = [map_run_to_run_response(run) for run in runs if run]
@@ -127,11 +214,12 @@ async def get_runs_paginated(
 
 
 @router.post(
-    "/run",
+    "/run_group/{run_group_id}/run",
     status_code=HTTPStatus.CREATED,
 )
 async def spawn_teststack_and_init_run(
     test: InitRunRequest,
+    run_group_id: int,
     user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_scopes({AuthScopes.user_all}))],
     response: Response,
 ) -> InitRunResponse:
@@ -142,7 +230,9 @@ async def spawn_teststack_and_init_run(
         (3) Update the ingress with a path to the envoy environment.
     """
     # get user and the preferred certificate
-    user = await select_user_or_raise(db.session, user_context, with_aggregator_der=True, with_device_der=True)
+    user, run_group = await select_user_run_group_or_raise(
+        db.session, user_context, run_group_id, with_aggregator_der=True, with_device_der=True
+    )
     if user.is_device_cert:
         client_cert = ensure_certificate_valid("Device", user.device_certificate_x509_der)
     else:
@@ -156,7 +246,7 @@ async def spawn_teststack_and_init_run(
         # Because this is a static URI - we need to make sure there are no running test instances with this value set
         # (otherwise we are going to cause a collision and problems)
         # This is a limitation of enabling static URIs and the user will be warned about it when enabling things
-        runs = await select_user_runs(db.session, user.user_id, finalised=False, created_at_gte=None)
+        runs = await select_active_runs_for_user(db.session, user.user_id)
         if len(runs) > 0:
             run_ids_str = ",".join((str(r.run_id) for r in runs))
             raise HTTPException(
@@ -167,30 +257,29 @@ async def spawn_teststack_and_init_run(
     else:
         teststack_id = generate_dynamic_test_stack_id()
 
-    new_svc_name, new_statefulset_name, new_app_label, pod_name, pod_fqdn = get_resource_names(teststack_id)
+    run_resource_names = get_resource_names(teststack_id)
+    template_resource_names = get_template_names(run_group.csip_aus_version)
 
     # Create the run in a "provisioning" state so we can access the run_id
-    run_id = await insert_run_for_user(
-        db.session, user.user_id, teststack_id, test.test_procedure_id, RunStatus.provisioning, user.is_device_cert
+    run_id = await insert_run_for_run_group(
+        db.session, run_group_id, teststack_id, test.test_procedure_id, RunStatus.provisioning, user.is_device_cert
     )
 
     try:
         # duplicate resources
-        await clone_statefulset(new_statefulset_name, new_svc_name, new_app_label)
-        await clone_service(new_svc_name, new_app_label)
+        await clone_statefulset(template_resource_names, run_resource_names)
+        await clone_service(template_resource_names, run_resource_names)
 
         # wait for statefulset's pod
-        await wait_for_pod(pod_name)
+        await wait_for_pod(run_resource_names)
 
         # inject initial state with either the device or aggregator cert data
         pem_encoded_cert = client_cert.public_bytes(serialization.Encoding.PEM).decode("utf-8")
-        async with ClientSession(
-            base_url=RUNNER_POD_URL.format(pod_fqdn=pod_fqdn, pod_port=POD_HARNESS_RUNNER_MANAGEMENT_PORT),
-            timeout=ClientTimeout(30),
-        ) as s:
+        async with ClientSession(base_url=run_resource_names.pod_base_url, timeout=ClientTimeout(30)) as s:
             await RunnerClient.init(
                 session=s,
                 test_id=test.test_procedure_id,
+                csip_aus_version=CSIPAusVersion(run_group.csip_aus_version),
                 aggregator_certificate=None if user.is_device_cert else pem_encoded_cert,
                 device_certificate=pem_encoded_cert if user.is_device_cert else None,
                 subscription_domain=user.subscription_domain,
@@ -198,11 +287,11 @@ async def spawn_teststack_and_init_run(
             )
 
         # finally, include new service in ingress rule
-        await add_ingress_rule(new_svc_name)
+        await add_ingress_rule(run_resource_names)
 
     except (CactusOrchestratorException, RunnerClientException) as exc:
         logger.info(exc)
-        await teardown_teststack(new_svc_name, new_statefulset_name)
+        await teardown_teststack(run_resource_names)
         raise HTTPException(HTTPStatus.INTERNAL_SERVER_ERROR, detail="Internal Server Error")
 
     # commit DB changes
@@ -212,7 +301,7 @@ async def spawn_teststack_and_init_run(
     # set location header
     response.headers["Location"] = f"/run/{run_id}"
 
-    return InitRunResponse(run_id=run_id, test_url=generate_envoy_dcap_uri(teststack_id))
+    return InitRunResponse(run_id=run_id, test_url=generate_envoy_dcap_uri(run_resource_names))
 
 
 @router.post(
@@ -235,32 +324,27 @@ async def start_run(
         raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Not Found")
 
     # resource ids
-    _, _, _, _, pod_fqdn = get_resource_names(run.teststack_id)
+    run_resource_names = get_resource_names(run.teststack_id)
 
     # request runner starts run
-    async with ClientSession(
-        base_url=RUNNER_POD_URL.format(pod_fqdn=pod_fqdn, pod_port=POD_HARNESS_RUNNER_MANAGEMENT_PORT),
-        timeout=ClientTimeout(30),
-    ) as s:
+    async with ClientSession(base_url=run_resource_names.pod_base_url, timeout=ClientTimeout(30)) as s:
         await RunnerClient.start(s)
 
     # update status
     await update_run_run_status(session=db.session, run_id=run.run_id, run_status=RunStatus.started)
     await db.session.commit()
 
-    return StartRunResponse(
-        test_url=generate_envoy_dcap_uri(run.teststack_id),
-    )
+    return StartRunResponse(test_url=generate_envoy_dcap_uri(run_resource_names))
 
 
-async def teardown_teststack(svc_name: str, statefulset_name: str) -> None:
+async def teardown_teststack(run_resource_names: RunResourceNames) -> None:
     """Tears down the envoy teststack (ingress rule + service + statefulset)"""
     # Remove ingress rule
-    await remove_ingress_rule(svc_name)
+    await remove_ingress_rule(run_resource_names)
 
     # Remove resources
-    await delete_service(svc_name)
-    await delete_statefulset(statefulset_name)
+    await delete_service(run_resource_names)
+    await delete_statefulset(run_resource_names)
 
 
 def is_all_criteria_met(runner_status: RunnerStatus | None) -> bool | None:
@@ -350,15 +434,16 @@ async def finalise_run_and_teardown_teststack(
         raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Not Found")
 
     # get resource names
-    svc_name, statefulset_name, _, _, pod_fqdn = get_resource_names(run.teststack_id)
-    pod_url = RUNNER_POD_URL.format(pod_fqdn=pod_fqdn, pod_port=POD_HARNESS_RUNNER_MANAGEMENT_PORT)
+    run_resource_names = get_resource_names(run.teststack_id)
 
     # finalise
-    artifact = await finalise_run(run, pod_url, db.session, RunStatus.finalised_by_client, datetime.now(timezone.utc))
+    artifact = await finalise_run(
+        run, run_resource_names.pod_base_url, db.session, RunStatus.finalised_by_client, datetime.now(timezone.utc)
+    )
     await db.session.commit()
 
     # teardown
-    await teardown_teststack(svc_name=svc_name, statefulset_name=statefulset_name)
+    await teardown_teststack(run_resource_names)
 
     if artifact is None:
         return Response(status_code=HTTPStatus.NO_CONTENT)
@@ -419,15 +504,14 @@ async def get_run_status(
         )
 
     # Connect to the pod and talk to the runner's "status" endpoint. Forward the result along
-    _, _, _, _, pod_fqdn = get_resource_names(run.teststack_id)
-    async with ClientSession(
-        base_url=RUNNER_POD_URL.format(pod_fqdn=pod_fqdn, pod_port=POD_HARNESS_RUNNER_MANAGEMENT_PORT),
-        timeout=ClientTimeout(30),
-    ) as s:
+    run_resource_names = get_resource_names(run.teststack_id)
+    async with ClientSession(base_url=run_resource_names.pod_base_url, timeout=ClientTimeout(30)) as s:
         try:
             return await RunnerClient.status(s)
         except Exception as exc:
-            logger.error(f"Error fetching runner status for run {run.run_id} @ {pod_fqdn}.", exc_info=exc)
+            logger.error(
+                f"Error fetching runner status for run {run.run_id} @ {run_resource_names.pod_base_url}.", exc_info=exc
+            )
             raise HTTPException(
                 status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
                 detail=f"Unable to connect to run {run.run_id}'s pod to fetch status.",

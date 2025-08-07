@@ -1,19 +1,30 @@
 """TODO: Migrate to modern asyncio-compatible + typed kubernetes library"""
 
+import re
+import unittest.mock as mock
 from unittest.mock import patch
+from urllib.parse import urlparse
 
 import pytest
+from assertical.fake.generator import generate_class_instance
 from kubernetes import client
 
-from cactus_orchestrator.k8s.resource.create import (
-    add_ingress_rule,
-    clone_service,
-    clone_statefulset,
-    is_container_ready,
-    wait_for_pod,
+from cactus_orchestrator.k8s.resource import (
+    RunResourceNames,
+    TemplateResourceNames,
+    csip_aus_version_to_k8s_id,
+    generate_dynamic_test_stack_id,
+    generate_envoy_dcap_uri,
+    generate_static_test_stack_id,
 )
+from cactus_orchestrator.k8s.resource.create import add_ingress_rule, clone_service, clone_statefulset, wait_for_pod
 from cactus_orchestrator.k8s.resource.delete import delete_service, delete_statefulset, remove_ingress_rule
-from cactus_orchestrator.settings import DEFAULT_INGRESS_PATH_FORMAT, CactusOrchestratorException
+from cactus_orchestrator.model import User
+from cactus_orchestrator.settings import (
+    DEFAULT_INGRESS_PATH_FORMAT,
+    CactusOrchestratorException,
+    CactusOrchestratorSettings,
+)
 
 
 @pytest.mark.asyncio
@@ -26,12 +37,14 @@ async def test_clone_service(mock_v1_core_api, mock_thread_cls):
         metadata=client.V1ObjectMeta(name="template-service"),
         spec=client.V1ServiceSpec(ports=[client.V1ServicePort(port=80)]),
     )
+    template_resource_names = generate_class_instance(TemplateResourceNames, seed=101)
+    run_resource_names = generate_class_instance(RunResourceNames, seed=202)
 
     mock_v1_core_api.read_namespaced_service.return_value = mock_thread_cls(mock_service)
     mock_v1_core_api.create_namespaced_service.return_value = mock_thread_cls(None)
 
     # Act
-    await clone_service("new-service", "new-app-label")
+    await clone_service(template_resource_names, run_resource_names)
 
     # Assert
     mock_v1_core_api.read_namespaced_service.assert_called_once()
@@ -57,11 +70,13 @@ async def test_clone_statefulset(mock_v1_app_api, mock_thread_cls):
             ),
         ),
     )
+    template_resource_names = generate_class_instance(TemplateResourceNames, seed=101)
+    run_resource_names = generate_class_instance(RunResourceNames, seed=202)
 
     mock_v1_app_api.read_namespaced_stateful_set.return_value = mock_thread_cls(mock_statefulset)
     mock_v1_app_api.create_namespaced_stateful_set.return_value = mock_thread_cls(None)
 
-    await clone_statefulset("new-statefulset", "new-service", "new-app-label")
+    await clone_statefulset(template_resource_names, run_resource_names)
 
     mock_v1_app_api.read_namespaced_stateful_set.assert_called_once()
     mock_v1_app_api.create_namespaced_stateful_set.assert_called_once()
@@ -71,53 +86,15 @@ async def test_clone_statefulset(mock_v1_app_api, mock_thread_cls):
     assert container_envoy.env is not None
     assert len(container_envoy.env) == 1
     assert container_envoy.env[0].name == "HREF_PREFIX"
-    assert container_envoy.env[0].value == "/new-service"
-
-
-@pytest.mark.asyncio
-@patch("cactus_orchestrator.k8s.resource.create.v1_core_api")
-async def test_is_container_ready(mock_v1_core_api, generate_k8s_class_instance, mock_thread_cls):
-    """Test checking if a container is ready."""
-    # Arrange
-    mock_pod = client.V1Pod(
-        status=client.V1PodStatus(
-            container_statuses=[
-                generate_k8s_class_instance(client.V1ContainerStatus, name="blah", ready=True),
-                generate_k8s_class_instance(client.V1ContainerStatus, name="envoy", ready=True),
-            ]
-        )
-    )
-    mock_v1_core_api.read_namespaced_pod.return_value = mock_thread_cls(mock_pod)
-
-    # Act
-    res = await is_container_ready("test-pod")
-
-    # Assert
-    mock_v1_core_api.read_namespaced_pod.assert_called_once()
-    assert res == True
-
-
-@pytest.mark.asyncio
-@patch("cactus_orchestrator.k8s.resource.create.v1_core_api")
-async def test_is_container_ready_not_found(mock_v1_core_api, mock_thread_cls):
-    """Test checking container readiness when the container is missing."""
-    # Arrange
-    mock_pod = client.V1Pod(status=client.V1PodStatus(container_statuses=[]))
-
-    mock_v1_core_api.read_namespaced_pod.return_value = mock_thread_cls(mock_pod)
-
-    # Act
-    res = await is_container_ready("test-pod")
-
-    # Assert
-    assert res == False
+    assert container_envoy.env[0].value == "/" + run_resource_names.service
 
 
 @pytest.mark.asyncio
 @patch("cactus_orchestrator.k8s.resource.create.is_pod_ready", return_value=True)
 async def test_wait_for_pod(mock_is_pod_ready):
     """Test waiting for a pod to be ready."""
-    await wait_for_pod("test-pod")
+    run_resource_names = generate_class_instance(RunResourceNames, seed=202)
+    await wait_for_pod(run_resource_names)
     mock_is_pod_ready.assert_called_once()
 
 
@@ -125,9 +102,10 @@ async def test_wait_for_pod(mock_is_pod_ready):
 @patch("cactus_orchestrator.k8s.resource.create.is_pod_ready", return_value=False)
 async def test_wait_for_pod_retries(mock_is_pod_ready):
     """Test waiting for a pod to be ready."""
+    run_resource_names = generate_class_instance(RunResourceNames, seed=202)
 
     with pytest.raises(CactusOrchestratorException):
-        await wait_for_pod("test-pod", 2, wait_interval=1)
+        await wait_for_pod(run_resource_names, 2, wait_interval=1)
 
     assert mock_is_pod_ready.call_count == 2
 
@@ -140,12 +118,13 @@ async def test_add_ingress_rule(mock_v1_net_api, mock_thread_cls):
     mock_ingress = client.V1Ingress(
         spec=client.V1IngressSpec(rules=[client.V1IngressRule(http=client.V1HTTPIngressRuleValue(paths=[]))])
     )
+    run_resource_names = generate_class_instance(RunResourceNames, seed=202)
 
     mock_v1_net_api.read_namespaced_ingress.return_value = mock_thread_cls(mock_ingress)
     mock_v1_net_api.patch_namespaced_ingress.return_value = mock_thread_cls(None)
 
     # Act
-    await add_ingress_rule("new-service")
+    await add_ingress_rule(run_resource_names)
 
     # Assert
     mock_v1_net_api.read_namespaced_ingress.assert_called_once()
@@ -158,9 +137,10 @@ async def test_delete_service(mock_v1_core_api, mock_thread_cls):
     """Test deleting a Kubernetes Service."""
     # Arrange
     mock_v1_core_api.delete_namespaced_service.return_value = mock_thread_cls(None)
+    run_resource_names = generate_class_instance(RunResourceNames, seed=202)
 
     # Act
-    await delete_service("test-service")
+    await delete_service(run_resource_names)
 
     # Assert
     mock_v1_core_api.delete_namespaced_service.assert_called_once()
@@ -172,9 +152,10 @@ async def test_delete_statefulset(mock_v1_app_api, mock_thread_cls):
     """Test deleting a Kubernetes StatefulSet."""
     # Arrange
     mock_v1_app_api.delete_namespaced_stateful_set.return_value = mock_thread_cls(None)
+    run_resource_names = generate_class_instance(RunResourceNames, seed=202)
 
     # Act
-    await delete_statefulset("test-statefulset")
+    await delete_statefulset(run_resource_names)
 
     # Assert
     mock_v1_app_api.delete_namespaced_stateful_set.assert_called_once()
@@ -201,14 +182,104 @@ async def test_remove_ingress_rule(mock_v1_net_api, generate_k8s_class_instance,
             ),
         )
     ]
+    run_resource_names = generate_class_instance(RunResourceNames, seed=202)
 
     mock_v1_net_api.read_namespaced_ingress.return_value = mock_thread_cls(mock_ingress)
     mock_v1_net_api.patch_namespaced_ingress.return_value = mock_thread_cls(None)
 
     # Act
-    await remove_ingress_rule("remove-me")
+    await remove_ingress_rule(run_resource_names)
 
     # Assert
     mock_v1_net_api.read_namespaced_ingress.assert_called_once()
     mock_v1_net_api.patch_namespaced_ingress.assert_called_once()
     assert len(mock_ingress.spec.rules[0].http.paths) == 0
+
+
+def assert_uri_friendly(s: str):
+    assert isinstance(s, str)
+    assert re.match("[^a-zA-Z0-9\\-_]", s) is None, "Only URI friendly chars should be encoded"
+
+
+def test_generate_static_test_stack_id():
+    u1 = generate_class_instance(
+        User,
+        user_id=1,
+        is_static_uri=True,
+        aggregator_certificate_p12_bundle=[],
+        aggregator_certificate_x509_der=[],
+        device_certificate_p12_bundle=[],
+        device_certificate_x509_der=[],
+    )
+    u2 = generate_class_instance(
+        User,
+        user_id=2,
+        is_static_uri=True,
+        aggregator_certificate_p12_bundle=[],
+        aggregator_certificate_x509_der=[],
+        device_certificate_p12_bundle=[],
+        device_certificate_x509_der=[],
+    )
+
+    u1_id = generate_static_test_stack_id(u1)
+    assert_uri_friendly(u1_id)
+
+    u2_id = generate_static_test_stack_id(u2)
+    assert_uri_friendly(u2_id)
+
+    assert u1_id != u2_id, "Should differ from one user to another"
+    assert u1_id == generate_static_test_stack_id(u1), "Should be static"
+
+
+def test_generate_dynamic_test_stack_id():
+    id1 = generate_dynamic_test_stack_id()
+    id2 = generate_dynamic_test_stack_id()
+    id3 = generate_dynamic_test_stack_id()
+
+    assert_uri_friendly(id1)
+    assert_uri_friendly(id2)
+    assert_uri_friendly(id3)
+
+    assert len(set([id1, id2, id3])) == 3, "All values must be unique"
+
+
+@mock.patch("cactus_orchestrator.k8s.run_id.get_current_settings")
+def test_generate_envoy_dcap_uri(mock_get_current_settings: mock.MagicMock):
+
+    # Arrange
+    service_name = "my-svc-name"
+    fqdn = "my.host.name"
+    test_stack_id = "abc123-my-id"
+    mock_get_current_settings.return_value = generate_class_instance(
+        CactusOrchestratorSettings,
+        template_service_name=service_name,
+        test_execution_fqdn=fqdn,
+        orchestrator_database_url="",
+    )
+
+    # Act
+    uri = generate_envoy_dcap_uri(test_stack_id)
+
+    # Assert
+    result = urlparse(uri)
+    assert result.hostname == f"{fqdn}"
+    assert result.path.endswith("/dcap")
+    assert "//" not in result.path
+    assert service_name in result.path
+    assert test_stack_id in result.path
+    assert not result.query
+
+
+@pytest.mark.parametrize(
+    "input, expected",
+    [
+        ("a", "a"),
+        ("abc123DEF", "abc123def"),
+        ("ab/c-123-DE/F", "ab-c-123-de-f"),
+        ("lot's of .!@#$%^&*()[]}{. chars)", "lot-s-of-.--------------.-chars-"),
+    ],
+)
+def test_csip_aus_version_to_k8s_id(input: str, expected: str):
+    result = csip_aus_version_to_k8s_id(input)
+    assert isinstance(result, str)
+    assert result == expected

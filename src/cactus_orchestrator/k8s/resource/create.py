@@ -7,7 +7,7 @@ from multiprocessing.pool import ApplyResult
 from kubernetes import client
 from kubernetes.client import V1EnvVar, V1StatefulSet
 
-from cactus_orchestrator.k8s.resource import async_k8s_api_retry
+from cactus_orchestrator.k8s.resource import RunResourceNames, TemplateResourceNames, async_k8s_api_retry
 from cactus_orchestrator.settings import (
     DEFAULT_INGRESS_PATH_FORMAT,
     CactusOrchestratorException,
@@ -21,10 +21,10 @@ logger = logging.getLogger(__name__)
 
 
 @async_k8s_api_retry()
-async def clone_service(new_svc_name: str, new_app_label: str) -> None:
+async def clone_service(template_names: TemplateResourceNames, run_names: RunResourceNames) -> None:
     res: ApplyResult = v1_core_api.read_namespaced_service(
-        name=get_current_settings().template_service_name,
-        namespace=get_current_settings().teststack_templates_namespace,
+        name=template_names.service,
+        namespace=template_names.namespace,
         async_req=True,
     )  # type: ignore
     existing = await asyncio.to_thread(res.get)
@@ -32,9 +32,9 @@ async def clone_service(new_svc_name: str, new_app_label: str) -> None:
     new_service = client.V1Service(
         api_version=existing.api_version,
         kind=existing.kind,
-        metadata=client.V1ObjectMeta(name=new_svc_name),
+        metadata=client.V1ObjectMeta(name=run_names.service),
         spec=client.V1ServiceSpec(
-            selector={"app": new_app_label},
+            selector={"app": run_names.app_label},
             ports=existing.spec.ports,
         ),
     )
@@ -44,16 +44,14 @@ async def clone_service(new_svc_name: str, new_app_label: str) -> None:
         namespace=get_current_settings().test_execution_namespace, body=new_service, async_req=True
     )  # type: ignore
     await asyncio.to_thread(res.get)
-    logger.info(f"New service {new_svc_name} created successfully!")
+    logger.info(f"New service {run_names.service} created successfully!")
 
 
 @async_k8s_api_retry()
-async def clone_statefulset(new_statefulset_name: str, new_service_name: str, new_app_label: str) -> None:
-    template_set_name = get_current_settings().template_statefulset_name
-    template_namespace = get_current_settings().teststack_templates_namespace
+async def clone_statefulset(template_names: TemplateResourceNames, run_names: RunResourceNames) -> None:
     res: ApplyResult = v1_app_api.read_namespaced_stateful_set(
-        name=template_set_name,
-        namespace=template_namespace,
+        name=template_names.stateful_set,
+        namespace=template_names.namespace,
         async_req=True,
     )  # type: ignore
     existing: V1StatefulSet = await asyncio.to_thread(res.get)
@@ -61,28 +59,35 @@ async def clone_statefulset(new_statefulset_name: str, new_service_name: str, ne
     # Rework the discovered spec into a new spec that's specific to the new service/labels
     new_spec = existing.spec
     if new_spec is None:
-        raise CactusOrchestratorException(f"{template_namespace} {template_set_name} - missing top level spec")
-    new_spec.service_name = new_service_name
+        raise CactusOrchestratorException(
+            f"{template_names.namespace} {template_names.stateful_set} - missing top level spec"
+        )
+    new_spec.service_name = run_names.service
     if new_spec.selector.match_labels is None:
-        new_spec.selector.match_labels = {"app": new_app_label}
+        new_spec.selector.match_labels = {"app": run_names.app_label}
     else:
-        new_spec.selector.match_labels["app"] = new_app_label
+        new_spec.selector.match_labels["app"] = run_names.app_label
     if new_spec.template.metadata is None:
-        raise CactusOrchestratorException(f"{template_namespace} {template_set_name} - missing spec.template.metadata")
+        raise CactusOrchestratorException(
+            f"{template_names.namespace} {template_names.stateful_set} - missing spec.template.metadata"
+        )
     if new_spec.template.metadata.labels is None:
-        new_spec.template.metadata.labels = {"app": new_app_label}
+        new_spec.template.metadata.labels = {"app": run_names.app_label}
     else:
-        new_spec.template.metadata.labels["app"] = new_app_label
+        new_spec.template.metadata.labels["app"] = run_names.app_label
 
     # We will need to also inject the HREF_PREFIX env variable for the "envoy" container to ensure that all generated
     # hrefs properly include the prefix such that /edev will be encoded as /envoy-svc-abc123/edev
-    href_env = V1EnvVar(name="HREF_PREFIX", value=f"/{new_service_name}", value_from=None)
+    href_env = V1EnvVar(name="HREF_PREFIX", value=f"/{run_names.service}", value_from=None)
     if new_spec.template.spec is None:
-        raise CactusOrchestratorException(f"{template_namespace} {template_set_name} - missing template spec")
+        raise CactusOrchestratorException(
+            f"{template_names.namespace} {template_names.stateful_set} - missing template spec"
+        )
     envoy_containers = [c for c in new_spec.template.spec.containers if c.name == "envoy"]
     if len(envoy_containers) != 1:
         raise CactusOrchestratorException(
-            f"{template_namespace} {template_set_name} - Expected 1 but found {len(envoy_containers)} envoy containers."
+            f"{template_names.namespace} {template_names.stateful_set} - Expected 1 but found {len(envoy_containers)}"
+            + " envoy containers."
         )
     container_to_update = envoy_containers[0]
     if container_to_update.env is None:
@@ -93,7 +98,7 @@ async def clone_statefulset(new_statefulset_name: str, new_service_name: str, ne
     new_set = V1StatefulSet(
         api_version=existing.api_version,
         kind=existing.kind,
-        metadata=client.V1ObjectMeta(name=new_statefulset_name),
+        metadata=client.V1ObjectMeta(name=run_names.stateful_set),
         spec=new_spec,
     )
 
@@ -101,39 +106,14 @@ async def clone_statefulset(new_statefulset_name: str, new_service_name: str, ne
         body=new_set, namespace=get_current_settings().test_execution_namespace, async_req=True
     )  # type: ignore
     await asyncio.to_thread(res.get)
-    logger.info(f"New StatefulSet {new_statefulset_name} created successfully!")
+    logger.info(f"New StatefulSet {run_names.stateful_set} created successfully!")
 
 
-@async_k8s_api_retry()
-async def is_container_ready(pod_name: str, container_name: str | None = None, namespace: str | None = None) -> bool:
-    """Checks pod for specific container status. Returns True on ready."""
-    settings = get_current_settings()
-    container_name = container_name or settings.pod_readiness_check_container_name
-    namespace = namespace or settings.test_execution_namespace
-    res: ApplyResult = v1_core_api.read_namespaced_pod(
-        name=pod_name, namespace=namespace, async_req=True
-    )  # type: ignore
-    pod = await asyncio.to_thread(res.get)
-
-    if not pod or not pod.status:
-        return False
-
-    statuses = (pod.status.container_statuses or []) + (pod.status.init_container_statuses or [])
-    for status in statuses:
-        if status.name == container_name:
-            return status.ready
-
-    return False
-
-
-async def is_pod_ready(pod_name: str, namespace: str | None = None) -> bool:
+async def is_pod_ready(run_names: RunResourceNames) -> bool:
     """Check entire pod's status, should be ready only when all containers are ready."""
-    settings = get_current_settings()
-    namespace = namespace or settings.test_execution_namespace
-
     # get pod status
     res: ApplyResult = v1_core_api.read_namespaced_pod(
-        name=pod_name, namespace=namespace, async_req=True
+        name=run_names.pod, namespace=run_names.namespace, async_req=True
     )  # type: ignore
     pod = await asyncio.to_thread(res.get)
 
@@ -145,36 +125,36 @@ async def is_pod_ready(pod_name: str, namespace: str | None = None) -> bool:
     return False
 
 
-async def wait_for_pod(pod_name: str, max_retries: int = 20, wait_interval: int = 5) -> None:
+async def wait_for_pod(run_names: RunResourceNames, max_retries: int = 20, wait_interval: int = 5) -> None:
     """Polls pod to check for readiness"""
     for attempt in range(max_retries):
-        if await is_pod_ready(pod_name):
-            logger.debug(f"pod ({pod_name}) is ready.")
+        if await is_pod_ready(run_names):
+            logger.debug(f"pod ({run_names.pod}) is ready.")
             return
-        logger.debug(f"pod ({pod_name}) is not ready. retry..")
+        logger.debug(f"pod ({run_names.pod}) is not ready. retry..")
         await asyncio.sleep(wait_interval)
 
-    raise CactusOrchestratorException(f"{pod_name} failed to start.")
+    raise CactusOrchestratorException(f"{run_names.pod} failed to start.")
 
 
 @async_k8s_api_retry()
-async def add_ingress_rule(svc_name: str) -> None:
+async def add_ingress_rule(run_names: RunResourceNames) -> None:
     """Updates the Ingress definition to include new path to to service (svc_name)."""
 
     res: ApplyResult = v1_net_api.read_namespaced_ingress(
-        name=get_current_settings().test_execution_ingress_name,
-        namespace=get_current_settings().test_execution_namespace,
+        name=run_names.ingress,
+        namespace=run_names.namespace,
         async_req=True,
     )  # type: ignore
     ingress = await asyncio.to_thread(res.get)
 
     http_rule = ingress.spec.rules[0].http
     new_rule = client.V1HTTPIngressPath(
-        path=DEFAULT_INGRESS_PATH_FORMAT.format(svc_name=svc_name),
+        path=DEFAULT_INGRESS_PATH_FORMAT.format(svc_name=run_names.service),
         path_type="Prefix",
         backend=client.V1IngressBackend(
             service=client.V1IngressServiceBackend(
-                name=svc_name,
+                name=run_names.service,
                 port=client.V1ServiceBackendPort(number=get_current_settings().teststack_service_port),
             )
         ),
@@ -182,11 +162,11 @@ async def add_ingress_rule(svc_name: str) -> None:
 
     http_rule.paths.append(new_rule)
     res = v1_net_api.patch_namespaced_ingress(
-        get_current_settings().test_execution_ingress_name,
-        get_current_settings().test_execution_namespace,
+        run_names.ingress,
+        run_names.namespace,
         ingress,
         async_req=True,
     )  # type: ignore
     await asyncio.to_thread(res.get)
 
-    logger.info(f"Ingress rule added for {svc_name}.")
+    logger.info(f"Ingress rule added for {run_names.service}.")

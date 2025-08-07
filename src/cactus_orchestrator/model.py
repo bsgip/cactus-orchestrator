@@ -1,7 +1,19 @@
 from datetime import datetime
 from enum import IntEnum, auto
 
-from sqlalchemy import BOOLEAN, DateTime, ForeignKey, Index, Integer, LargeBinary, String, UniqueConstraint, desc, func
+from sqlalchemy import (
+    BOOLEAN,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    LargeBinary,
+    String,
+    UniqueConstraint,
+    asc,
+    desc,
+    func,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -60,6 +72,13 @@ class RunGroup(Base):
     settings that are unique to all runs in this group"""
 
     __tablename__ = "run_group"
+    __table_args__ = (
+        Index(
+            "run_group_user_id_idx",
+            "user_id",
+            "id",
+        ),
+    )
 
     run_group_id: Mapped[int] = mapped_column(name="id", primary_key=True, autoincrement=True)  # primary key
     user_id: Mapped[int] = mapped_column(ForeignKey("user_.id"))  # User who owns this group

@@ -11,6 +11,15 @@ from cactus_orchestrator.model import Run, RunArtifact, RunGroup, RunStatus, Use
 from cactus_orchestrator.schema import UserContext
 
 
+async def insert_run_group(session: AsyncSession, user_id: int, csip_aus_version: str) -> RunGroup:
+    """Inserts a new RunGroup with the specified csip_aus_version. Returns the inserted RunGroup."""
+
+    new_group = RunGroup(name="New Group", csip_aus_version=csip_aus_version, user_id=user_id)
+    session.add(new_group)
+    await session.flush()
+    return new_group
+
+
 async def insert_user(session: AsyncSession, user_context: UserContext) -> User:
     """Inserts a new user with no certificate details and default config. Returns the new User ID. Raises exceptions
     if a user with the same user_context already exists in the database. Returns a User with all props being
@@ -86,6 +95,13 @@ async def select_run_groups_for_user(session: AsyncSession, user_id: int) -> Seq
     return resp.scalars().all()
 
 
+async def select_run_group_for_user(session: AsyncSession, user_id: int, run_group_id: int) -> RunGroup | None:
+    resp = await session.execute(
+        select(RunGroup).where(((RunGroup.user_id == user_id) & (RunGroup.run_group_id == run_group_id))).limit(1)
+    )
+    return resp.scalar_one_or_none()
+
+
 async def select_runs_for_group(
     session: AsyncSession, run_group_id: int, finalised: bool | None, created_at_gte: datetime | None
 ) -> Sequence[Run]:
@@ -102,6 +118,24 @@ async def select_runs_for_group(
 
     if filters:
         stmt = stmt.where(and_(*filters))
+
+    resp = await session.execute(stmt)
+    return resp.scalars().all()
+
+
+async def select_active_runs_for_user(session: AsyncSession, user_id: int) -> Sequence[Run]:
+    """Fetches all runs for a user that are in non finalised state (across all RunGroups).
+
+    Will return RunGroup as an include"""
+
+    stmt = (
+        select(Run)
+        .join(RunGroup)
+        .where(RunGroup.user_id == user_id)
+        .where(Run.run_status.in_((RunStatus.initialised.value, RunStatus.started.value)))
+        .options(selectinload(Run.run_group))
+        .order_by(Run.run_id.desc())
+    )
 
     resp = await session.execute(stmt)
     return resp.scalars().all()

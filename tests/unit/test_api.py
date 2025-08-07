@@ -3,13 +3,13 @@ from datetime import datetime, timezone
 from http import HTTPMethod, HTTPStatus
 from itertools import product
 from typing import Generator
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock, Mock, call, patch
 
 import pytest
 from assertical.fake.generator import generate_class_instance
 from assertical.fake.sqlalchemy import assert_mock_session, create_mock_session
 from cactus_runner.models import CriteriaEntry, RequestEntry, RunnerStatus
-from cactus_test_definitions import TestProcedureId
+from cactus_test_definitions import CSIPAusVersion, TestProcedureId
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization
 from fastapi import HTTPException
@@ -21,9 +21,9 @@ from cactus_orchestrator.api.certificate import CertificateRouteType, _ca_crt_ca
 from cactus_orchestrator.api.run import ensure_certificate_valid, finalise_run, is_all_criteria_met, teardown_teststack
 from cactus_orchestrator.cache import AsyncCache, ExpiringValue
 from cactus_orchestrator.crud import ProcedureRunAggregated
-from cactus_orchestrator.k8s.run_id import generate_envoy_dcap_uri, generate_static_test_stack_id
+from cactus_orchestrator.k8s.resource import generate_envoy_dcap_uri, generate_static_test_stack_id
 from cactus_orchestrator.main import app
-from cactus_orchestrator.model import Run, RunArtifact, RunStatus, User
+from cactus_orchestrator.model import Run, RunArtifact, RunGroup, RunStatus, User
 from cactus_orchestrator.schema import (
     InitRunRequest,
     InitRunResponse,
@@ -75,8 +75,8 @@ def test_ensure_certificate_valid_no_cert():
     add_ingress_rule=AsyncMock(),
     clone_service=AsyncMock(),
     select_user=AsyncMock(),
-    insert_run_for_user=AsyncMock(),
-    select_user_runs=AsyncMock(),
+    insert_run_for_run_group=AsyncMock(),
+    select_active_runs_for_user=AsyncMock(),
     update_run_run_status=AsyncMock(),
 )
 def test_post_spawn_test_created_aggregator(client, valid_user_p12_and_der, expired_user_p12_and_der, valid_user_jwt):
@@ -85,9 +85,9 @@ def test_post_spawn_test_created_aggregator(client, valid_user_p12_and_der, expi
     from cactus_orchestrator.api.run import (
         RunnerClient,
         clone_statefulset,
-        insert_run_for_user,
+        insert_run_for_run_group,
+        select_active_runs_for_user,
         select_user,
-        select_user_runs,
         update_run_run_status,
     )
 
@@ -106,21 +106,21 @@ def test_post_spawn_test_created_aggregator(client, valid_user_p12_and_der, expi
     )
     RunnerClient.init = AsyncMock()
     clone_statefulset.return_value = "pod_name"
-    insert_run_for_user.return_value = 1
-    select_user_runs.return_value = []
+    insert_run_for_run_group.return_value = 123
+    select_active_runs_for_user.return_value = []
 
     # Act
     req = InitRunRequest(test_procedure_id=TestProcedureId.ALL_01.value)
-    res = client.post("run", json=req.model_dump(), headers={"Authorization": f"Bearer {valid_user_jwt}"})
+    res = client.post("run_group/123/run", json=req.model_dump(), headers={"Authorization": f"Bearer {valid_user_jwt}"})
 
     # Assert
     assert res.status_code == HTTPStatus.CREATED
     resmdl = InitRunResponse.model_validate(res.json())
     assert os.environ["TEST_EXECUTION_FQDN"] in resmdl.test_url
-    assert res.headers["Location"] == "/run/1"
-    insert_run_for_user.assert_called_once()
+    assert res.headers["Location"] == "/run/123"
+    insert_run_for_run_group.assert_called_once()
     update_run_run_status.assert_called_once()
-    select_user_runs.assert_not_called()  # This isn't a static_uri test so we shouldn't be checking for existing runs
+    select_active_runs_for_user.assert_not_called()  # Not a static_uri test so we dont check for existing runs
 
     # Check init was called the correct params
     RunnerClient.init.assert_awaited_once()
@@ -660,6 +660,22 @@ def test_fetch_current_certificate_authority_der(mock_ca_crt_cache, client, ca_c
     assert res.content == ca_cert_key_pair[0].public_bytes(serialization.Encoding.DER)
 
 
+def test_get_version_list_populated(client, valid_user_jwt):
+    """Test when there are test procedure available."""
+    # Arrange
+    set_params(Params(size=10, page=1))
+
+    # Act
+    res = client.get("/version", headers={"Authorization": f"Bearer {valid_user_jwt}"})
+
+    # Assert
+    assert res.status_code == HTTPStatus.OK
+    data = res.json()
+
+    assert len(data["items"]) > 1, "Should be at least two or more entries"
+    assert all([CSIPAusVersion(v["version"]).value == v["version"] for v in data["items"]]), "Version should match enum"
+
+
 @patch("cactus_orchestrator.api.procedure.test_procedure_responses", [])
 def test_get_test_procedure_list_empty(client, valid_user_jwt):
     """Test when there are no test procedure available."""
@@ -721,24 +737,28 @@ def test_get_test_procedures_by_id(client, valid_user_jwt, run_id, status):
 
 @patch.multiple(
     "cactus_orchestrator.api.procedure",
-    select_user_or_raise=AsyncMock(),
-    select_user_runs_aggregated_by_procedure=AsyncMock(),
+    select_user_run_group_or_raise=AsyncMock(),
+    select_group_runs_aggregated_by_procedure=AsyncMock(),
 )
-def test_get_procedure_run_summaries(client, valid_user_jwt):
+def test_procedure_run_summaries_for_group(client, valid_user_jwt):
     """Test retrieving procedure run summaries"""
-    from cactus_orchestrator.api.procedure import select_user_or_raise, select_user_runs_aggregated_by_procedure
+    from cactus_orchestrator.api.procedure import (
+        select_group_runs_aggregated_by_procedure,
+        select_user_run_group_or_raise,
+    )
 
     # Arrange
+    run_group_id = 1233
     set_params(Params(size=10, page=1))
-    select_user_or_raise.return_value = User(user_id=1, subject_id="sub", issuer_id="iss")
+    select_user_run_group_or_raise.return_value = User(user_id=1, subject_id="sub", issuer_id="iss")
 
-    select_user_runs_aggregated_by_procedure.return_value = [
+    select_group_runs_aggregated_by_procedure.return_value = [
         ProcedureRunAggregated(TestProcedureId.LOA_08, 123, True),
         ProcedureRunAggregated(TestProcedureId.ALL_02, 0, None),
     ]
 
     # Act
-    res = client.get("/procedure_runs", headers={"Authorization": f"Bearer {valid_user_jwt}"})
+    res = client.get(f"/procedure_runs/{run_group_id}", headers={"Authorization": f"Bearer {valid_user_jwt}"})
 
     # Assert
     assert res.status_code == HTTPStatus.OK
@@ -762,25 +782,26 @@ def test_get_procedure_run_summaries(client, valid_user_jwt):
     assert items[0].category != items[1].category
     assert items[0].description != items[1].description
 
-    select_user_or_raise.assert_called_once()
-    select_user_runs_aggregated_by_procedure.assert_called_once()
+    select_user_run_group_or_raise.assert_called_once()
+    select_group_runs_aggregated_by_procedure.assert_called_once()
 
 
 @patch.multiple(
     "cactus_orchestrator.api.procedure",
-    select_user_or_raise=AsyncMock(),
-    select_user_runs_for_procedure=AsyncMock(),
+    select_user_run_group_or_raise=AsyncMock(),
+    select_group_runs_for_procedure=AsyncMock(),
 )
 def test_get_runs_for_procedure(client, valid_user_jwt):
     """Test retrieving paginated user runs (underneath a procedure)"""
-    from cactus_orchestrator.api.procedure import select_user_or_raise, select_user_runs_for_procedure
+    from cactus_orchestrator.api.procedure import select_group_runs_for_procedure, select_user_run_group_or_raise
 
     # Arrange
+    run_group_id = 1233
     set_params(Params(size=10, page=1))
-    select_user_or_raise.return_value = User(user_id=1, subject_id="sub", issuer_id="iss")
+    select_user_run_group_or_raise.return_value = User(user_id=1, subject_id="sub", issuer_id="iss")
     mock_run = Run(
         run_id=1,
-        user_id=1,
+        run_group_id=run_group_id,
         teststack_id="abc",
         testprocedure_id="ALL-01",
         created_at=datetime(2025, 1, 1, tzinfo=timezone.utc),
@@ -789,10 +810,10 @@ def test_get_runs_for_procedure(client, valid_user_jwt):
         run_status=RunStatus.started,
         is_device_cert=False,
     )
-    select_user_runs_for_procedure.return_value = [mock_run]
+    select_group_runs_for_procedure.return_value = [mock_run]
 
     # Act
-    res = client.get("/procedure_runs/ALL-01", headers={"Authorization": f"Bearer {valid_user_jwt}"})
+    res = client.get(f"/procedure_runs/{run_group_id}/ALL-01", headers={"Authorization": f"Bearer {valid_user_jwt}"})
 
     # Assert
     assert res.status_code == HTTPStatus.OK
@@ -801,8 +822,8 @@ def test_get_runs_for_procedure(client, valid_user_jwt):
     assert "items" in data
     assert len(data["items"]) == 1
     assert data["items"][0]["run_id"] == 1
-    select_user_or_raise.assert_called_once()
-    select_user_runs_for_procedure.assert_called_once()
+    select_user_run_group_or_raise.assert_called_once()
+    select_group_runs_for_procedure.assert_called_once()
 
 
 @patch.multiple(

@@ -35,11 +35,28 @@ class RunResponse(BaseModel):
     is_device_cert: bool  # Whether this run was initialised with the device cert or aggregator cert
 
 
+class RunGroupRequest(BaseModel):
+    csip_aus_version: str
+
+
+class RunGroupResponse(BaseModel):
+    run_group_id: int
+    name: str
+    csip_aus_version: str
+    created_at: datetime
+
+
 class UserContext(BaseModel):
     """Model for validated user context"""
 
     subject_id: str
     issuer_id: str
+
+
+class CSIPAusVersionResponse(BaseModel):
+    """Represents the various CSIP-Aus versions available for testing"""
+
+    version: str  # Derived from the cactus_test_definitions.CSIPAusVersion enum
 
 
 class TestProcedureResponse(BaseModel):

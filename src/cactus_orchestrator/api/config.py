@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from cactus_orchestrator.auth import AuthScopes, jwt_validator
 from cactus_orchestrator.crud import insert_user, select_user
-from cactus_orchestrator.k8s.run_id import generate_envoy_dcap_uri, generate_static_test_stack_id
+from cactus_orchestrator.k8s.resource import generate_envoy_dcap_uri, generate_static_test_stack_id
 from cactus_orchestrator.model import User
 from cactus_orchestrator.schema import UserConfigurationRequest, UserConfigurationResponse, UserContext
 

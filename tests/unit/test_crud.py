@@ -1,8 +1,10 @@
 from datetime import datetime, timezone
 
 import pytest
+from assertical.asserts.time import assert_nowish
 from assertical.asserts.type import assert_list_type
 from assertical.fixtures.postgres import generate_async_session
+from cactus_test_definitions import CSIPAusVersion
 from cactus_test_definitions.test_procedures import TestProcedureId
 from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError
@@ -10,10 +12,13 @@ from sqlalchemy.exc import IntegrityError
 from cactus_orchestrator.crud import (
     ProcedureRunAggregated,
     insert_run_for_run_group,
+    insert_run_group,
     insert_user,
+    select_active_runs_for_user,
     select_group_runs_aggregated_by_procedure,
     select_group_runs_for_procedure,
     select_nonfinalised_runs,
+    select_run_group_for_user,
     select_run_groups_for_user,
     select_runs_for_group,
     select_user,
@@ -95,8 +100,65 @@ async def test_insert_user(pg_empty_conn):
 
 
 @pytest.mark.asyncio
+async def test_insert_run_group(pg_empty_conn):
+    """Tests that new groups can be added and appropriately interact with commit/rollback"""
+
+    # Setup two users
+    pg_empty_conn.execute(
+        text(
+            """
+                INSERT INTO user_ (subject_id, issuer_id, aggregator_certificate_p12_bundle, aggregator_certificate_x509_der, device_certificate_p12_bundle, device_certificate_x509_der)
+                VALUES ('user1', 'issuer1', E'\\x', E'\\x', E'\\x', E'\\x');
+
+                INSERT INTO user_ (subject_id, issuer_id, aggregator_certificate_p12_bundle, aggregator_certificate_x509_der, device_certificate_p12_bundle, device_certificate_x509_der)
+                VALUES ('user2', 'issuer2', E'\\x', E'\\x', E'\\x', E'\\x');
+            """
+        )
+    )
+    pg_empty_conn.commit()
+
+    # Act
+    async with generate_async_session(pg_empty_conn.connection) as s:
+        group1 = await insert_run_group(s, user_id=2, csip_aus_version=CSIPAusVersion.RELEASE_1_2.value)
+
+        assert group1.run_group_id == 1
+        assert group1.user_id == 2
+        assert group1.name and isinstance(group1.name, str)
+        assert group1.csip_aus_version == CSIPAusVersion.RELEASE_1_2.value
+        assert_nowish(group1.created_at)
+        await s.commit()
+
+    # Test we can rollback
+    async with generate_async_session(pg_empty_conn.connection) as s:
+        group2 = await insert_run_group(s, user_id=2, csip_aus_version=CSIPAusVersion.BETA_1_3_STORAGE.value)
+
+        assert group2.run_group_id == 2
+        assert group2.user_id == 2
+        assert group2.name and isinstance(group2.name, str)
+        assert group2.csip_aus_version == CSIPAusVersion.BETA_1_3_STORAGE.value
+        assert_nowish(group2.created_at)
+        await s.rollback()
+
+    # Test we can insert as expected
+    async with generate_async_session(pg_empty_conn.connection) as s:
+        group3 = await insert_run_group(s, user_id=2, csip_aus_version=CSIPAusVersion.RELEASE_1_2.value)
+
+        assert group3.run_group_id == 3
+        assert group3.user_id == 2
+        assert group3.name and isinstance(group3.name, str)
+        assert group3.csip_aus_version == CSIPAusVersion.RELEASE_1_2.value
+        assert_nowish(group3.created_at)
+        await s.commit()
+
+    # Quick check of the database
+    async with generate_async_session(pg_empty_conn.connection) as s:
+        run_group_count = (await s.execute(select(func.count()).select_from(RunGroup))).scalar_one()
+        assert run_group_count == 2
+
+
+@pytest.mark.asyncio
 async def test_select_run_groups_user(pg_empty_conn):
-    """Test fetching all runs for a user (no filters)."""
+    """Test fetching all run groups for a user (no filters)."""
     # Arrange
     pg_empty_conn.execute(
         text(
@@ -124,6 +186,102 @@ async def test_select_run_groups_user(pg_empty_conn):
 
         run_groups = await select_run_groups_for_user(session, 3)
         assert_list_type(RunGroup, run_groups, 0)
+
+
+@pytest.mark.asyncio
+async def test_select_active_runs_for_user(pg_empty_conn):
+    """Test fetching runs across multiple groups for a user"""
+    # Arrange
+    pg_empty_conn.execute(
+        text(
+            """
+                INSERT INTO user_ (subject_id, issuer_id, aggregator_certificate_p12_bundle, aggregator_certificate_x509_der, device_certificate_p12_bundle, device_certificate_x509_der)
+                VALUES ('user1', 'issuer1', E'\\x', E'\\x', E'\\x', E'\\x');
+
+                INSERT INTO user_ (subject_id, issuer_id, aggregator_certificate_p12_bundle, aggregator_certificate_x509_der, device_certificate_p12_bundle, device_certificate_x509_der)
+                VALUES ('user2', 'issuer2', E'\\x', E'\\x', E'\\x', E'\\x');
+
+                INSERT INTO run_group (user_id, name, csip_aus_version) VALUES (1, 'name-1', 'version-1');
+                INSERT INTO run_group (user_id, name, csip_aus_version) VALUES (1, 'name-2', 'version-2');
+                INSERT INTO run_group (user_id, name, csip_aus_version) VALUES (2, 'name-3', 'version-3');
+
+                INSERT INTO run (run_group_id, teststack_id, testprocedure_id, finalised_at, run_status)
+                VALUES (
+                    1, 'teststack1', 'testproc1', NULL, 1
+                ),
+                (
+                    1, 'teststack2', 'testproc1', NOW(), 3
+                ),
+                (
+                    1, 'teststack3', 'testproc1', NOW(), 4
+                ),
+                (
+                    1, 'teststack4', 'testproc1', NOW(), 5
+                ),
+                (
+                    2, 'teststack5', 'testproc1', NULL, 2
+                ),
+                (
+                    3, 'teststack6', 'testproc1', NULL, 1
+                ),
+                (
+                    1, 'teststack7', 'testproc1', NOW(), 2
+                );
+            """
+        )
+    )
+    pg_empty_conn.commit()
+
+    async with generate_async_session(pg_empty_conn.connection) as session:
+        user_1_runs = await select_active_runs_for_user(session, 1)
+        assert_list_type(Run, user_1_runs, 3)
+        assert [7, 5, 1] == [r.run_id for r in user_1_runs]
+        assert all([isinstance(r.run_group, RunGroup) for r in user_1_runs])
+
+        user_2_runs = await select_active_runs_for_user(session, 2)
+        assert_list_type(Run, user_2_runs, 1)
+        assert [6] == [r.run_id for r in user_2_runs]
+        assert all([isinstance(r.run_group, RunGroup) for r in user_2_runs])
+
+        user_dne_runs = await select_active_runs_for_user(session, 99)
+        assert_list_type(Run, user_dne_runs, 0)
+
+
+@pytest.mark.asyncio
+async def test_select_run_group_user(pg_empty_conn):
+    """Test fetching a single run group for a user"""
+    # Arrange
+    pg_empty_conn.execute(
+        text(
+            """
+                INSERT INTO user_ (subject_id, issuer_id, aggregator_certificate_p12_bundle, aggregator_certificate_x509_der, device_certificate_p12_bundle, device_certificate_x509_der)
+                VALUES ('user1', 'issuer1', E'\\x', E'\\x', E'\\x', E'\\x');
+
+                INSERT INTO user_ (subject_id, issuer_id, aggregator_certificate_p12_bundle, aggregator_certificate_x509_der, device_certificate_p12_bundle, device_certificate_x509_der)
+                VALUES ('user2', 'issuer2', E'\\x', E'\\x', E'\\x', E'\\x');
+
+                INSERT INTO run_group (user_id, name, csip_aus_version) VALUES (1, 'name-1', 'version-1');
+                INSERT INTO run_group (user_id, name, csip_aus_version) VALUES (1, 'name-2', 'version-2');
+                INSERT INTO run_group (user_id, name, csip_aus_version) VALUES (2, 'name-3', 'version-3');
+            """
+        )
+    )
+    pg_empty_conn.commit()
+
+    async with generate_async_session(pg_empty_conn.connection) as session:
+        assert (await select_run_group_for_user(session, 1, 3)) is None, "Wrong user"
+        assert (await select_run_group_for_user(session, 2, 1)) is None, "Wrong user"
+        assert (await select_run_group_for_user(session, 1, 99)) is None, "Bad ID"
+
+        run_group_1 = await select_run_group_for_user(session, 1, 1)
+        assert isinstance(run_group_1, RunGroup)
+        assert run_group_1.run_group_id == 1
+        run_group_2 = await select_run_group_for_user(session, 1, 2)
+        assert isinstance(run_group_2, RunGroup)
+        assert run_group_2.run_group_id == 2
+        run_group_3 = await select_run_group_for_user(session, 2, 3)
+        assert isinstance(run_group_3, RunGroup)
+        assert run_group_3.run_group_id == 3
 
 
 @pytest.mark.asyncio

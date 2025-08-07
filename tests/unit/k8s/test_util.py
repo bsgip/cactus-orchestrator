@@ -3,7 +3,13 @@ from unittest.mock import Mock, patch
 import pytest
 from kubernetes.client.exceptions import ApiException
 
-from cactus_orchestrator.k8s.resource import async_k8s_api_retry, get_resource_names
+from cactus_orchestrator.k8s.resource import (
+    RunResourceNames,
+    TemplateResourceNames,
+    async_k8s_api_retry,
+    get_resource_names,
+    get_template_names,
+)
 from cactus_orchestrator.settings import CactusOrchestratorException
 
 
@@ -87,20 +93,68 @@ async def test_async_k8s_api_retry_fail_silently():
 
 
 @patch("cactus_orchestrator.k8s.resource.get_current_settings")
+def test_get_template_names(mock_get_current_settings):
+    """Test get_resource_names function."""
+    mock_settings = Mock()
+    mock_settings.test_execution_namespace = "other-ns"
+    mock_settings.teststack_templates_namespace = "test-ns"
+    mock_settings.template_service_name_prefix = "template-service-"
+    mock_settings.template_statefulset_name_prefix = "template-statefulset-"
+    mock_settings.template_app_name_prefix = "template-app-"
+    mock_get_current_settings.return_value = mock_settings
+
+    version = "v-456"
+    names = get_template_names(version)
+    assert isinstance(names, TemplateResourceNames)
+
+    all_name_values = list(names.__dict__.values())
+    assert len(all_name_values) == len(set(all_name_values)), "All names should be unique"
+
+    assert names.namespace == "test-ns"
+    assert version in names.service and names.service.startswith("template-service-")
+    assert version in names.stateful_set and names.stateful_set.startswith("template-statefulset-")
+    assert version in names.app_label and names.app_label.startswith("template-app-")
+
+    assert names == get_template_names(version), "Same inputs - same output"
+    assert names != get_template_names(version + "a")
+
+
+@patch("cactus_orchestrator.k8s.resource.get_current_settings")
 def test_get_resource_names(mock_get_current_settings):
     """Test get_resource_names function."""
     mock_settings = Mock()
     mock_settings.test_execution_namespace = "test-ns"
-    mock_settings.template_service_name = "template-service"
-    mock_settings.template_statefulset_name = "template-statefulset"
-    mock_settings.template_app_name = "template-app"
+    mock_settings.teststack_templates_namespace = "other-ns"
+    mock_settings.template_service_name_prefix = "template-service-"
+    mock_settings.template_statefulset_name_prefix = "template-statefulset-"
+    mock_settings.template_app_name_prefix = "template-app-"
     mock_get_current_settings.return_value = mock_settings
 
     uuid = "abc123"
-    svc_name, statefulset_name, app_label, pod_name, pod_fqdn = get_resource_names(uuid)
+    version = "v-456"
+    names = get_resource_names(uuid, version)
+    assert isinstance(names, RunResourceNames)
 
-    assert svc_name == f"template-service-{uuid}"
-    assert statefulset_name == f"template-statefulset-{uuid}"
-    assert app_label == f"template-app-{uuid}"
-    assert pod_name == f"{statefulset_name}-0"
-    assert pod_fqdn == f"{pod_name}.{svc_name}.test-ns.svc.cluster.local"
+    all_name_values = list(names.__dict__.values())
+    assert len(all_name_values) == len(set(all_name_values)), "All names should be unique"
+
+    assert names.namespace == "test-ns"
+    assert uuid in names.service and version in names.service and names.service.startswith("template-service-")
+    assert (
+        uuid in names.stateful_set
+        and version in names.stateful_set
+        and names.stateful_set.startswith("template-statefulset-")
+    )
+    assert uuid in names.app_label and version in names.app_label and names.app_label.startswith("template-app-")
+    assert uuid in names.pod and version in names.pod
+    assert uuid in names.pod_fqdn and version in names.pod_fqdn
+
+    # Some rudimentary checks on a hostname
+    assert names.pod_fqdn.lower() == names.pod_fqdn
+    assert "/" not in names.pod_fqdn
+    assert ":" not in names.pod_fqdn
+
+    # Should vary based on inputs
+    assert names == get_resource_names(uuid, version), "Same inputs - same output"
+    assert names != get_resource_names(uuid + "a", version)
+    assert names != get_resource_names(uuid, version + "a")

@@ -3,11 +3,13 @@ from datetime import datetime, timezone
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
+from assertical.fake.generator import generate_class_instance
 from assertical.fixtures.postgres import generate_async_session
 from fastapi.testclient import TestClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from cactus_orchestrator.k8s.resource import RunResourceNames
 from cactus_orchestrator.model import Run, RunStatus
 from cactus_orchestrator.tasks import generate_idleteardowntask, teardown_idle_teststack
 
@@ -130,7 +132,7 @@ async def test_teardown_idle_teststack(pg_empty_conn, new_app):
     pg_empty_conn.commit()
 
     is_idle.return_value = False
-    get_resource_names.return_value = ["a"] * 5
+    get_resource_names.return_value = generate_class_instance(RunResourceNames)
 
     # Act
     async with generate_async_session(pg_empty_conn.connection) as session:
