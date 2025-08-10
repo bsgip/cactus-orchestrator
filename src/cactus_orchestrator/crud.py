@@ -106,15 +106,21 @@ async def select_runs_for_group(
     session: AsyncSession, run_group_id: int, finalised: bool | None, created_at_gte: datetime | None
 ) -> Sequence[Run]:
     # runs statement
-    stmt = select(Run).where(Run.run_group_id == run_group_id)
+    stmt = select(Run).where(Run.run_group_id == run_group_id).order_by(Run.run_id.desc())
     filters = []
     if created_at_gte is not None:
         filters.append(Run.created_at >= created_at_gte)
 
     if finalised is True:
-        filters.append(Run.run_status.in_((RunStatus.finalised_by_client.value, RunStatus.finalised_by_timeout.value)))
+        filters.append(
+            Run.run_status.in_(
+                (RunStatus.finalised_by_client.value, RunStatus.finalised_by_timeout.value, RunStatus.terminated.value)
+            )
+        )
     elif finalised is False:
-        filters.append(Run.run_status.in_((RunStatus.initialised.value, RunStatus.started.value)))
+        filters.append(
+            Run.run_status.in_((RunStatus.initialised.value, RunStatus.started.value, RunStatus.provisioning.value))
+        )
 
     if filters:
         stmt = stmt.where(and_(*filters))

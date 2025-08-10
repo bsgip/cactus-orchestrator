@@ -275,7 +275,7 @@ async def spawn_teststack_and_init_run(
 
         # inject initial state with either the device or aggregator cert data
         pem_encoded_cert = client_cert.public_bytes(serialization.Encoding.PEM).decode("utf-8")
-        async with ClientSession(base_url=run_resource_names.pod_base_url, timeout=ClientTimeout(30)) as s:
+        async with ClientSession(base_url=run_resource_names.runner_base_url, timeout=ClientTimeout(30)) as s:
             await RunnerClient.init(
                 session=s,
                 test_id=test.test_procedure_id,
@@ -327,7 +327,7 @@ async def start_run(
     run_resource_names = get_resource_names(run.teststack_id)
 
     # request runner starts run
-    async with ClientSession(base_url=run_resource_names.pod_base_url, timeout=ClientTimeout(30)) as s:
+    async with ClientSession(base_url=run_resource_names.runner_base_url, timeout=ClientTimeout(30)) as s:
         await RunnerClient.start(s)
 
     # update status
@@ -392,7 +392,7 @@ async def finalise_run(
     await update_run_with_runartifact_and_finalise(
         session, run, None if artifact is None else artifact.run_artifact_id, run_status, finalised_at, all_criteria_met
     )
-    await db.session.commit()
+    await session.commit()
 
     return artifact
 
@@ -438,7 +438,11 @@ async def finalise_run_and_teardown_teststack(
 
     # finalise
     artifact = await finalise_run(
-        run, run_resource_names.pod_base_url, db.session, RunStatus.finalised_by_client, datetime.now(timezone.utc)
+        run,
+        run_resource_names.runner_base_url,
+        db.session,
+        RunStatus.finalised_by_client,
+        datetime.now(timezone.utc),
     )
     await db.session.commit()
 
@@ -505,12 +509,13 @@ async def get_run_status(
 
     # Connect to the pod and talk to the runner's "status" endpoint. Forward the result along
     run_resource_names = get_resource_names(run.teststack_id)
-    async with ClientSession(base_url=run_resource_names.pod_base_url, timeout=ClientTimeout(30)) as s:
+    async with ClientSession(base_url=run_resource_names.runner_base_url, timeout=ClientTimeout(30)) as s:
         try:
             return await RunnerClient.status(s)
         except Exception as exc:
             logger.error(
-                f"Error fetching runner status for run {run.run_id} @ {run_resource_names.pod_base_url}.", exc_info=exc
+                f"Error fetching runner status for run {run.run_id} @ {run_resource_names.runner_base_url}.",
+                exc_info=exc,
             )
             raise HTTPException(
                 status_code=HTTPStatus.INTERNAL_SERVER_ERROR,

@@ -45,7 +45,8 @@ class RunResourceNames:
     app_label: str  # Name of the "app" within the run execution spec
     ingress: str  # Name of the ingress resource
 
-    pod_base_url: str  # Base URL of the runner (accessible only within k8s deployment)
+    envoy_base_url: str  # Base URL of the envoy instance (accessible from OUTSIDE the k8s deployment)
+    runner_base_url: str  # Base URL of the runner (accessible only within k8s deployment)
 
 
 def async_k8s_api_retry[**P, T](
@@ -102,7 +103,8 @@ def get_resource_names(uuid: str) -> RunResourceNames:
     pod_name = STATEFULSET_POD_NAME_FORMAT.format(statefulset_name=statefulset_name)
     pod_fqdn = POD_FQDN_FORMAT.format(pod_name=pod_name, svc_name=svc_name, namespace=settings.test_execution_namespace)
 
-    pod_base_url = RUNNER_POD_URL.format(pod_fqdn=pod_fqdn, pod_port=POD_HARNESS_RUNNER_MANAGEMENT_PORT)
+    runner_base_url = RUNNER_POD_URL.format(pod_fqdn=pod_fqdn, pod_port=POD_HARNESS_RUNNER_MANAGEMENT_PORT)
+    envoy_base_url = TEST_EXECUTION_URL_FORMAT.format(fqdn=settings.test_execution_fqdn, svc_name=svc_name)
 
     return RunResourceNames(
         namespace=settings.test_execution_namespace,
@@ -112,13 +114,14 @@ def get_resource_names(uuid: str) -> RunResourceNames:
         pod=pod_name,
         pod_fqdn=pod_fqdn,
         ingress=settings.test_execution_ingress_name,
-        pod_base_url=pod_base_url,
+        runner_base_url=runner_base_url,
+        envoy_base_url=envoy_base_url,
     )
 
 
 def generate_envoy_dcap_uri(resources: RunResourceNames) -> str:
     """Given a test_stack_id - return the URI link to the underlying envoy utility server DeviceCapability"""
-    return TEST_EXECUTION_URL_FORMAT.format(fqdn=resources.pod_fqdn, svc_name=resources.service) + DeviceCapabilityUri
+    return resources.envoy_base_url + DeviceCapabilityUri
 
 
 def generate_static_test_stack_id(user: User) -> str:

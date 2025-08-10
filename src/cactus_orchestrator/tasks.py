@@ -49,7 +49,7 @@ async def teardown_idle_teststack(
 
         idle = False
         try:
-            idle = await is_idle(now, run_resource_names.pod_base_url, teardowntask_idle_timeout_seconds)
+            idle = await is_idle(now, run_resource_names.runner_base_url, teardowntask_idle_timeout_seconds)
         except Exception as exc:
             logger.warning("Call to cactus-runner last request endpoint failed.")
             logger.debug("Exception", exc_info=exc)
@@ -57,7 +57,9 @@ async def teardown_idle_teststack(
         if idle or is_maxlive_overtime(now, run.created_at, teardowntask_max_lifetime_seconds):
             logger.info(f"(Idle/Overtime Task) Shutting down {run_resource_names.service}")
             try:
-                await finalise_run(run, run_resource_names.pod_base_url, session, RunStatus.finalised_by_timeout, now)
+                await finalise_run(
+                    run, run_resource_names.runner_base_url, session, RunStatus.finalised_by_timeout, now
+                )
                 await session.commit()
                 await teardown_teststack(run_resource_names)
             except (ApiException, ClientConnectionError) as exc:

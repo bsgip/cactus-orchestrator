@@ -1,0 +1,799 @@
+import os
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from http import HTTPMethod, HTTPStatus
+from itertools import product
+from typing import Generator
+from unittest.mock import AsyncMock, Mock, call, patch
+
+import pytest
+from assertical.asserts.time import assert_nowish
+from assertical.fake.generator import generate_class_instance
+from assertical.fake.sqlalchemy import assert_mock_session, create_mock_session
+from assertical.fixtures.postgres import generate_async_session
+from cactus_runner.client import RunnerClientException
+from cactus_runner.models import CriteriaEntry, RequestEntry, RunnerStatus, StepStatus
+from cactus_test_definitions import CSIPAusVersion, TestProcedureId
+from cryptography import x509
+from cryptography.hazmat.primitives import serialization
+from fastapi import HTTPException
+from fastapi.testclient import TestClient
+from fastapi_pagination import Params, set_params
+from sqlalchemy import select, update
+from sqlalchemy.exc import NoResultFound
+from sqlalchemy.orm import selectinload
+
+from cactus_orchestrator.api.certificate import CertificateRouteType, _ca_crt_cachekey, update_ca_certificate_cache
+from cactus_orchestrator.api.run import ensure_certificate_valid, finalise_run, is_all_criteria_met, teardown_teststack
+from cactus_orchestrator.cache import AsyncCache, ExpiringValue
+from cactus_orchestrator.crud import ProcedureRunAggregated
+from cactus_orchestrator.k8s.resource import generate_envoy_dcap_uri, generate_static_test_stack_id
+from cactus_orchestrator.main import app
+from cactus_orchestrator.model import Run, RunArtifact, RunGroup, RunStatus, User
+from cactus_orchestrator.schema import (
+    InitRunRequest,
+    InitRunResponse,
+    RunResponse,
+    StartRunResponse,
+    TestProcedureResponse,
+    TestProcedureRunSummaryResponse,
+    UserConfigurationRequest,
+    UserConfigurationResponse,
+)
+from cactus_orchestrator.settings import CactusOrchestratorException
+
+
+@dataclass
+class MockedK8s:
+    # create
+    add_ingress_rule: Mock
+    clone_service: Mock
+    clone_statefulset: Mock
+    wait_for_pod: Mock
+
+    # delete
+    delete_service: Mock
+    delete_statefulset: Mock
+    remove_ingress_rule: Mock
+
+    # RunnerClient
+    init: Mock
+    start: Mock
+    finalize: Mock
+    status: Mock
+    last_interaction: Mock
+
+
+@pytest.fixture
+def k8s_mock() -> Generator[MockedK8s, None, None]:
+    with (
+        patch("cactus_orchestrator.api.run.add_ingress_rule") as add_ingress_rule,
+        patch("cactus_orchestrator.api.run.clone_service") as clone_service,
+        patch("cactus_orchestrator.api.run.clone_statefulset") as clone_statefulset,
+        patch("cactus_orchestrator.api.run.wait_for_pod") as wait_for_pod,
+        patch("cactus_orchestrator.api.run.delete_service") as delete_service,
+        patch("cactus_orchestrator.api.run.delete_statefulset") as delete_statefulset,
+        patch("cactus_orchestrator.api.run.remove_ingress_rule") as remove_ingress_rule,
+        patch("cactus_orchestrator.api.run.RunnerClient.init") as init,
+        patch("cactus_orchestrator.api.run.RunnerClient.start") as start,
+        patch("cactus_orchestrator.api.run.RunnerClient.finalize") as finalize,
+        patch("cactus_orchestrator.api.run.RunnerClient.status") as status,
+        patch("cactus_orchestrator.api.run.RunnerClient.last_interaction") as last_interaction,
+    ):
+        yield MockedK8s(
+            add_ingress_rule=add_ingress_rule,
+            clone_service=clone_service,
+            clone_statefulset=clone_statefulset,
+            wait_for_pod=wait_for_pod,
+            delete_service=delete_service,
+            delete_statefulset=delete_statefulset,
+            remove_ingress_rule=remove_ingress_rule,
+            init=init,
+            start=start,
+            finalize=finalize,
+            status=status,
+            last_interaction=last_interaction,
+        )
+
+
+@pytest.mark.parametrize(
+    "is_device_cert, run_group_id, expected_version",
+    [
+        (True, 1, "v1.2"),
+        (False, 1, "v1.2"),
+        (True, 2, "v1.3-beta/storage"),
+        (False, 2, "v1.3-beta/storage"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_spawn_teststack_and_init_run_dynamic_uris(
+    client,
+    k8s_mock: MockedK8s,
+    pg_base_config,
+    valid_user_p12_and_der,
+    expired_user_p12_and_der,
+    valid_jwt_user1,
+    is_device_cert: bool,
+    run_group_id: int,
+    expected_version: str,
+):
+    """Just a simple test of starting a run with all k8s functions stubbed under various circumstances"""
+
+    # The cert we WONT be using will be expired to ensure it doesn't block us
+    if is_device_cert:
+        agg_cert_bytes = expired_user_p12_and_der[1]
+        device_cert_bytes = valid_user_p12_and_der[1]
+    else:
+        agg_cert_bytes = valid_user_p12_and_der[1]
+        device_cert_bytes = expired_user_p12_and_der[1]
+
+    subscription_domain = "abc.def"
+
+    # Arrange
+    async with generate_async_session(pg_base_config) as session:
+        user = (await session.execute(select(User).where(User.user_id == 1))).scalar_one()
+        user.aggregator_certificate_x509_der = agg_cert_bytes
+        user.device_certificate_x509_der = device_cert_bytes
+        user.subscription_domain = subscription_domain
+        user.is_device_cert = is_device_cert
+        user.is_static_uri = False
+
+        expected_static_uri = generate_static_test_stack_id(user)
+
+        await session.commit()
+
+    # Act
+    req = InitRunRequest(test_procedure_id=TestProcedureId.ALL_01.value)
+    res = await client.post(
+        f"/run_group/{run_group_id}/run", json=req.model_dump(), headers={"Authorization": f"Bearer {valid_jwt_user1}"}
+    )
+
+    # Assert
+    assert res.status_code == HTTPStatus.CREATED
+    response_model = InitRunResponse.model_validate(res.json())
+    assert os.environ["TEST_EXECUTION_FQDN"] in response_model.test_url, "The returned URI should be public facing"
+    assert res.headers["Location"] == f"/run/{response_model.run_id}"
+
+    # Check the k8s services were provisioned
+    k8s_mock.clone_statefulset.assert_called_once()
+    k8s_mock.clone_service.assert_called_once()
+    k8s_mock.add_ingress_rule.assert_called_once()
+    k8s_mock.wait_for_pod.assert_called_once()
+
+    # Check init was called the correct params
+    k8s_mock.init.assert_awaited_once()
+    assert k8s_mock.init.call_args_list[0].kwargs["test_id"] == TestProcedureId.ALL_01
+    if is_device_cert:
+        assert k8s_mock.init.call_args_list[0].kwargs["aggregator_certificate"] is None
+        assert k8s_mock.init.call_args_list[0].kwargs["device_certificate"] == x509.load_der_x509_certificate(
+            device_cert_bytes
+        ).public_bytes(serialization.Encoding.PEM).decode("utf-8")
+    else:
+        assert k8s_mock.init.call_args_list[0].kwargs["aggregator_certificate"] == x509.load_der_x509_certificate(
+            agg_cert_bytes
+        ).public_bytes(serialization.Encoding.PEM).decode("utf-8")
+        assert k8s_mock.init.call_args_list[0].kwargs["device_certificate"] is None
+    assert k8s_mock.init.call_args_list[0].kwargs["subscription_domain"] == subscription_domain
+    assert k8s_mock.init.call_args_list[0].kwargs["run_id"] == str(response_model.run_id)
+    assert k8s_mock.init.call_args_list[0].kwargs["csip_aus_version"] == expected_version
+
+    # Check the DB
+    async with generate_async_session(pg_base_config) as session:
+        new_run = (await session.execute(select(Run).where(Run.run_id == response_model.run_id))).scalar_one()
+        assert new_run.run_group_id == run_group_id
+        assert new_run.run_status == RunStatus.initialised
+        assert new_run.finalised_at is None
+        assert new_run.teststack_id in response_model.test_url
+        assert_nowish(new_run.created_at)
+        assert new_run.teststack_id != expected_static_uri
+
+
+@pytest.mark.parametrize(
+    "is_device_cert",
+    [True, False],
+)
+@pytest.mark.asyncio
+async def test_spawn_teststack_and_init_run_static_uri(
+    client,
+    k8s_mock: MockedK8s,
+    pg_base_config,
+    valid_user_p12_and_der,
+    expired_user_p12_and_der,
+    valid_jwt_user1,
+    is_device_cert: bool,
+):
+    """Just a simple test of starting a run with all k8s functions stubbed when URIs are requested to be static"""
+
+    # The cert we WONT be using will be expired to ensure it doesn't block us
+    if is_device_cert:
+        agg_cert_bytes = expired_user_p12_and_der[1]
+        device_cert_bytes = valid_user_p12_and_der[1]
+    else:
+        agg_cert_bytes = valid_user_p12_and_der[1]
+        device_cert_bytes = expired_user_p12_and_der[1]
+
+    subscription_domain = "abc.def"
+    run_group_id = 1
+    expected_version = "v1.2"
+
+    # Arrange
+    async with generate_async_session(pg_base_config) as session:
+        # Firstly ensure all user runs are expired before we start
+        await session.execute(update(Run).values(run_status=RunStatus.terminated).where(Run.run_group_id.in_([1, 2])))
+
+        user = (await session.execute(select(User).where(User.user_id == 1))).scalar_one()
+        user.aggregator_certificate_x509_der = agg_cert_bytes
+        user.device_certificate_x509_der = device_cert_bytes
+        user.subscription_domain = subscription_domain
+        user.is_device_cert = is_device_cert
+        user.is_static_uri = True
+        expected_static_uri = generate_static_test_stack_id(user)
+
+        await session.commit()
+
+    # Act
+    req = InitRunRequest(test_procedure_id=TestProcedureId.ALL_01.value)
+    res = await client.post(
+        f"/run_group/{run_group_id}/run", json=req.model_dump(), headers={"Authorization": f"Bearer {valid_jwt_user1}"}
+    )
+
+    # Assert
+    assert res.status_code == HTTPStatus.CREATED
+    response_model = InitRunResponse.model_validate(res.json())
+    assert os.environ["TEST_EXECUTION_FQDN"] in response_model.test_url, "The returned URI should be public facing"
+    assert res.headers["Location"] == f"/run/{response_model.run_id}"
+
+    # Check the k8s services were provisioned
+    k8s_mock.clone_statefulset.assert_called_once()
+    k8s_mock.clone_service.assert_called_once()
+    k8s_mock.add_ingress_rule.assert_called_once()
+    k8s_mock.wait_for_pod.assert_called_once()
+
+    # Check init was called the correct params
+    k8s_mock.init.assert_awaited_once()
+    assert k8s_mock.init.call_args_list[0].kwargs["test_id"] == TestProcedureId.ALL_01
+    if is_device_cert:
+        assert k8s_mock.init.call_args_list[0].kwargs["aggregator_certificate"] is None
+        assert k8s_mock.init.call_args_list[0].kwargs["device_certificate"] == x509.load_der_x509_certificate(
+            device_cert_bytes
+        ).public_bytes(serialization.Encoding.PEM).decode("utf-8")
+    else:
+        assert k8s_mock.init.call_args_list[0].kwargs["aggregator_certificate"] == x509.load_der_x509_certificate(
+            agg_cert_bytes
+        ).public_bytes(serialization.Encoding.PEM).decode("utf-8")
+        assert k8s_mock.init.call_args_list[0].kwargs["device_certificate"] is None
+    assert k8s_mock.init.call_args_list[0].kwargs["subscription_domain"] == subscription_domain
+    assert k8s_mock.init.call_args_list[0].kwargs["run_id"] == str(response_model.run_id)
+    assert k8s_mock.init.call_args_list[0].kwargs["csip_aus_version"] == expected_version
+
+    # Check the DB
+    async with generate_async_session(pg_base_config) as session:
+        new_run = (await session.execute(select(Run).where(Run.run_id == response_model.run_id))).scalar_one()
+        assert new_run.run_group_id == run_group_id
+        assert new_run.run_status == RunStatus.initialised
+        assert new_run.finalised_at is None
+        assert new_run.teststack_id in response_model.test_url
+        assert_nowish(new_run.created_at)
+        assert new_run.teststack_id == expected_static_uri
+
+
+@pytest.mark.parametrize(
+    "is_device_cert",
+    [True, False],
+)
+@pytest.mark.asyncio
+async def test_spawn_teststack_and_init_run_static_uri_collision(
+    client,
+    k8s_mock: MockedK8s,
+    pg_base_config,
+    valid_user_p12_and_der,
+    expired_user_p12_and_der,
+    valid_jwt_user1,
+    is_device_cert: bool,
+):
+    """Starting a static URI run should fail if there is an existing run for the user"""
+
+    # The cert we WONT be using will be expired to ensure it doesn't block us
+    if is_device_cert:
+        agg_cert_bytes = expired_user_p12_and_der[1]
+        device_cert_bytes = valid_user_p12_and_der[1]
+    else:
+        agg_cert_bytes = valid_user_p12_and_der[1]
+        device_cert_bytes = expired_user_p12_and_der[1]
+
+    subscription_domain = "abc.def"
+    run_group_id = 1
+
+    # Arrange
+    async with generate_async_session(pg_base_config) as session:
+        user = (await session.execute(select(User).where(User.user_id == 1))).scalar_one()
+        user.aggregator_certificate_x509_der = agg_cert_bytes
+        user.device_certificate_x509_der = device_cert_bytes
+        user.subscription_domain = subscription_domain
+        user.is_device_cert = is_device_cert
+        user.is_static_uri = True
+
+        await session.commit()
+
+    # Act
+    req = InitRunRequest(test_procedure_id=TestProcedureId.ALL_01.value)
+    res = await client.post(
+        f"/run_group/{run_group_id}/run", json=req.model_dump(), headers={"Authorization": f"Bearer {valid_jwt_user1}"}
+    )
+
+    # Assert
+    assert res.status_code == HTTPStatus.CONFLICT
+
+    # Check the k8s services were NOT provisioned
+    k8s_mock.clone_statefulset.assert_not_called()
+    k8s_mock.clone_service.assert_not_called()
+    k8s_mock.add_ingress_rule.assert_not_called()
+    k8s_mock.wait_for_pod.assert_not_called()
+
+
+@pytest.mark.parametrize("run_group_id", [3, 99])
+@pytest.mark.asyncio
+async def test_spawn_teststack_and_init_run_bad_run_group_id(
+    client,
+    k8s_mock: MockedK8s,
+    pg_base_config,
+    valid_user_p12_and_der,
+    expired_user_p12_and_der,
+    valid_jwt_user1,
+    run_group_id: int,
+):
+    """Can't start a run for a run group outside user's scope"""
+
+    agg_cert_bytes = valid_user_p12_and_der[1]
+    device_cert_bytes = expired_user_p12_and_der[1]
+    subscription_domain = "abc.def"
+
+    # Arrange
+    async with generate_async_session(pg_base_config) as session:
+        user = (await session.execute(select(User).where(User.user_id == 1))).scalar_one()
+        user.aggregator_certificate_x509_der = agg_cert_bytes
+        user.device_certificate_x509_der = device_cert_bytes
+        user.subscription_domain = subscription_domain
+        user.is_device_cert = False
+        user.is_static_uri = False
+        await session.commit()
+
+    # Act
+    req = InitRunRequest(test_procedure_id=TestProcedureId.ALL_01.value)
+    res = await client.post(
+        f"/run_group/{run_group_id}/run", json=req.model_dump(), headers={"Authorization": f"Bearer {valid_jwt_user1}"}
+    )
+
+    # Assert
+    assert res.status_code == HTTPStatus.FORBIDDEN
+
+    # Check the k8s services were NOT provisioned
+    k8s_mock.clone_statefulset.assert_not_called()
+    k8s_mock.clone_service.assert_not_called()
+    k8s_mock.add_ingress_rule.assert_not_called()
+    k8s_mock.wait_for_pod.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "is_device_cert",
+    [True, False],
+)
+@pytest.mark.asyncio
+async def test_spawn_teststack_and_init_run_expired_certs(
+    client,
+    k8s_mock: MockedK8s,
+    pg_base_config,
+    valid_user_p12_and_der,
+    expired_user_p12_and_der,
+    valid_jwt_user1,
+    is_device_cert: bool,
+):
+    """Can't start a run for a run group outside user's scope"""
+
+    # Ensure the cert we should be using is expired
+    if is_device_cert:
+        agg_cert_bytes = valid_user_p12_and_der[1]
+        device_cert_bytes = expired_user_p12_and_der[1]
+    else:
+        agg_cert_bytes = expired_user_p12_and_der[1]
+        device_cert_bytes = valid_user_p12_and_der[1]
+
+    subscription_domain = "abc.def"
+    run_group_id = 1
+
+    # Arrange
+    async with generate_async_session(pg_base_config) as session:
+        user = (await session.execute(select(User).where(User.user_id == 1))).scalar_one()
+        user.aggregator_certificate_x509_der = agg_cert_bytes
+        user.device_certificate_x509_der = device_cert_bytes
+        user.subscription_domain = subscription_domain
+        user.is_device_cert = is_device_cert
+        user.is_static_uri = False
+        await session.commit()
+
+    # Act
+    req = InitRunRequest(test_procedure_id=TestProcedureId.ALL_01.value)
+    res = await client.post(
+        f"/run_group/{run_group_id}/run", json=req.model_dump(), headers={"Authorization": f"Bearer {valid_jwt_user1}"}
+    )
+
+    # Assert
+    assert res.status_code == HTTPStatus.EXPECTATION_FAILED
+
+    # Check the k8s services were NOT provisioned
+    k8s_mock.clone_statefulset.assert_not_called()
+    k8s_mock.clone_service.assert_not_called()
+    k8s_mock.add_ingress_rule.assert_not_called()
+    k8s_mock.wait_for_pod.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "is_device_cert",
+    [True, False],
+)
+@pytest.mark.asyncio
+async def test_spawn_teststack_and_init_run_teardown_on_init_failure(
+    client,
+    k8s_mock: MockedK8s,
+    pg_base_config,
+    valid_user_p12_and_der,
+    expired_user_p12_and_der,
+    valid_jwt_user1,
+    is_device_cert: bool,
+):
+    """k8s resources should be deallocated if a failure happens during init"""
+
+    # The cert we WONT be using will be expired to ensure it doesn't block us
+    if is_device_cert:
+        agg_cert_bytes = expired_user_p12_and_der[1]
+        device_cert_bytes = valid_user_p12_and_der[1]
+    else:
+        agg_cert_bytes = valid_user_p12_and_der[1]
+        device_cert_bytes = expired_user_p12_and_der[1]
+
+    subscription_domain = "abc.def"
+    run_group_id = 1
+
+    # Arrange
+    async with generate_async_session(pg_base_config) as session:
+        user = (await session.execute(select(User).where(User.user_id == 1))).scalar_one()
+        user.aggregator_certificate_x509_der = agg_cert_bytes
+        user.device_certificate_x509_der = device_cert_bytes
+        user.subscription_domain = subscription_domain
+        user.is_device_cert = is_device_cert
+        user.is_static_uri = False
+
+        await session.commit()
+
+    k8s_mock.init.side_effect = RunnerClientException("My mock exception")
+
+    # Act
+    req = InitRunRequest(test_procedure_id=TestProcedureId.ALL_01.value)
+    res = await client.post(
+        f"/run_group/{run_group_id}/run", json=req.model_dump(), headers={"Authorization": f"Bearer {valid_jwt_user1}"}
+    )
+
+    # Assert
+    assert res.status_code == HTTPStatus.INTERNAL_SERVER_ERROR
+
+    # Check the k8s services were provisioned AND removed
+    k8s_mock.clone_statefulset.assert_called_once()
+    k8s_mock.clone_service.assert_called_once()
+    k8s_mock.wait_for_pod.assert_called_once()
+    k8s_mock.delete_service.assert_called_once()
+    k8s_mock.delete_statefulset.assert_called_once()
+    k8s_mock.remove_ingress_rule.assert_called_once()
+
+    # Check init was called the correct params
+    k8s_mock.init.assert_called_once()
+
+
+@pytest.mark.parametrize("run_id, expected_success", [(6, True), (1, False), (99, False)])
+@pytest.mark.asyncio
+async def test_start_run(
+    client, k8s_mock: MockedK8s, pg_base_config, valid_jwt_user2, run_id: int, expected_success: bool
+):
+    """Can a user start runs that are visible to them?"""
+
+    # Act
+    res = await client.post(f"/run/{run_id}", headers={"Authorization": f"Bearer {valid_jwt_user2}"})
+
+    # Assert
+    if expected_success:
+        assert res.status_code == HTTPStatus.OK
+        response_model = StartRunResponse.model_validate(res.json())
+        assert os.environ["TEST_EXECUTION_FQDN"] in response_model.test_url, "The returned URI should be public facing"
+
+        k8s_mock.start.assert_called_once()
+
+        async with generate_async_session(pg_base_config) as session:
+            new_run = (await session.execute(select(Run).where(Run.run_id == run_id))).scalar_one()
+            assert new_run.run_status == RunStatus.started
+    else:
+        assert res.status_code == HTTPStatus.NOT_FOUND
+
+        k8s_mock.start.assert_not_called()
+
+        async with generate_async_session(pg_base_config) as session:
+            new_run = (await session.execute(select(Run).where(Run.run_id == run_id))).scalar_one_or_none()
+            if new_run is not None:
+                assert new_run.run_status == RunStatus.initialised
+
+
+@pytest.mark.parametrize(
+    "run_group_id, finalised, expected_run_ids",
+    [(1, None, [7, 4, 3, 2, 1]), (1, True, [7, 4, 3, 2]), (1, False, [1]), (2, None, [5]), (3, None, None)],
+)
+@pytest.mark.asyncio
+async def test_get_group_runs_paginated(
+    client,
+    pg_base_config,
+    valid_jwt_user1,
+    run_group_id: int,
+    finalised: bool | None,
+    expected_run_ids: list[int] | None,
+):
+    """Test retrieving paginated user runs"""
+
+    params = {}
+    if finalised is not None:
+        params["finalised"] = finalised
+
+    # Act
+    res = await client.get(
+        f"/run_group/{run_group_id}/run", params=params, headers={"Authorization": f"Bearer {valid_jwt_user1}"}
+    )
+
+    # Assert
+    if expected_run_ids is None:
+        assert res.status_code == HTTPStatus.FORBIDDEN
+    else:
+        assert res.status_code == HTTPStatus.OK
+        data = res.json()
+        assert isinstance(data, dict)
+        assert "items" in data
+        assert expected_run_ids == [i["run_id"] for i in data["items"]]
+
+
+@pytest.mark.parametrize(
+    "run_id, expected_status",
+    [(1, HTTPStatus.OK), (7, HTTPStatus.OK), (5, HTTPStatus.OK), (6, HTTPStatus.NOT_FOUND), (99, HTTPStatus.NOT_FOUND)],
+)
+@pytest.mark.asyncio
+async def test_get_individual_run(client, pg_base_config, valid_jwt_user1, run_id, expected_status):
+    """Test fetching a single run by ID"""
+
+    # Act
+    res = await client.get(f"/run/{run_id}", headers={"Authorization": f"Bearer {valid_jwt_user1}"})
+
+    # Assert
+    assert res.status_code == expected_status
+    if expected_status == HTTPStatus.OK:
+        run_response = RunResponse.model_validate_json(res.text)
+        assert run_response.run_id == run_id
+        assert run_response.test_url
+
+
+@pytest.mark.parametrize(
+    "runner_status, expected",
+    [
+        (None, None),
+        (
+            generate_class_instance(
+                RunnerStatus,
+                step_status={},
+                criteria=[CriteriaEntry(True, "", ""), CriteriaEntry(True, "", "")],
+                request_history=[
+                    RequestEntry("", "", HTTPMethod.GET, HTTPStatus.BAD_REQUEST, datetime.now(), "", []),
+                    RequestEntry("", "", HTTPMethod.POST, HTTPStatus.OK, datetime.now(), "", None),
+                ],
+            ),
+            True,
+        ),
+        (
+            generate_class_instance(
+                RunnerStatus,
+                step_status={},
+                criteria=[],
+                request_history=[],
+            ),
+            True,
+        ),
+        (
+            generate_class_instance(
+                RunnerStatus,
+                step_status={},
+                criteria=None,
+                request_history=None,
+            ),
+            True,
+        ),
+        (
+            generate_class_instance(
+                RunnerStatus,
+                step_status={},
+                criteria=[CriteriaEntry(True, "", ""), CriteriaEntry(True, "", "")],
+                request_history=[
+                    RequestEntry("", "", HTTPMethod.GET, HTTPStatus.BAD_REQUEST, datetime.now(), "", None),
+                    RequestEntry("", "", HTTPMethod.POST, HTTPStatus.OK, datetime.now(), "", ["validation error"]),
+                ],
+            ),
+            False,
+        ),  # validation error
+        (
+            generate_class_instance(
+                RunnerStatus,
+                step_status={},
+                criteria=[CriteriaEntry(True, "", ""), CriteriaEntry(False, "", "")],
+                request_history=[
+                    RequestEntry("", "", HTTPMethod.GET, HTTPStatus.BAD_REQUEST, datetime.now(), "", None),
+                    RequestEntry("", "", HTTPMethod.POST, HTTPStatus.OK, datetime.now(), "", []),
+                ],
+            ),
+            False,
+        ),  # criteria error
+    ],
+)
+def test_is_all_criteria_met(runner_status: RunnerStatus | None, expected: bool | None):
+    actual = is_all_criteria_met(runner_status)
+    assert actual is expected
+
+
+@pytest.mark.parametrize(
+    "runner_status, all_criteria_met",
+    [
+        (
+            generate_class_instance(
+                RunnerStatus,
+                step_status={},
+                criteria=[CriteriaEntry(True, "", "")],
+                request_history=[RequestEntry("a", "b", "c", HTTPStatus.OK, datetime(2022, 11, 20), "", [])],
+            ),
+            True,
+        ),
+        (
+            generate_class_instance(
+                RunnerStatus,
+                step_status={},
+                criteria=[CriteriaEntry(False, "", "")],
+                request_history=[],
+            ),
+            False,
+        ),
+        (
+            generate_class_instance(
+                RunnerStatus,
+                step_status={"step1": StepStatus.RESOLVED},
+                criteria=[CriteriaEntry(True, "", "")],
+                request_history=[RequestEntry("a", "b", "c", HTTPStatus.OK, datetime(2022, 11, 20), "", ["an error"])],
+            ),
+            False,
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_finalise_run_creates_run_artifact_and_updates_run(
+    pg_base_config, k8s_mock: MockedK8s, runner_status, all_criteria_met
+):
+    """Finalize correctly updates the DB with data requested from the runner"""
+    # Arrange
+    finalize_data = b"file_data"
+
+    k8s_mock.status.return_value = runner_status
+    k8s_mock.finalize.return_value = finalize_data
+    finalise_time = datetime(2023, 4, 5, tzinfo=timezone.utc)
+
+    # Act
+    async with generate_async_session(pg_base_config) as session:
+        run = (await session.execute(select(Run).where(Run.run_id == 1))).scalar_one()
+        result = await finalise_run(run, "http://mockurl", session, RunStatus.finalised_by_client, finalise_time)
+        assert isinstance(result, RunArtifact)
+
+    # Assert
+    k8s_mock.status.assert_called_once()
+    k8s_mock.finalize.assert_called_once()
+    async with generate_async_session(pg_base_config) as session:
+        run = (
+            await session.execute(select(Run).where(Run.run_id == 1).options(selectinload(Run.run_artifact)))
+        ).scalar_one()
+
+        assert run.finalised_at == finalise_time
+        assert run.run_status == RunStatus.finalised_by_client
+        assert run.all_criteria_met is all_criteria_met
+        assert run.run_artifact.file_data == finalize_data
+
+
+@pytest.mark.asyncio
+async def test_finalise_run_handles_runner_finalize_failure(
+    pg_base_config,
+    k8s_mock: MockedK8s,
+):
+    """Finalize still updates the record as finalised even if runner misbehaves"""
+    # Arrange
+    runner_status = generate_class_instance(
+        RunnerStatus, step_status={"step1": StepStatus.RESOLVED}, request_history=[]
+    )  # This is a success status
+
+    k8s_mock.status.return_value = runner_status
+    k8s_mock.finalize.side_effect = Exception("mock exception")
+    finalise_time = datetime(2023, 4, 5, tzinfo=timezone.utc)
+
+    # Act
+    async with generate_async_session(pg_base_config) as session:
+        run = (await session.execute(select(Run).where(Run.run_id == 1))).scalar_one()
+        result = await finalise_run(run, "http://mockurl", session, RunStatus.finalised_by_client, finalise_time)
+        assert result is None
+
+    # Assert
+    k8s_mock.status.assert_called_once()
+    k8s_mock.finalize.assert_called_once()
+    async with generate_async_session(pg_base_config) as session:
+        run = (
+            await session.execute(select(Run).where(Run.run_id == 1).options(selectinload(Run.run_artifact)))
+        ).scalar_one()
+
+        assert run.finalised_at == finalise_time
+        assert run.run_status == RunStatus.finalised_by_client
+        assert run.all_criteria_met is True
+        assert run.run_artifact is None
+
+
+@pytest.mark.asyncio
+async def test_finalise_run_handles_runner_status_failure(
+    pg_base_config,
+    k8s_mock: MockedK8s,
+):
+    """Finalize will still proceed even if the runner status cannot be determined"""
+    # Arrange
+    finalize_data = b"file_data"
+
+    k8s_mock.status.side_effect = Exception("my mock exception")
+    k8s_mock.finalize.return_value = finalize_data
+    finalise_time = datetime(2023, 4, 5, tzinfo=timezone.utc)
+
+    # Act
+    async with generate_async_session(pg_base_config) as session:
+        run = (await session.execute(select(Run).where(Run.run_id == 1))).scalar_one()
+        result = await finalise_run(run, "http://mockurl", session, RunStatus.finalised_by_client, finalise_time)
+        assert isinstance(result, RunArtifact)
+
+    # Assert
+    k8s_mock.status.assert_called_once()
+    k8s_mock.finalize.assert_called_once()
+    async with generate_async_session(pg_base_config) as session:
+        run = (
+            await session.execute(select(Run).where(Run.run_id == 1).options(selectinload(Run.run_artifact)))
+        ).scalar_one()
+
+        assert run.finalised_at == finalise_time
+        assert run.run_status == RunStatus.finalised_by_client
+        assert run.all_criteria_met is None
+        assert run.run_artifact.file_data == finalize_data
+
+
+@pytest.mark.asyncio
+async def test_finalise_run_and_teardown_teststack_success(client, pg_base_config, k8s_mock, valid_jwt_user1):
+    # Arrange
+    finalize_data = b"\x1f\x8b\x08\x00I\xe9\xe4g\x02\xff\xcb,)N\xccM\xf5M,\xca\xcc\x07\x00\xcd\xcc5\xc5\x0b\x00\x00\x00"
+    k8s_mock.finalize.return_value = finalize_data
+    k8s_mock.status.return_value = generate_class_instance(RunnerStatus, step_status={})
+
+    # Act
+    response = await client.post("/run/1/finalise", headers={"Authorization": f"Bearer {valid_jwt_user1}"})
+
+    # Assert
+    assert response.status_code == 200
+    assert response.content == finalize_data
+
+    k8s_mock.finalize.assert_called_once()
+    k8s_mock.status.assert_called_once()
+
+    async with generate_async_session(pg_base_config) as session:
+        run = (
+            await session.execute(select(Run).where(Run.run_id == 1).options(selectinload(Run.run_artifact)))
+        ).scalar_one()
+
+        assert_nowish(run.finalised_at)
+        assert run.run_status == RunStatus.finalised_by_client
+        assert run.all_criteria_met is True
+        assert run.run_artifact.file_data == finalize_data
