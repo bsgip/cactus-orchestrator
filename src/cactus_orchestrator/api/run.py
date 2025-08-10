@@ -185,11 +185,12 @@ async def create_group(
         csip_aus_version = CSIPAusVersion(group_request.csip_aus_version)
     except Exception:
         raise HTTPException(
-            HTTPStatus.BAD_REQUEST, detail=f"'{csip_aus_version}' doesn't map to a known CSIPAusVersion"
+            HTTPStatus.BAD_REQUEST, detail=f"'{group_request.csip_aus_version}' doesn't map to a known CSIPAusVersion"
         )
 
     # get runs
     run_group = await insert_run_group(db.session, user.user_id, csip_aus_version.value)
+    await db.session.commit()
     return map_group_to_group_response(run_group)
 
 

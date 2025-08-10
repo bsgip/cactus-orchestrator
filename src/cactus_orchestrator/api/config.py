@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from cactus_orchestrator.auth import AuthScopes, jwt_validator
 from cactus_orchestrator.crud import insert_user, select_user
-from cactus_orchestrator.k8s.resource import generate_envoy_dcap_uri, generate_static_test_stack_id
+from cactus_orchestrator.k8s.resource import generate_envoy_dcap_uri, generate_static_test_stack_id, get_resource_names
 from cactus_orchestrator.model import User
 from cactus_orchestrator.schema import UserConfigurationRequest, UserConfigurationResponse, UserContext
 
@@ -30,9 +30,10 @@ def parse_domain(d: str) -> str:
 
 def user_to_config(user: User) -> UserConfigurationResponse:
     """Requires aggregator_certificate_x509_der and device_certificate_x509_der to be undeferred"""
+
     static_uri: str | None = None
     if user.is_static_uri:
-        static_uri = generate_envoy_dcap_uri(generate_static_test_stack_id(user))
+        static_uri = generate_envoy_dcap_uri(get_resource_names(generate_static_test_stack_id(user)))
 
     aggregator_certificate_expiry: datetime | None = None
     if user.aggregator_certificate_x509_der:

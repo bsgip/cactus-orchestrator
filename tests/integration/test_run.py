@@ -2,45 +2,32 @@ import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from http import HTTPMethod, HTTPStatus
-from itertools import product
 from typing import Generator
-from unittest.mock import AsyncMock, Mock, call, patch
+from unittest.mock import Mock, patch
 
 import pytest
 from assertical.asserts.time import assert_nowish
 from assertical.fake.generator import generate_class_instance
-from assertical.fake.sqlalchemy import assert_mock_session, create_mock_session
 from assertical.fixtures.postgres import generate_async_session
 from cactus_runner.client import RunnerClientException
 from cactus_runner.models import CriteriaEntry, RequestEntry, RunnerStatus, StepStatus
 from cactus_test_definitions import CSIPAusVersion, TestProcedureId
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization
-from fastapi import HTTPException
-from fastapi.testclient import TestClient
-from fastapi_pagination import Params, set_params
-from sqlalchemy import select, update
-from sqlalchemy.exc import NoResultFound
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import selectinload
 
-from cactus_orchestrator.api.certificate import CertificateRouteType, _ca_crt_cachekey, update_ca_certificate_cache
-from cactus_orchestrator.api.run import ensure_certificate_valid, finalise_run, is_all_criteria_met, teardown_teststack
-from cactus_orchestrator.cache import AsyncCache, ExpiringValue
-from cactus_orchestrator.crud import ProcedureRunAggregated
-from cactus_orchestrator.k8s.resource import generate_envoy_dcap_uri, generate_static_test_stack_id
-from cactus_orchestrator.main import app
+from cactus_orchestrator.api.run import finalise_run, is_all_criteria_met
+from cactus_orchestrator.k8s.resource import generate_static_test_stack_id
 from cactus_orchestrator.model import Run, RunArtifact, RunGroup, RunStatus, User
 from cactus_orchestrator.schema import (
     InitRunRequest,
     InitRunResponse,
+    RunGroupRequest,
+    RunGroupResponse,
     RunResponse,
     StartRunResponse,
-    TestProcedureResponse,
-    TestProcedureRunSummaryResponse,
-    UserConfigurationRequest,
-    UserConfigurationResponse,
 )
-from cactus_orchestrator.settings import CactusOrchestratorException
 
 
 @dataclass
@@ -522,7 +509,7 @@ async def test_start_run(
 
 @pytest.mark.parametrize(
     "run_group_id, finalised, expected_run_ids",
-    [(1, None, [7, 4, 3, 2, 1]), (1, True, [7, 4, 3, 2]), (1, False, [1]), (2, None, [5]), (3, None, None)],
+    [(1, None, [8, 7, 4, 3, 2, 1]), (1, True, [7, 4, 3, 2]), (1, False, [8, 1]), (2, None, [5]), (3, None, None)],
 )
 @pytest.mark.asyncio
 async def test_get_group_runs_paginated(
@@ -797,3 +784,97 @@ async def test_finalise_run_and_teardown_teststack_success(client, pg_base_confi
         assert run.run_status == RunStatus.finalised_by_client
         assert run.all_criteria_met is True
         assert run.run_artifact.file_data == finalize_data
+
+
+@pytest.mark.parametrize(
+    "run_id, expected_status",
+    [
+        (1, HTTPStatus.OK),
+        (5, HTTPStatus.OK),
+        (8, HTTPStatus.OK),
+        (2, HTTPStatus.GONE),
+        (6, HTTPStatus.NOT_FOUND),
+        (99, HTTPStatus.NOT_FOUND),
+    ],
+)
+async def test_get_run_status(k8s_mock, client, pg_base_config, valid_jwt_user1, run_id, expected_status):
+    """Does fetching the run status work under success conditions"""
+
+    # Act
+    status_response_data = generate_class_instance(RunnerStatus, generate_relationships=True, step_status={})
+    k8s_mock.status.return_value = status_response_data
+
+    res = await client.get(f"run/{run_id}/status", headers={"Authorization": f"Bearer {valid_jwt_user1}"})
+
+    # Assert
+    assert res.status_code == expected_status
+    if expected_status == HTTPStatus.OK:
+        actual_status = RunnerStatus.from_dict(res.json())
+        assert actual_status == status_response_data
+        k8s_mock.status.assert_called_once()
+    else:
+        k8s_mock.status.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_groups_paginated(client, pg_base_config, valid_jwt_user1):
+    """Can run groups be fetched for a specific user"""
+
+    # Act
+    res = await client.get("/run_group", headers={"Authorization": f"Bearer {valid_jwt_user1}"})
+
+    # Assert
+    assert res.status_code == HTTPStatus.OK
+    data = res.json()
+    assert isinstance(data, dict)
+    assert "items" in data
+    items = [RunGroupResponse.model_validate(i) for i in data["items"]]
+
+    assert [1, 2] == [i.run_group_id for i in items]
+    assert items[0].csip_aus_version == "v1.2"
+    assert items[1].csip_aus_version == "v1.3-beta/storage"
+    assert items[0].name == "name-1"
+    assert items[1].name == "name-2"
+
+
+@pytest.mark.parametrize(
+    "version, expected_status",
+    [
+        (CSIPAusVersion.RELEASE_1_2.value, HTTPStatus.CREATED),
+        (CSIPAusVersion.BETA_1_3_STORAGE.value, HTTPStatus.CREATED),
+        ("v99.88", HTTPStatus.BAD_REQUEST),
+    ],
+)
+@pytest.mark.asyncio
+async def test_create_group(client, pg_base_config, valid_jwt_user1, version, expected_status):
+    """Can run groups be created for a specific user"""
+
+    # Act
+
+    body = RunGroupRequest(csip_aus_version=version)
+
+    response = await client.post(
+        "/run_group", headers={"Authorization": f"Bearer {valid_jwt_user1}"}, content=body.model_dump_json()
+    )
+
+    # Assert
+    assert response.status_code == expected_status
+    if expected_status == HTTPStatus.CREATED:
+        result = RunGroupResponse.model_validate_json(response.text)
+        assert result.name, "Should be set to something"
+        assert result.run_group_id > 0
+        assert result.csip_aus_version == version
+        assert_nowish(result.created_at)
+
+        async with generate_async_session(pg_base_config) as session:
+            run_group = (
+                await session.execute(select(RunGroup).where(RunGroup.run_group_id == result.run_group_id))
+            ).scalar_one()
+
+            assert run_group.name == result.name
+            assert run_group.csip_aus_version == result.csip_aus_version
+            assert run_group.created_at == result.created_at
+    else:
+        async with generate_async_session(pg_base_config) as session:
+            run_group_count = (await session.execute(select(func.count()).select_from(RunGroup))).scalar_one()
+            assert run_group_count == 3, "Nothing should be created"

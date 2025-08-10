@@ -1,19 +1,7 @@
 from datetime import datetime
 from enum import IntEnum, auto
 
-from sqlalchemy import (
-    BOOLEAN,
-    DateTime,
-    ForeignKey,
-    Index,
-    Integer,
-    LargeBinary,
-    String,
-    UniqueConstraint,
-    asc,
-    desc,
-    func,
-)
+from sqlalchemy import BOOLEAN, DateTime, ForeignKey, Index, Integer, LargeBinary, String, UniqueConstraint, desc, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 

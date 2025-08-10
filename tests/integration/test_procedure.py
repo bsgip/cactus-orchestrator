@@ -100,6 +100,7 @@ async def test_get_test_procedures_by_id(client, valid_jwt_user1, run_id, status
                 (TestProcedureId.ALL_02, 1),
                 (TestProcedureId.ALL_03, 1),
                 (TestProcedureId.ALL_04, 1),
+                (TestProcedureId.ALL_05, 1),
             ],
         ),
         (

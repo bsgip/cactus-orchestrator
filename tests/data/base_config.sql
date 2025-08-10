@@ -21,4 +21,5 @@ VALUES
 (1, 'teststack4', 'ALL-03', '2024-01-02T00:04:00Z', 5, FALSE), -- run_id 4
 (2, 'teststack5', 'ALL-01', NULL, 2, NULL), -- run_id 5
 (3, 'teststack6', 'GEN-02', NULL, 1, NULL), -- run_id 6
-(1, 'teststack7', 'ALL-04', '2024-01-02T00:07:00Z', 3, FALSE); -- run_id 7
+(1, 'teststack7', 'ALL-04', '2024-01-02T00:07:00Z', 3, FALSE), -- run_id 7
+(1, 'teststack8', 'ALL-05', NULL, 2, NULL); -- run_id 8
