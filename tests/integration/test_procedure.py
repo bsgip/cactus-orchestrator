@@ -1,46 +1,9 @@
-import os
-from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
-from http import HTTPMethod, HTTPStatus
-from itertools import product
-from typing import Generator
-from unittest.mock import AsyncMock, Mock, call, patch
+from http import HTTPStatus
 
 import pytest
-from assertical.asserts.time import assert_nowish
-from assertical.fake.generator import generate_class_instance
-from assertical.fake.sqlalchemy import assert_mock_session, create_mock_session
-from assertical.fixtures.postgres import generate_async_session
-from cactus_runner.client import RunnerClientException
-from cactus_runner.models import CriteriaEntry, RequestEntry, RunnerStatus
 from cactus_test_definitions import CSIPAusVersion, TestProcedureId
-from cryptography import x509
-from cryptography.hazmat.primitives import serialization
-from fastapi import HTTPException
-from fastapi.testclient import TestClient
-from fastapi_pagination import Params, set_params
-from sqlalchemy import select, update
-from sqlalchemy.exc import NoResultFound
-from sqlalchemy.orm import undefer
 
-from cactus_orchestrator.api.certificate import CertificateRouteType, _ca_crt_cachekey, update_ca_certificate_cache
-from cactus_orchestrator.api.run import ensure_certificate_valid, finalise_run, is_all_criteria_met, teardown_teststack
-from cactus_orchestrator.cache import AsyncCache, ExpiringValue
-from cactus_orchestrator.crud import ProcedureRunAggregated
-from cactus_orchestrator.k8s.resource import generate_envoy_dcap_uri, generate_static_test_stack_id
-from cactus_orchestrator.main import app
-from cactus_orchestrator.model import Run, RunArtifact, RunGroup, RunStatus, User
-from cactus_orchestrator.schema import (
-    InitRunRequest,
-    InitRunResponse,
-    RunResponse,
-    StartRunResponse,
-    TestProcedureResponse,
-    TestProcedureRunSummaryResponse,
-    UserConfigurationRequest,
-    UserConfigurationResponse,
-)
-from cactus_orchestrator.settings import CactusOrchestratorException
+from cactus_orchestrator.schema import TestProcedureRunSummaryResponse
 
 
 @pytest.mark.asyncio

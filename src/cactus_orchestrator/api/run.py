@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from http import HTTPStatus
 from typing import Annotated
 
@@ -199,7 +199,7 @@ async def get_group_runs_paginated(
     run_group_id: int,
     user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_scopes({AuthScopes.user_all}))],
     finalised: bool | None = Query(default=None),
-    created_after: datetime = Query(default=datetime.now(tz=timezone.utc) - timedelta(days=7)),
+    created_after: datetime = Query(default=None),
 ) -> Page[RunResponse]:
     # check permissions
     await select_user_run_group_or_raise(db.session, user_context, run_group_id)

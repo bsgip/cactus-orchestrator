@@ -1,17 +1,44 @@
 import asyncio
+from dataclasses import dataclass
 from datetime import datetime, timezone
+from typing import Generator
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
-from assertical.fake.generator import generate_class_instance
+from assertical.asserts.time import assert_nowish
 from assertical.fixtures.postgres import generate_async_session
-from fastapi.testclient import TestClient
-from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession
+from cactus_runner.client import ClientInteraction
+from cactus_runner.models import ClientInteractionType
+from sqlalchemy import select
 
-from cactus_orchestrator.k8s.resource import RunResourceNames
 from cactus_orchestrator.model import Run, RunStatus
-from cactus_orchestrator.tasks import generate_idleteardowntask, teardown_idle_teststack
+from cactus_orchestrator.tasks import generate_idleteardowntask
+
+
+@dataclass
+class MockedK8s:
+    delete_service: Mock
+    delete_statefulset: Mock
+    remove_ingress_rule: Mock
+
+    # RunnerClient
+    last_interaction: Mock
+
+
+@pytest.fixture
+def k8s_mock() -> Generator[MockedK8s, None, None]:
+    with (
+        patch("cactus_orchestrator.api.run.delete_service") as delete_service,
+        patch("cactus_orchestrator.api.run.delete_statefulset") as delete_statefulset,
+        patch("cactus_orchestrator.api.run.remove_ingress_rule") as remove_ingress_rule,
+        patch("cactus_orchestrator.api.run.RunnerClient.last_interaction") as last_interaction,
+    ):
+        yield MockedK8s(
+            delete_service=delete_service,
+            delete_statefulset=delete_statefulset,
+            remove_ingress_rule=remove_ingress_rule,
+            last_interaction=last_interaction,
+        )
 
 
 @pytest.mark.asyncio
@@ -42,7 +69,7 @@ async def test_teardown_teststack_task(
     mock_runs = [
         Run(
             run_id=1,
-            user_id=1,
+            run_group_id=1,
             teststack_id="abc",
             testprocedure_id="ALL_01",
             created_at=created_at,
@@ -65,79 +92,32 @@ async def test_teardown_teststack_task(
         mock_finalise_run.assert_not_awaited()
 
 
-@pytest.mark.idleteardowntask_enable(10)
-@pytest.mark.with_test_db
-@pytest.mark.asyncio
-@patch("cactus_orchestrator.tasks.teardown_idle_teststack")
-async def test_idleteardowntask_valid_session(mock_teardown_idle_teststack, new_app):
-    """Ensure valid DB session generated in task."""
-
-    # Act
-    with TestClient(new_app) as _:
-
-        # Assert
-        assert mock_teardown_idle_teststack.call_count >= 1
-        args, _ = mock_teardown_idle_teststack.call_args
-        assert isinstance(args[0], AsyncSession)
-        assert args[0].bind is not None
-
-
 @pytest.mark.idleteardowntask_enable(1)
 @pytest.mark.asyncio
-@patch("cactus_orchestrator.tasks.teardown_idle_teststack")
-async def test_idleteardowntask_multiple_triggers(mock_teardown_idle_teststack, new_app):
-    """Ensure valid DB session generated in task."""
-
-    # Act
-    with TestClient(new_app) as _:
-        await asyncio.sleep(3)
-
-    # Assert
-    assert mock_teardown_idle_teststack.call_count >= 2
-
-
-@pytest.mark.with_test_db
-@pytest.mark.asyncio
-@patch.multiple(
-    "cactus_orchestrator.tasks",
-    get_resource_names=Mock(),
-    is_idle=AsyncMock(),
-    is_maxlive_overtime=Mock(),
-    finalise_run=AsyncMock(),
-    teardown_teststack=AsyncMock(),
-)
-async def test_teardown_idle_teststack(pg_empty_conn, new_app):
+async def test_teardown_idle_teststack(k8s_mock, pg_base_config, client):
     """Ensure background task triggers actions, with DB unmocked."""
-    # Arrange
-    from cactus_orchestrator.tasks import finalise_run, get_resource_names, is_idle, teardown_teststack
 
-    pg_empty_conn.execute(
-        text(
-            """
-            INSERT INTO user_ (subject_id, issuer_id, aggregator_certificate_p12_bundle,
-            aggregator_certificate_x509_der, device_certificate_p12_bundle, device_certificate_x509_der)
-            VALUES ('user1', 'issuer1', E'\\x', E'\\x', E'\\x', E'\\x');
-            """
+    # In the test DB runs 1,5,6 and 8 are all from "2024" and due for max life teardown
+    expected_finalised_run_ids = [1, 5, 6, 8]
+
+    # Even if they are still active - still shut them down
+    k8s_mock.last_interaction.return_value = ClientInteraction(ClientInteractionType.PROXIED_REQUEST, datetime.now())
+
+    # Let the background task run
+    await asyncio.sleep(3)
+
+    # check the DB
+    async with generate_async_session(pg_base_config) as session:
+        finalised_runs = (
+            (await session.execute(select(Run).where(Run.run_id.in_(expected_finalised_run_ids)))).scalars().all()
         )
-    )
-    # expecting maxlive_overtime=True
-    pg_empty_conn.execute(
-        text(
-            f"""
-            INSERT INTO run (user_id, teststack_id, testprocedure_id, run_status, created_at)
-            VALUES (1, 'teststack1', 'testproc1', {RunStatus.initialised.value}, '2000-01-01T00:00:00Z')
-            """
-        )
-    )
-    pg_empty_conn.commit()
+        for r in finalised_runs:
+            assert r.run_status == RunStatus.finalised_by_timeout
+            assert_nowish(r.finalised_at)
 
-    is_idle.return_value = False
-    get_resource_names.return_value = generate_class_instance(RunResourceNames)
-
-    # Act
-    async with generate_async_session(pg_empty_conn.connection) as session:
-        await teardown_idle_teststack(session, 1, 1)
-
-    # Assert
-    teardown_teststack.assert_called_once()
-    finalise_run.assert_called_once()
+    # Check we cleared up k8's
+    Mock.call_count
+    assert k8s_mock.last_interaction.call_count == len(expected_finalised_run_ids)
+    assert k8s_mock.delete_service.call_count == len(expected_finalised_run_ids)
+    assert k8s_mock.delete_statefulset.call_count == len(expected_finalised_run_ids)
+    assert k8s_mock.remove_ingress_rule.call_count == len(expected_finalised_run_ids)

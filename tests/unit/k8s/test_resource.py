@@ -1,9 +1,7 @@
 """TODO: Migrate to modern asyncio-compatible + typed kubernetes library"""
 
 import re
-import unittest.mock as mock
 from unittest.mock import patch
-from urllib.parse import urlparse
 
 import pytest
 from assertical.fake.generator import generate_class_instance
@@ -20,11 +18,7 @@ from cactus_orchestrator.k8s.resource import (
 from cactus_orchestrator.k8s.resource.create import add_ingress_rule, clone_service, clone_statefulset, wait_for_pod
 from cactus_orchestrator.k8s.resource.delete import delete_service, delete_statefulset, remove_ingress_rule
 from cactus_orchestrator.model import User
-from cactus_orchestrator.settings import (
-    DEFAULT_INGRESS_PATH_FORMAT,
-    CactusOrchestratorException,
-    CactusOrchestratorSettings,
-)
+from cactus_orchestrator.settings import DEFAULT_INGRESS_PATH_FORMAT, CactusOrchestratorException
 
 
 @pytest.mark.asyncio
@@ -165,6 +159,7 @@ async def test_delete_statefulset(mock_v1_app_api, mock_thread_cls):
 @patch("cactus_orchestrator.k8s.resource.delete.v1_net_api")
 async def test_remove_ingress_rule(mock_v1_net_api, generate_k8s_class_instance, mock_thread_cls):
     """Test removing an ingress rule from Kubernetes."""
+
     # Arrange
     mock_ingress = generate_k8s_class_instance(client.V1Ingress)
     mock_ingress.spec.rules = [
@@ -182,7 +177,7 @@ async def test_remove_ingress_rule(mock_v1_net_api, generate_k8s_class_instance,
             ),
         )
     ]
-    run_resource_names = generate_class_instance(RunResourceNames, seed=202)
+    run_resource_names = generate_class_instance(RunResourceNames, seed=202, service="remove-me")
 
     mock_v1_net_api.read_namespaced_ingress.return_value = mock_thread_cls(mock_ingress)
     mock_v1_net_api.patch_namespaced_ingress.return_value = mock_thread_cls(None)
@@ -243,31 +238,16 @@ def test_generate_dynamic_test_stack_id():
     assert len(set([id1, id2, id3])) == 3, "All values must be unique"
 
 
-@mock.patch("cactus_orchestrator.k8s.run_id.get_current_settings")
-def test_generate_envoy_dcap_uri(mock_get_current_settings: mock.MagicMock):
+def test_generate_envoy_dcap_uri():
 
     # Arrange
-    service_name = "my-svc-name"
-    fqdn = "my.host.name"
-    test_stack_id = "abc123-my-id"
-    mock_get_current_settings.return_value = generate_class_instance(
-        CactusOrchestratorSettings,
-        template_service_name=service_name,
-        test_execution_fqdn=fqdn,
-        orchestrator_database_url="",
-    )
+    run_resource_names = generate_class_instance(RunResourceNames)
 
     # Act
-    uri = generate_envoy_dcap_uri(test_stack_id)
+    uri = generate_envoy_dcap_uri(run_resource_names)
 
     # Assert
-    result = urlparse(uri)
-    assert result.hostname == f"{fqdn}"
-    assert result.path.endswith("/dcap")
-    assert "//" not in result.path
-    assert service_name in result.path
-    assert test_stack_id in result.path
-    assert not result.query
+    assert uri.startswith(run_resource_names.envoy_base_url)
 
 
 @pytest.mark.parametrize(

@@ -131,23 +131,18 @@ def test_get_resource_names(mock_get_current_settings):
     mock_get_current_settings.return_value = mock_settings
 
     uuid = "abc123"
-    version = "v-456"
-    names = get_resource_names(uuid, version)
+    names = get_resource_names(uuid)
     assert isinstance(names, RunResourceNames)
 
     all_name_values = list(names.__dict__.values())
     assert len(all_name_values) == len(set(all_name_values)), "All names should be unique"
 
     assert names.namespace == "test-ns"
-    assert uuid in names.service and version in names.service and names.service.startswith("template-service-")
-    assert (
-        uuid in names.stateful_set
-        and version in names.stateful_set
-        and names.stateful_set.startswith("template-statefulset-")
-    )
-    assert uuid in names.app_label and version in names.app_label and names.app_label.startswith("template-app-")
-    assert uuid in names.pod and version in names.pod
-    assert uuid in names.pod_fqdn and version in names.pod_fqdn
+    assert uuid in names.service and names.service.startswith("template-service-")
+    assert uuid in names.stateful_set and names.stateful_set.startswith("template-statefulset-")
+    assert uuid in names.app_label and names.app_label.startswith("template-app-")
+    assert uuid in names.pod
+    assert uuid in names.pod_fqdn
 
     # Some rudimentary checks on a hostname
     assert names.pod_fqdn.lower() == names.pod_fqdn
@@ -155,6 +150,5 @@ def test_get_resource_names(mock_get_current_settings):
     assert ":" not in names.pod_fqdn
 
     # Should vary based on inputs
-    assert names == get_resource_names(uuid, version), "Same inputs - same output"
-    assert names != get_resource_names(uuid + "a", version)
-    assert names != get_resource_names(uuid, version + "a")
+    assert names == get_resource_names(uuid), "Same inputs - same output"
+    assert names != get_resource_names(uuid + "a")
