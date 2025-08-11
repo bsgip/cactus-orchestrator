@@ -183,6 +183,8 @@ async def update_run_with_runartifact_and_finalise(
 
 
 async def select_user_run(session: AsyncSession, user_id: int, run_id: int) -> Run:
+    """fetches a run_id but scoped to a specific user. If the Run DNE / doesn't belong to user_id - this will
+    raise a NoResultFound exception"""
     stmt = (
         select(Run)
         .join(RunGroup)

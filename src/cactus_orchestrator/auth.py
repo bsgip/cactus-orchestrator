@@ -52,7 +52,7 @@ class JWTValidator:
     def _reload_settings(self) -> None:
         """Not threadsafe / designed for normal - designed for tests to reload the settings. We will need to rework
         the depends/auth to support proper dependency injection to remove this cruft"""
-        self._settings = JWTAuthSettings()  # type: ignore
+        self._settings = JWTAuthSettings()  # type: ignore  [call-arg]
 
     async def _update_rsa_jwk_cache(self, _: Any) -> dict[str, ExpiringValue[str]]:
         """Fetchs a single JWK (RSA public key only) from the auth server.
