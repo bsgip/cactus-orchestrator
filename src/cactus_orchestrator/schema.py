@@ -52,6 +52,7 @@ class RunGroupResponse(BaseModel):
     name: str
     csip_aus_version: str
     created_at: datetime
+    total_runs: int  # How many runs live underneath this group
 
 
 class UserContext(BaseModel):

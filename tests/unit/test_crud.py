@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 
 import pytest
 from assertical.asserts.time import assert_nowish
-from assertical.asserts.type import assert_list_type
+from assertical.asserts.type import assert_dict_type, assert_list_type
 from assertical.fixtures.postgres import generate_async_session
 from cactus_test_definitions import CSIPAusVersion
 from cactus_test_definitions.test_procedures import TestProcedureId
@@ -18,6 +18,7 @@ from cactus_orchestrator.crud import (
     select_group_runs_aggregated_by_procedure,
     select_group_runs_for_procedure,
     select_nonfinalised_runs,
+    select_run_group_counts_for_user,
     select_run_group_for_user,
     select_run_groups_for_user,
     select_runs_for_group,
@@ -140,6 +141,17 @@ async def test_insert_run_group(pg_base_config):
     async with generate_async_session(pg_base_config) as s:
         run_group_count = (await s.execute(select(func.count()).select_from(RunGroup))).scalar_one()
         assert run_group_count == 5, "We added two to the existing three run groups"
+
+
+@pytest.mark.parametrize(
+    "run_group_ids, expected", [([1, 2], {1: 6, 2: 1}), ([1, 2, 3], {1: 6, 2: 1, 3: 1}), ([], {}), ([1, 99], {1: 6})]
+)
+@pytest.mark.asyncio
+async def test_select_run_group_counts_for_user(pg_base_config, run_group_ids, expected):
+    async with generate_async_session(pg_base_config) as session:
+        result = await select_run_group_counts_for_user(session, run_group_ids)
+        assert result == expected
+        assert_dict_type(int, int, result, len(expected))
 
 
 @pytest.mark.asyncio

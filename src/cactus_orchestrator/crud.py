@@ -3,12 +3,19 @@ from datetime import datetime
 from typing import Sequence
 
 from cactus_test_definitions.test_procedures import CSIPAusVersion, TestProcedureId
-from sqlalchemy import and_, func, select, update
+from sqlalchemy import and_, delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload, selectinload, undefer
 
 from cactus_orchestrator.model import Run, RunArtifact, RunGroup, RunStatus, User
 from cactus_orchestrator.schema import UserContext
+
+ACTIVE_RUN_STATUSES: set[RunStatus] = {RunStatus.provisioning, RunStatus.started, RunStatus.initialised}
+FINALISED_RUN_STATUSES: set[RunStatus] = {
+    RunStatus.finalised_by_client,
+    RunStatus.finalised_by_timeout,
+    RunStatus.terminated,
+}
 
 
 async def insert_run_group(session: AsyncSession, user_id: int, csip_aus_version: str) -> RunGroup:
@@ -95,11 +102,27 @@ async def select_run_groups_for_user(session: AsyncSession, user_id: int) -> Seq
     return resp.scalars().all()
 
 
+async def select_run_group_counts_for_user(session: AsyncSession, run_group_ids: list[int]) -> dict[int, int]:
+    """Returns a dictionary of run counts, keyed by run group id for all RunGroups owned by user_id."""
+    resp = await session.execute(
+        select(Run.run_group_id, func.count()).group_by(Run.run_group_id).where(Run.run_group_id.in_(run_group_ids))
+    )
+    return dict(resp.tuples().all())
+
+
 async def select_run_group_for_user(session: AsyncSession, user_id: int, run_group_id: int) -> RunGroup | None:
     resp = await session.execute(
         select(RunGroup).where(((RunGroup.user_id == user_id) & (RunGroup.run_group_id == run_group_id))).limit(1)
     )
     return resp.scalar_one_or_none()
+
+
+async def delete_runs(session: AsyncSession, runs: Sequence[Run]) -> None:
+    run_artifact_ids = [r.run_artifact_id for r in runs if r.run_artifact_id is not None]
+    for run in runs:
+        await session.delete(run)
+    if run_artifact_ids:
+        await session.execute(delete(RunArtifact).where(RunArtifact.run_artifact_id.in_(run_artifact_ids)))
 
 
 async def select_runs_for_group(
@@ -112,15 +135,9 @@ async def select_runs_for_group(
         filters.append(Run.created_at >= created_at_gte)
 
     if finalised is True:
-        filters.append(
-            Run.run_status.in_(
-                (RunStatus.finalised_by_client.value, RunStatus.finalised_by_timeout.value, RunStatus.terminated.value)
-            )
-        )
+        filters.append(Run.run_status.in_(FINALISED_RUN_STATUSES))
     elif finalised is False:
-        filters.append(
-            Run.run_status.in_((RunStatus.initialised.value, RunStatus.started.value, RunStatus.provisioning.value))
-        )
+        filters.append(Run.run_status.in_(ACTIVE_RUN_STATUSES))
 
     if filters:
         stmt = stmt.where(and_(*filters))
@@ -138,7 +155,7 @@ async def select_active_runs_for_user(session: AsyncSession, user_id: int) -> Se
         select(Run)
         .join(RunGroup)
         .where(RunGroup.user_id == user_id)
-        .where(Run.run_status.in_((RunStatus.initialised.value, RunStatus.started.value)))
+        .where(Run.run_status.in_(ACTIVE_RUN_STATUSES))
         .options(selectinload(Run.run_group))
         .order_by(Run.run_id.desc())
     )
@@ -148,7 +165,7 @@ async def select_active_runs_for_user(session: AsyncSession, user_id: int) -> Se
 
 
 async def select_nonfinalised_runs(session: AsyncSession) -> Sequence[Run]:
-    stmt = select(Run).where(Run.run_status.in_((RunStatus.started.value, RunStatus.initialised.value)))
+    stmt = select(Run).where(Run.run_status.in_(ACTIVE_RUN_STATUSES))
     resp = await session.execute(stmt)
     return resp.scalars().all()
 

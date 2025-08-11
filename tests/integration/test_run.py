@@ -836,6 +836,8 @@ async def test_get_groups_paginated(client, pg_base_config, valid_jwt_user1):
     assert items[1].csip_aus_version == "v1.3-beta/storage"
     assert items[0].name == "name-1"
     assert items[1].name == "name-2"
+    assert items[0].total_runs == 6
+    assert items[1].total_runs == 1
 
 
 @pytest.mark.parametrize(
@@ -915,3 +917,78 @@ async def test_create_group(client, pg_base_config, valid_jwt_user1, version, ex
         async with generate_async_session(pg_base_config) as session:
             run_group_count = (await session.execute(select(func.count()).select_from(RunGroup))).scalar_one()
             assert run_group_count == 3, "Nothing should be created"
+
+
+@pytest.mark.parametrize(
+    "run_group_id, expected_status, expected_run_ids, expected_teardown_run_ids, expected_run_artifact_ids",
+    [
+        (1, HTTPStatus.NO_CONTENT, [1, 2, 3, 4, 7, 8], [1, 8], [1, 2]),
+        (2, HTTPStatus.NO_CONTENT, [5], [5], [3]),
+        (3, HTTPStatus.FORBIDDEN, [], [], []),
+        (99, HTTPStatus.FORBIDDEN, [], [], []),
+    ],
+)
+@pytest.mark.asyncio
+async def test_delete_group(
+    client,
+    pg_base_config,
+    valid_jwt_user1,
+    k8s_mock: MockedK8s,
+    run_group_id: int,
+    expected_status: HTTPStatus,
+    expected_run_ids: list[int],
+    expected_teardown_run_ids: list[int],
+    expected_run_artifact_ids: list[int],
+):
+    """Can run groups be deleted for a specific user"""
+
+    # Act
+    async with generate_async_session(pg_base_config) as session:
+        before_run_group_count = (await session.execute(select(func.count()).select_from(RunGroup))).scalar_one()
+        before_run_count = (await session.execute(select(func.count()).select_from(Run))).scalar_one()
+        before_artifact_count = (await session.execute(select(func.count()).select_from(RunArtifact))).scalar_one()
+
+    response = await client.delete(f"/run_group/{run_group_id}", headers={"Authorization": f"Bearer {valid_jwt_user1}"})
+
+    # Assert
+    assert response.status_code == expected_status
+    async with generate_async_session(pg_base_config) as session:
+        after_run_group_count = (await session.execute(select(func.count()).select_from(RunGroup))).scalar_one()
+        after_run_count = (await session.execute(select(func.count()).select_from(Run))).scalar_one()
+        after_artifact_count = (await session.execute(select(func.count()).select_from(RunArtifact))).scalar_one()
+        remaining_run_ids = (
+            (await session.execute(select(Run.run_id).where(Run.run_id.in_(expected_run_ids)))).scalars().all()
+        )
+        remaining_artifact_ids = (
+            (
+                await session.execute(
+                    select(RunArtifact.run_artifact_id).where(
+                        RunArtifact.run_artifact_id.in_(expected_run_artifact_ids)
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+    if expected_status >= 200 and expected_status < 300:
+        assert after_run_count == before_run_count - len(expected_run_ids)
+        assert after_run_group_count == before_run_group_count - 1
+        assert after_artifact_count == before_artifact_count - len(expected_run_artifact_ids)
+        assert remaining_run_ids == []
+        assert remaining_artifact_ids == []
+
+        # Ensure any active runs are properly deallocated
+        assert k8s_mock.delete_service.call_count == len(expected_teardown_run_ids)
+        assert k8s_mock.delete_statefulset.call_count == len(expected_teardown_run_ids)
+        assert k8s_mock.remove_ingress_rule.call_count == len(expected_teardown_run_ids)
+
+    else:
+        assert after_run_count == before_run_count
+        assert after_run_group_count == after_run_group_count
+        assert remaining_run_ids == expected_run_ids
+        assert remaining_artifact_ids == expected_run_artifact_ids
+
+        k8s_mock.delete_service.assert_not_called()
+        k8s_mock.delete_statefulset.assert_not_called()
+        k8s_mock.remove_ingress_rule.assert_not_called()
