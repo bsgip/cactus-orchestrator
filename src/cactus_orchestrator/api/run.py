@@ -45,6 +45,7 @@ from cactus_orchestrator.schema import (
     InitRunResponse,
     RunGroupRequest,
     RunGroupResponse,
+    RunGroupUpdateRequest,
     RunResponse,
     RunStatusResponse,
     StartRunResponse,
@@ -190,6 +191,24 @@ async def create_group(
 
     # get runs
     run_group = await insert_run_group(db.session, user.user_id, csip_aus_version.value)
+    await db.session.commit()
+    return map_group_to_group_response(run_group)
+
+
+@router.put("/run_group/{run_group_id}", status_code=HTTPStatus.OK)
+async def update_group(
+    run_group_id: int,
+    group_request: RunGroupUpdateRequest,
+    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_scopes({AuthScopes.user_all}))],
+) -> RunGroupResponse:
+
+    # get user
+    _, run_group = await select_user_run_group_or_raise(db.session, user_context, run_group_id)
+
+    if group_request.name:
+        run_group.name = group_request.name
+
+    # get runs
     await db.session.commit()
     return map_group_to_group_response(run_group)
 

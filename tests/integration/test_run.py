@@ -25,6 +25,7 @@ from cactus_orchestrator.schema import (
     InitRunResponse,
     RunGroupRequest,
     RunGroupResponse,
+    RunGroupUpdateRequest,
     RunResponse,
     StartRunResponse,
 )
@@ -835,6 +836,42 @@ async def test_get_groups_paginated(client, pg_base_config, valid_jwt_user1):
     assert items[1].csip_aus_version == "v1.3-beta/storage"
     assert items[0].name == "name-1"
     assert items[1].name == "name-2"
+
+
+@pytest.mark.parametrize(
+    "run_group_id, name, expected_status, expected_name",
+    [
+        (1, "The updated name", HTTPStatus.OK, "The updated name"),
+        (1, None, HTTPStatus.OK, "name-1"),
+        (1, "", HTTPStatus.OK, "name-1"),
+        (2, "New-Name#?%$}{[]}", HTTPStatus.OK, "New-Name#?%$}{[]}"),
+        (3, "Wrong User", HTTPStatus.FORBIDDEN, "name-3"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_update_group(
+    client, pg_base_config, valid_jwt_user1, run_group_id, name, expected_status, expected_name
+):
+    """Can groups be updated for a specific user"""
+
+    # Act
+    body = RunGroupUpdateRequest(name=name)
+    response = await client.put(
+        f"/run_group/{run_group_id}",
+        headers={"Authorization": f"Bearer {valid_jwt_user1}"},
+        content=body.model_dump_json(),
+    )
+
+    # Assert
+    assert response.status_code == expected_status
+    async with generate_async_session(pg_base_config) as session:
+        run_group = (await session.execute(select(RunGroup).where(RunGroup.run_group_id == run_group_id))).scalar_one()
+        assert run_group.name == expected_name
+
+    if expected_status == HTTPStatus.OK:
+        response_data = RunGroupResponse.model_validate_json(response.text)
+        assert response_data.run_group_id == run_group_id
+        assert response_data.name == expected_name
 
 
 @pytest.mark.parametrize(

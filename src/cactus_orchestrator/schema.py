@@ -39,6 +39,14 @@ class RunGroupRequest(BaseModel):
     csip_aus_version: str
 
 
+class RunGroupUpdateRequest(BaseModel):
+    """NOTE - this is explicitly NOT allowing updates on csip-aus version - it has too many weird considerations and
+    realistically, a user should just create a new group if they want to test against a new version (there is no
+    practical need to allow migrating legacy version test runs to a newer version)"""
+
+    name: str | None  # If non null - update the RunGroup receiving this request
+
+
 class RunGroupResponse(BaseModel):
     run_group_id: int
     name: str
