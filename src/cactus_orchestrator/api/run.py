@@ -244,7 +244,19 @@ async def start_run(
         base_url=RUNNER_POD_URL.format(pod_fqdn=pod_fqdn, pod_port=POD_HARNESS_RUNNER_MANAGEMENT_PORT),
         timeout=ClientTimeout(30),
     ) as s:
-        await RunnerClient.start(s)
+        try:
+            await RunnerClient.start(s)
+        except RunnerClientException as exc:
+            if exc.http_status_code == HTTPStatus.PRECONDITION_FAILED:
+                logger.info(exc)
+                raise HTTPException(
+                    HTTPStatus.PRECONDITION_FAILED, "One or more preconditions are incomplete or invalid."
+                )  # Runner uses 412 to indicate unmet app-level preconditions (i.e. init phase steps not completed),
+            # we 'proxy' this through.
+
+            # raising server error as default
+            logger.error(exc)
+            raise HTTPException(HTTPStatus.INTERNAL_SERVER_ERROR)
 
     # update status
     await update_run_run_status(session=db.session, run_id=run.run_id, run_status=RunStatus.started)
