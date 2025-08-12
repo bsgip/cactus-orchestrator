@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 import pytest
 from assertical.fake.generator import generate_class_instance
+from cactus_test_definitions import CSIPAusVersion
 from kubernetes import client
 
 from cactus_orchestrator.k8s.resource import (
@@ -257,6 +258,8 @@ def test_generate_envoy_dcap_uri():
         ("abc123DEF", "abc123def"),
         ("ab/c-123-DE/F", "ab-c-123-de-f"),
         ("lot's of .!@#$%^&*()[]}{. chars)", "lot-s-of-.--------------.-chars-"),
+        (CSIPAusVersion.RELEASE_1_2.value, "v1.2"),
+        (CSIPAusVersion.BETA_1_3_STORAGE.value, "v1.3-beta-storage"),
     ],
 )
 def test_csip_aus_version_to_k8s_id(input: str, expected: str):

@@ -39,13 +39,14 @@ def upgrade() -> None:
     # match the current user id)
     op.execute(
         """INSERT INTO run_group (id, user_id, name, csip_aus_version)
-           SELECT user_id as id, user_id, 'Default Group' as name, 'v1.2' as csip_aus_version from user;"""
+           SELECT id, id, 'Default Group', 'v1.2' from user_;"""
     )
-    op.execute("SELECT setval('run_group_id_seq',  nextval('user_id_seq'));")  # Roll the ID sequence forward
+    op.execute("SELECT setval('run_group_id_seq',  nextval('user__id_seq'));")  # Roll the ID sequence forward
 
     # The run_group_id column can now be copied direct from the user_id column (before we drop it)
-    op.add_column("run", sa.Column("run_group_id", sa.Integer(), nullable=False))
+    op.add_column("run", sa.Column("run_group_id", sa.Integer(), nullable=True))
     op.execute("UPDATE run SET run_group_id=user_id;")
+    op.alter_column("run", "run_group_id", nullable=False)
 
     op.drop_index(op.f("user_id_run_status_idx"), table_name="run")
     op.drop_index(op.f("user_id_testprocedure_id_run_id_idx"), table_name="run")
