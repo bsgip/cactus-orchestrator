@@ -3,16 +3,22 @@ from http import HTTPStatus
 from importlib import resources
 from typing import Annotated
 
-from cactus_test_definitions import TestProcedureConfig, TestProcedureId, TestProcedures
+from cactus_test_definitions import CSIPAusVersion, TestProcedureConfig, TestProcedureId, TestProcedures
 from fastapi import APIRouter, Depends, HTTPException, Response
 from fastapi_async_sqlalchemy import db
 from fastapi_pagination import Page, paginate
 from fastapi_pagination.utils import disable_installed_extensions_check
 
-from cactus_orchestrator.api.run import map_run_to_run_response, select_user_or_raise
+from cactus_orchestrator.api.run import map_run_to_run_response, select_user_run_group_or_raise
 from cactus_orchestrator.auth import AuthScopes, jwt_validator
-from cactus_orchestrator.crud import select_user_runs_aggregated_by_procedure, select_user_runs_for_procedure
-from cactus_orchestrator.schema import RunResponse, TestProcedureResponse, TestProcedureRunSummaryResponse, UserContext
+from cactus_orchestrator.crud import select_group_runs_aggregated_by_procedure, select_group_runs_for_procedure
+from cactus_orchestrator.schema import (
+    CSIPAusVersionResponse,
+    RunResponse,
+    TestProcedureResponse,
+    TestProcedureRunSummaryResponse,
+    UserContext,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -35,9 +41,21 @@ def map_from_definitions_to_responses(definitions: TestProcedures) -> list[TestP
     return responses
 
 
+def map_versions() -> list[CSIPAusVersionResponse]:
+    return [CSIPAusVersionResponse(version=v.value) for v in CSIPAusVersion]
+
+
 # Test procedures
 test_procedure_definitions = TestProcedureConfig.from_resource()
 test_procedure_responses = map_from_definitions_to_responses(test_procedure_definitions)
+version_responses = map_versions()
+
+
+@router.get("/version", status_code=HTTPStatus.OK)
+async def get_versions_list_paginated(
+    _: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_scopes({AuthScopes.user_all}))],
+) -> Page[CSIPAusVersionResponse]:
+    return paginate(version_responses)
 
 
 @router.get("/procedure", status_code=HTTPStatus.OK)
@@ -74,16 +92,17 @@ async def get_test_procedure_yaml(
     return Response(content=text, status_code=200, media_type="application/yaml")
 
 
-@router.get("/procedure_runs", status_code=HTTPStatus.OK)
-async def get_procedure_run_summaries(
+@router.get("/procedure_runs/{run_group_id}", status_code=HTTPStatus.OK)
+async def get_procedure_run_summaries_for_group(
     user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_scopes({AuthScopes.user_all}))],
+    run_group_id: int,
 ) -> list[TestProcedureRunSummaryResponse]:
-    # get user
-    user = await select_user_or_raise(db.session, user_context)
+    # Check permissions
+    await select_user_run_group_or_raise(db.session, user_context, run_group_id)
 
     # Enumerate our aggregated summaries from the DB and combine them with additional metadata from the YAML definitions
     results: list[TestProcedureRunSummaryResponse] = []
-    for agg in await select_user_runs_aggregated_by_procedure(db.session, user.user_id):
+    for agg in await select_group_runs_aggregated_by_procedure(db.session, run_group_id):
         definition = test_procedure_definitions.test_procedures.get(agg.test_procedure_id.value, None)
         if definition:
             results.append(
@@ -99,16 +118,17 @@ async def get_procedure_run_summaries(
     return results
 
 
-@router.get("/procedure_runs/{test_procedure_id}", status_code=HTTPStatus.OK)
-async def get_runs_for_procedure(
+@router.get("/procedure_runs/{run_group_id}/{test_procedure_id}", status_code=HTTPStatus.OK)
+async def get_runs_for_procedure_in_group(
     user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_scopes({AuthScopes.user_all}))],
+    run_group_id: int,
     test_procedure_id: str,
 ) -> Page[RunResponse]:
-    # get user
-    user = await select_user_or_raise(db.session, user_context)
+    # Check permissions
+    await select_user_run_group_or_raise(db.session, user_context, run_group_id)
 
     # Get runs
-    runs = await select_user_runs_for_procedure(db.session, user.user_id, test_procedure_id)
+    runs = await select_group_runs_for_procedure(db.session, run_group_id, test_procedure_id)
 
     if runs:
         resp = [map_run_to_run_response(run) for run in runs if run]

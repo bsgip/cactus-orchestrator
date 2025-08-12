@@ -35,11 +35,37 @@ class RunResponse(BaseModel):
     is_device_cert: bool  # Whether this run was initialised with the device cert or aggregator cert
 
 
+class RunGroupRequest(BaseModel):
+    csip_aus_version: str
+
+
+class RunGroupUpdateRequest(BaseModel):
+    """NOTE - this is explicitly NOT allowing updates on csip-aus version - it has too many weird considerations and
+    realistically, a user should just create a new group if they want to test against a new version (there is no
+    practical need to allow migrating legacy version test runs to a newer version)"""
+
+    name: str | None  # If non null - update the RunGroup receiving this request
+
+
+class RunGroupResponse(BaseModel):
+    run_group_id: int
+    name: str
+    csip_aus_version: str
+    created_at: datetime
+    total_runs: int  # How many runs live underneath this group
+
+
 class UserContext(BaseModel):
     """Model for validated user context"""
 
     subject_id: str
     issuer_id: str
+
+
+class CSIPAusVersionResponse(BaseModel):
+    """Represents the various CSIP-Aus versions available for testing"""
+
+    version: str  # Derived from the cactus_test_definitions.CSIPAusVersion enum
 
 
 class TestProcedureResponse(BaseModel):

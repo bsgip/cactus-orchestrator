@@ -16,7 +16,7 @@ from cactus_orchestrator.api.run import finalise_run, teardown_teststack
 from cactus_orchestrator.crud import select_nonfinalised_runs, update_run_run_status
 from cactus_orchestrator.k8s.resource import get_resource_names
 from cactus_orchestrator.model import RunStatus
-from cactus_orchestrator.settings import POD_HARNESS_RUNNER_MANAGEMENT_PORT, RUNNER_POD_URL, CactusOrchestratorSettings
+from cactus_orchestrator.settings import CactusOrchestratorSettings
 
 logger = logging.getLogger(__name__)
 
@@ -45,26 +45,27 @@ async def teardown_idle_teststack(
 
     for run in runs:
         now = datetime.now(timezone.utc)
-        svc_name, statefulset_name, _, _, pod_fqdn = get_resource_names(run.teststack_id)
-        pod_url = RUNNER_POD_URL.format(pod_fqdn=pod_fqdn, pod_port=POD_HARNESS_RUNNER_MANAGEMENT_PORT)
+        run_resource_names = get_resource_names(run.teststack_id)
 
         idle = False
         try:
-            idle = await is_idle(now, pod_url, teardowntask_idle_timeout_seconds)
+            idle = await is_idle(now, run_resource_names.runner_base_url, teardowntask_idle_timeout_seconds)
         except Exception as exc:
             logger.warning("Call to cactus-runner last request endpoint failed.")
             logger.debug("Exception", exc_info=exc)
 
         if idle or is_maxlive_overtime(now, run.created_at, teardowntask_max_lifetime_seconds):
-            logger.info(f"(Idle/Overtime Task) Shutting down {svc_name}")
+            logger.info(f"(Idle/Overtime Task) Shutting down {run_resource_names.service}")
             try:
-                await finalise_run(run, pod_url, session, RunStatus.finalised_by_timeout, now)
+                await finalise_run(
+                    run, run_resource_names.runner_base_url, session, RunStatus.finalised_by_timeout, now
+                )
                 await session.commit()
-                await teardown_teststack(svc_name=svc_name, statefulset_name=statefulset_name)
+                await teardown_teststack(run_resource_names)
             except (ApiException, ClientConnectionError) as exc:
                 logger.warning(
                     (
-                        f"Failed to teardown idle instance with service name {svc_name} because it "
+                        f"Failed to teardown idle instance with service name {run_resource_names.service} because it "
                         "could not be reached, flagging as terminated..."
                     )
                 )
@@ -73,7 +74,9 @@ async def teardown_idle_teststack(
                 await session.commit()
 
             except Exception as exc:
-                logger.warning(f"Failed to teardown idle instance with service name {svc_name}", exc_info=exc)
+                logger.warning(
+                    f"Failed to teardown idle instance with service name {run_resource_names.service}", exc_info=exc
+                )
                 continue
 
 

@@ -42,31 +42,33 @@ dev = [
 ]
 test = [
     "pytest",
+    "pytest-asyncio",
     "pytest-env",
     "pytest-postgresql",
     "psycopg",
     "assertical",
     "pytest-asyncio",
+    "asgi_lifespan",
 ]
 
 [tool.black]
 line-length = 120
 
 [tool.pytest.ini_options]
+asyncio_mode = "auto"
 pythonpath = ["src/"]
 testpaths = "tests"
 env = [
-    "D:TEST_EXECUTION_FQDN=testfqdn",
+    "D:TEST_EXECUTION_FQDN=cactus-testing.test.fqdn",
     "D:ORCHESTRATOR_DATABASE_URL=postgresql+asyncpg://fake:fake@fake/fake",
     "D:JWTAUTH_JWKS_URL=https://jwks.com/jwks",
-    "D:JWTAUTH_ISSUER=https://issuer.com",
-    "D:JWTAUTH_AUDIENCE=cactus_orchestrator",
+    "D:JWTAUTH_ISSUER=https://test-cactus-issuer.example.com",
+    "D:JWTAUTH_AUDIENCE=test-cactus-orchestrator",
     "D:CACTUS_PYTEST_WITHOUT_KUBERNETES=true",
 ]
 asyncio_default_fixture_loop_scope = "function"
 markers = [
     "idleteardowntask_enable(seconds): Mark test that enables teardown task and sets repeat every duration",
-    "with_test_db: Mark test that sets ORCHESTRATOR_DATABASE_URL to point at the test database",
 ]
 
 [tool.bandit]

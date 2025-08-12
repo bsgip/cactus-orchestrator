@@ -9,7 +9,6 @@ POD_FQDN_FORMAT = "{pod_name}.{svc_name}.{namespace}.svc.cluster.local"  # TODO:
 POD_HARNESS_RUNNER_MANAGEMENT_PORT = 8080  # TODO: tbd
 TLS_SERVER_SECRET_NAME_FORMAT = "tls-server-{domain}"  # nosec: Not a password
 TLS_CA_SECRET_NAME_FORMAT = "tls-ca-{ingress_name}"  # nosec: Not a password
-CLONED_RESOURCE_NAME_FORMAT = "{resource_name}-{uuid}"
 # NOTE: follwing two must be kept similar
 DEFAULT_INGRESS_PATH_FORMAT = "/{svc_name}/(.*)"
 TEST_EXECUTION_URL_FORMAT = "https://{fqdn}/{svc_name}"
@@ -52,9 +51,9 @@ class CactusOrchestratorSettings(BaseSettings):
 
     # teststack templates
     teststack_templates_namespace: str = "teststack-templates"
-    template_service_name: str = "envoy-svc"
-    template_app_name: str = "envoy"
-    template_statefulset_name: str = "envoy-set"
+    template_service_name_prefix: str = "envoy-svc-"  # Will be combined with CSIP-Aus Version identifier / uuid
+    template_app_name_prefix: str = "envoy-"  # Will be combined with CSIP-Aus Version identifier / uuid
+    template_statefulset_name_prefix: str = "envoy-set-"  # Will be combined with CSIP-Aus Version identifier  / uuid
 
     # certificates
     tls_ca_certificate_generic_secret_name: str = (
