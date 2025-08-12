@@ -6,47 +6,60 @@ from typing import Any, Generator
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
+from assertical.fixtures.environment import environment_snapshot
+from assertical.fixtures.fastapi import start_app_with_client
 from assertical.fixtures.postgres import generate_async_conn_str_from_connection
 from cryptography import x509
 from cryptography.hazmat.primitives import asymmetric, hashes, serialization
 from cryptography.x509.oid import NameOID
 from jose import jwt
 from kubernetes.client import V1Secret
-from sqlalchemy import Connection, NullPool, create_engine
+from psycopg import Connection
+from sqlalchemy import NullPool, create_engine
 
+from cactus_orchestrator.auth import jwt_validator
 from cactus_orchestrator.k8s.certificate.create import generate_client_p12
-from cactus_orchestrator.main import generate_app
 from cactus_orchestrator.model import Base
 from cactus_orchestrator.settings import _reset_current_settings, get_current_settings
 
 
-@pytest.fixture(scope="function", autouse=True)
-def set_environment(request, pg_empty_conn):
-    # Disable tasks by default for tests
+@pytest.fixture
+def preserved_environment():
+    with environment_snapshot():
+        yield
+
+
+@pytest.fixture(autouse=True)
+def base_environment(preserved_environment, request):
+
     os.environ["IDLETEARDOWNTASK_ENABLE"] = "false"
+    os.environ["JWTAUTH_ISSUER"] = "https://test-cactus-issuer.example.com"
+    os.environ["TEST_EXECUTION_FQDN"] = "cactus-testing.test.fqdn"
 
-    # clear current settings TODO: side effects?
-    _reset_current_settings()
-
-    # check marks
     idleteardowntask_enable = request.node.get_closest_marker("idleteardowntask_enable")
     if idleteardowntask_enable:
         os.environ["IDLETEARDOWNTASK_ENABLE"] = "true"
         repeat_every_sec = idleteardowntask_enable.args[0]
         os.environ["IDLETEARDOWNTASK_REPEAT_EVERY_SECONDS"] = str(repeat_every_sec)
 
-    with_test_db = request.node.get_closest_marker("with_test_db")
-    if with_test_db:
-        os.environ["ORCHESTRATOR_DATABASE_URL"] = generate_async_conn_str_from_connection(pg_empty_conn.connection)
-    yield
-    # Clean up env between tests NOTE: not thread-safe
-    os.environ.pop("TEARDOWNTASK_REPEAT_EVERY_SECONDS", None)
-    _reset_current_settings()
 
+@pytest.fixture
+def pg_empty_config(postgresql, preserved_environment) -> Generator[Connection, None, None]:
+    """Sets up the testing DB, applies migrations but does NOT add any entities"""
 
-@pytest.fixture(scope="function")
-def new_app():
-    yield generate_app(get_current_settings())
+    # Install the ORCHESTRATOR_DATABASE_URL before running migrations
+    os.environ["ORCHESTRATOR_DATABASE_URL"] = generate_async_conn_str_from_connection(postgresql)
+
+    sync_conn_string = (
+        f"postgresql+psycopg://{postgresql.info.user}:@{postgresql.info.host}:{postgresql.info.port}"
+        f"/{postgresql.info.dbname}"
+    )
+    engine = create_engine(sync_conn_string, echo=False, poolclass=NullPool)
+    Base.metadata.create_all(engine)
+
+    yield postgresql
+
+    Base.metadata.drop_all(engine)
 
 
 @pytest.fixture(scope="session")
@@ -124,7 +137,7 @@ def mock_jwt_validator_jwks_cache(ca_cert_key_pair) -> dict[str, str]:
     }
 
 
-@pytest.fixture(scope="session", autouse=True)
+@pytest.fixture(scope="session")
 def patch_jwks_request(kid_and_jwks_stub):
     _, jwks = kid_and_jwks_stub
     with patch("cactus_orchestrator.auth.httpx.AsyncClient") as mock_httpx_client_cls:
@@ -135,18 +148,14 @@ def patch_jwks_request(kid_and_jwks_stub):
         yield
 
 
-@pytest.fixture(scope="function")
-def valid_user_jwt(mock_jwt_validator_jwks_cache, ca_cert_key_pair) -> str:
-    _, ca_key = ca_cert_key_pair
-    kid = list(mock_jwt_validator_jwks_cache.keys())[0]
-
+def valid_token_for_user(subject: str, ca_key, kid, scope) -> str:
     payload = {
-        "sub": "test-user",
+        "sub": subject,
         "aud": os.environ["JWTAUTH_AUDIENCE"],
         "iss": os.environ["JWTAUTH_ISSUER"],
         "exp": datetime.now(timezone.utc) + timedelta(hours=1),
         "iat": datetime.now(timezone.utc),
-        "scope": "user:all",
+        "scope": scope,
     }
 
     token = jwt.encode(
@@ -161,6 +170,34 @@ def valid_user_jwt(mock_jwt_validator_jwks_cache, ca_cert_key_pair) -> str:
     )
 
     return token
+
+
+@pytest.fixture(scope="function")
+def valid_jwt_user1(mock_jwt_validator_jwks_cache, ca_cert_key_pair) -> str:
+    _, ca_key = ca_cert_key_pair
+    kid = list(mock_jwt_validator_jwks_cache.keys())[0]
+    return valid_token_for_user("user1", ca_key, kid, "user:all")
+
+
+@pytest.fixture(scope="function")
+def valid_jwt_user2(mock_jwt_validator_jwks_cache, ca_cert_key_pair) -> str:
+    _, ca_key = ca_cert_key_pair
+    kid = list(mock_jwt_validator_jwks_cache.keys())[0]
+    return valid_token_for_user("user2", ca_key, kid, "user:all")
+
+
+@pytest.fixture(scope="function")
+def valid_jwt_user3(mock_jwt_validator_jwks_cache, ca_cert_key_pair) -> str:
+    _, ca_key = ca_cert_key_pair
+    kid = list(mock_jwt_validator_jwks_cache.keys())[0]
+    return valid_token_for_user("user3", ca_key, kid, "user:all")
+
+
+@pytest.fixture(scope="function")
+def valid_jwt_no_user(mock_jwt_validator_jwks_cache, ca_cert_key_pair) -> str:
+    _, ca_key = ca_cert_key_pair
+    kid = list(mock_jwt_validator_jwks_cache.keys())[0]
+    return valid_token_for_user("user-dne", ca_key, kid, "user:all")
 
 
 @pytest.fixture
@@ -198,18 +235,29 @@ def generate_k8s_class_instance():
     return func
 
 
+def execute_test_sql_file(cfg: Connection, path_to_sql_file: str) -> None:
+    with open(path_to_sql_file) as f:
+        sql = f.read()
+    with cfg.cursor() as cursor:
+        cursor.execute(sql)
+        cfg.commit()
+
+
 @pytest.fixture
-def pg_empty_conn(postgresql) -> Generator[Connection, None, None]:
-    """Session for SQLAlchemy."""
-    connection = (
-        f"postgresql+psycopg://{postgresql.info.user}:@{postgresql.info.host}:{postgresql.info.port}"
-        f"/{postgresql.info.dbname}"
-    )
-    engine = create_engine(connection, echo=False, poolclass=NullPool)
+def pg_base_config(pg_empty_config):
+    """Adds a very minimal config to the database from base_config.sql"""
+    execute_test_sql_file(pg_empty_config, "tests/data/base_config.sql")
 
-    Base.metadata.create_all(engine)
+    yield pg_empty_config
 
-    with engine.connect() as conn:
-        yield conn
 
-    Base.metadata.drop_all(engine)
+@pytest.fixture
+async def client(pg_empty_config, patch_jwks_request):
+    from cactus_orchestrator.main import generate_app
+
+    # This is a sideeffect of some nasty globals that should be unpicked in the future
+    jwt_validator._reload_settings()
+    _reset_current_settings()
+
+    async with start_app_with_client(generate_app(get_current_settings())) as c:
+        yield c

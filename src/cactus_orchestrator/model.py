@@ -52,7 +52,33 @@ class User(Base):
         BOOLEAN, server_default="0"
     )  # If True - init test runs using device certificate. Otherwise init using aggregator certificate
 
-    runs: Mapped[list["Run"]] = relationship(lazy="raise")
+    run_groups: Mapped[list["RunGroup"]] = relationship(lazy="raise", back_populates="user")
+
+
+class RunGroup(Base):
+    """A RunGroup is so users can organise their runs under the label of a specific device/client. Contains some
+    settings that are unique to all runs in this group"""
+
+    __tablename__ = "run_group"
+    __table_args__ = (
+        Index(
+            "run_group_user_id_idx",
+            "user_id",
+            "id",
+        ),
+    )
+
+    run_group_id: Mapped[int] = mapped_column(name="id", primary_key=True, autoincrement=True)  # primary key
+    user_id: Mapped[int] = mapped_column(ForeignKey("user_.id"))  # User who owns this group
+
+    name: Mapped[str] = mapped_column(String, nullable=False)  # descriptive name
+    csip_aus_version: Mapped[str] = mapped_column(
+        String, nullable=False
+    )  # What test cases are used in this group - should be treated as immutable
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    runs: Mapped[list["Run"]] = relationship(lazy="raise", back_populates="run_group")
+    user: Mapped["User"] = relationship(lazy="raise")
 
 
 class RunStatus(IntEnum):
@@ -74,20 +100,20 @@ class Run(Base):
             "testprocedure_id",
         ),
         Index(
-            "user_id_run_status_idx",
-            "user_id",
+            "run_group_id_run_status_idx",
+            "run_group_id",
             "run_status",
         ),
         Index(
-            "user_id_testprocedure_id_run_id_idx",
-            "user_id",
+            "run_group_id_testprocedure_id_run_id_idx",
+            "run_group_id",
             "testprocedure_id",
             desc("id"),
         ),
     )
 
     run_id: Mapped[int] = mapped_column(name="id", primary_key=True, autoincrement=True)
-    user_id: Mapped[int] = mapped_column(ForeignKey("user_.id"))
+    run_group_id: Mapped[int] = mapped_column(ForeignKey("run_group.id"))
     teststack_id: Mapped[str] = mapped_column(
         String, nullable=False, index=True
     )  # We can't guarantee uniqueness as some users have "is_static_uri" set. Enforce uniqueness for running instances
@@ -107,6 +133,8 @@ class Run(Base):
 
     run_artifact_id: Mapped[int | None] = mapped_column(ForeignKey("run_artifact.id"), nullable=True)
     run_artifact: Mapped["RunArtifact"] = relationship(lazy="raise")
+
+    run_group: Mapped["RunGroup"] = relationship(lazy="raise")
 
 
 class RunArtifact(Base):
