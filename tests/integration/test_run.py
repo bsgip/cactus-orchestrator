@@ -508,6 +508,26 @@ async def test_start_run(
                 assert new_run.run_status == RunStatus.initialised
 
 
+@pytest.mark.asyncio
+async def test_start_run_precondition_failed(client, k8s_mock: MockedK8s, pg_base_config, valid_jwt_user1):
+    """Will a precondition failed error from the runner proxy the right info to the client"""
+
+    # Arrange
+    error_message = "my mock error message"
+    k8s_mock.start.side_effect = RunnerClientException(
+        "Some sort of error", http_status_code=HTTPStatus.PRECONDITION_FAILED, error_message=error_message
+    )
+    run_id = 1
+
+    # Act
+    response = await client.post(f"/run/{run_id}", headers={"Authorization": f"Bearer {valid_jwt_user1}"})
+
+    # Assert
+    assert response.status_code == HTTPStatus.PRECONDITION_FAILED
+    data = response.json()
+    assert data["detail"] == error_message, "The error message we want to communicate is sent via the detail prop"
+
+
 @pytest.mark.parametrize(
     "run_group_id, finalised, expected_run_ids",
     [(1, None, [8, 7, 4, 3, 2, 1]), (1, True, [7, 4, 3, 2]), (1, False, [8, 1]), (2, None, [5]), (3, None, None)],

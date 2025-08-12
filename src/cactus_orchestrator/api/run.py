@@ -386,15 +386,21 @@ async def start_run(
         try:
             await RunnerClient.start(s)
         except RunnerClientException as exc:
-            if exc.http_status_code == HTTPStatus.PRECONDITION_FAILED:
-                logger.info(exc)
-                raise HTTPException(
-                    HTTPStatus.PRECONDITION_FAILED, "One or more preconditions are incomplete or invalid."
-                )  # Runner uses 412 to indicate unmet app-level preconditions (i.e. init phase steps not completed),
+            # Runner uses 412 to indicate unmet app-level preconditions (i.e. init phase steps not completed),
             # we 'proxy' this through.
+            if exc.http_status_code == HTTPStatus.PRECONDITION_FAILED:
+                logger.info(
+                    f"Received a precondition failure on start for user {user.user_id} run {run_id}", exc_info=exc
+                )
+                error_message = (
+                    "One or more preconditions are incomplete or invalid"
+                    if exc.error_message is None
+                    else exc.error_message
+                )
+                raise HTTPException(HTTPStatus.PRECONDITION_FAILED, error_message)
 
             # raising server error as default
-            logger.error(exc)
+            logger.error(f"Received an unexpected failure on start for user {user.user_id} run {run_id}", exc_info=exc)
             raise HTTPException(HTTPStatus.INTERNAL_SERVER_ERROR)
 
     # update status
