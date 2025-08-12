@@ -135,7 +135,7 @@ def generate_dynamic_test_stack_id() -> str:
     return shortuuid.uuid().lower()
 
 
-K8S_REPLACE_PATTERN = re.compile("[^a-z\\.\\-0-9]")
+K8S_REPLACE_PATTERN = re.compile("[^a-z\\-0-9]")
 
 
 def csip_aus_version_to_k8s_id(csip_aus_version: str) -> str:
