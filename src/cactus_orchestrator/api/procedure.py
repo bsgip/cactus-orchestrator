@@ -110,6 +110,7 @@ async def get_procedure_run_summaries_for_group(
                     test_procedure_id=agg.test_procedure_id,
                     description=definition.description,
                     category=definition.category,
+                    classes=definition.classes,
                     run_count=agg.count,
                     latest_all_criteria_met=agg.latest_all_criteria_met,
                 )

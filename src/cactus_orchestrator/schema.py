@@ -80,6 +80,7 @@ class TestProcedureRunSummaryResponse(BaseModel):
     test_procedure_id: TestProcedureId
     description: str
     category: str
+    classes: list[str] | None
     run_count: int  # Count of runs for this test procedure
     latest_all_criteria_met: bool | None  # Value for all_criteria_met of the most recent Run
 
