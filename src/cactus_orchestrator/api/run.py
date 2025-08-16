@@ -160,7 +160,7 @@ def ensure_certificate_valid(cert_type: str, der_data: bytes | None) -> x509.Cer
     return client_cert
 
 
-async def prepare_run_for_delete(run: Run):
+async def prepare_run_for_delete(run: Run) -> None:
     if run.run_status in ACTIVE_RUN_STATUSES:
         try:
             resource_names = get_resource_names(run.teststack_id)
