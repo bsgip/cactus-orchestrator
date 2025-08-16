@@ -589,6 +589,57 @@ async def test_get_individual_run(client, pg_base_config, valid_jwt_user1, run_i
 
 
 @pytest.mark.parametrize(
+    "run_id, expected_status, expected_k8s_teardown, expected_delete",
+    [
+        (1, HTTPStatus.NO_CONTENT, True, True),
+        (2, HTTPStatus.NO_CONTENT, False, True),
+        (4, HTTPStatus.NO_CONTENT, False, True),
+        (6, HTTPStatus.NOT_FOUND, False, False),  # Another user owns this run
+        (99, HTTPStatus.NOT_FOUND, False, False),  # run DNE
+    ],
+)
+@pytest.mark.asyncio
+async def test_delete_individual_run(
+    client,
+    pg_base_config,
+    valid_jwt_user1,
+    k8s_mock: MockedK8s,
+    run_id: int,
+    expected_status: HTTPStatus,
+    expected_k8s_teardown: bool,
+    expected_delete: bool,
+):
+    """Can individual runs be deleted for a specific user"""
+
+    # Act
+    async with generate_async_session(pg_base_config) as session:
+        before_run_count = (await session.execute(select(func.count()).select_from(Run))).scalar_one()
+
+    response = await client.delete(f"/run/{run_id}", headers={"Authorization": f"Bearer {valid_jwt_user1}"})
+
+    # Assert
+    assert response.status_code == expected_status
+    async with generate_async_session(pg_base_config) as session:
+        after_run_count = (await session.execute(select(func.count()).select_from(Run))).scalar_one()
+        db_run = (await session.execute(select(Run).where(Run.run_id == run_id))).scalar_one_or_none()
+
+        if expected_delete:
+            assert after_run_count == before_run_count - 1
+            assert db_run is None
+        else:
+            assert after_run_count == before_run_count
+
+    if expected_k8s_teardown:
+        k8s_mock.delete_service.assert_called_once()
+        k8s_mock.delete_statefulset.assert_called_once()
+        k8s_mock.remove_ingress_rule.assert_called_once()
+    else:
+        k8s_mock.delete_service.assert_not_called()
+        k8s_mock.delete_statefulset.assert_not_called()
+        k8s_mock.remove_ingress_rule.assert_not_called()
+
+
+@pytest.mark.parametrize(
     "runner_status, expected",
     [
         (None, None),

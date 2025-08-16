@@ -160,6 +160,15 @@ def ensure_certificate_valid(cert_type: str, der_data: bytes | None) -> x509.Cer
     return client_cert
 
 
+async def prepare_run_for_delete(run: Run) -> None:
+    if run.run_status in ACTIVE_RUN_STATUSES:
+        try:
+            resource_names = get_resource_names(run.teststack_id)
+            await teardown_teststack(resource_names)
+        except Exception as exc:
+            logger.error(f"Error tearing down test stack for run {run.run_id}", exc_info=exc)
+
+
 @router.get("/run_group", status_code=HTTPStatus.OK)
 async def get_groups_paginated(
     user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_scopes({AuthScopes.user_all}))],
@@ -234,12 +243,7 @@ async def delete_group(
     # Close out any existing k8s resources for runs before deletion
     all_runs = await select_runs_for_group(db.session, run_group_id, finalised=None, created_at_gte=None)
     for run in all_runs:
-        if run.run_status in ACTIVE_RUN_STATUSES:
-            try:
-                resource_names = get_resource_names(run.teststack_id)
-                await teardown_teststack(resource_names)
-            except Exception as exc:
-                logger.error(f"Error tearing down test stack for run {run.run_id}", exc_info=exc)
+        await prepare_run_for_delete(run)
 
     # Delete the runs + groups
     await delete_runs(db.session, all_runs)
@@ -488,6 +492,27 @@ async def get_individual_run(
         raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Not Found")
 
     return map_run_to_run_response(run)
+
+
+@router.delete("/run/{run_id}", status_code=HTTPStatus.NO_CONTENT)
+async def delete_individual_run(
+    run_id: int,
+    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_scopes({AuthScopes.user_all}))],
+) -> None:
+
+    # get user
+    user = await select_user_or_raise(db.session, user_context)
+
+    # get run
+    try:
+        run = await select_user_run(db.session, user.user_id, run_id)
+    except NoResultFound as exc:
+        logger.debug(exc)
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Not Found")
+
+    await prepare_run_for_delete(run)
+    await delete_runs(db.session, [run])
+    await db.session.commit()
 
 
 @router.post("/run/{run_id}/finalise", status_code=HTTPStatus.OK)
