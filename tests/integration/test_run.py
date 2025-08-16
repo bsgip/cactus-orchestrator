@@ -2,6 +2,7 @@ import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from http import HTTPMethod, HTTPStatus
+from itertools import product
 from typing import Generator
 from unittest.mock import Mock, patch
 
@@ -10,7 +11,7 @@ from assertical.asserts.time import assert_nowish
 from assertical.fake.generator import generate_class_instance
 from assertical.fixtures.postgres import generate_async_session
 from cactus_runner.client import RunnerClientException
-from cactus_runner.models import CriteriaEntry, RequestEntry, RunnerStatus, StepStatus
+from cactus_runner.models import CriteriaEntry, InitResponseBody, RequestEntry, RunnerStatus, StepStatus
 from cactus_test_definitions import CSIPAusVersion, TestProcedureId
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization
@@ -117,7 +118,8 @@ async def test_spawn_teststack_and_init_run_dynamic_uris(
 
     subscription_domain = "abc.def"
 
-    # Arrange
+    k8s_mock.init.return_value = generate_class_instance(InitResponseBody, is_started=False)
+
     async with generate_async_session(pg_base_config) as session:
         user = (await session.execute(select(User).where(User.user_id == 1))).scalar_one()
         user.aggregator_certificate_x509_der = agg_cert_bytes
@@ -176,10 +178,7 @@ async def test_spawn_teststack_and_init_run_dynamic_uris(
         assert new_run.teststack_id != expected_static_uri
 
 
-@pytest.mark.parametrize(
-    "is_device_cert",
-    [True, False],
-)
+@pytest.mark.parametrize("is_device_cert, is_started_response", product([True, False], [True, False]))
 @pytest.mark.asyncio
 async def test_spawn_teststack_and_init_run_static_uri(
     client,
@@ -189,6 +188,7 @@ async def test_spawn_teststack_and_init_run_static_uri(
     expired_user_p12_and_der,
     valid_jwt_user1,
     is_device_cert: bool,
+    is_started_response: bool,
 ):
     """Just a simple test of starting a run with all k8s functions stubbed when URIs are requested to be static"""
 
@@ -204,7 +204,8 @@ async def test_spawn_teststack_and_init_run_static_uri(
     run_group_id = 1
     expected_version = "v1.2"
 
-    # Arrange
+    k8s_mock.init.return_value = generate_class_instance(InitResponseBody, is_started=is_started_response)
+
     async with generate_async_session(pg_base_config) as session:
         # Firstly ensure all user runs are expired before we start
         await session.execute(update(Run).values(run_status=RunStatus.terminated).where(Run.run_group_id.in_([1, 2])))
@@ -258,7 +259,11 @@ async def test_spawn_teststack_and_init_run_static_uri(
     async with generate_async_session(pg_base_config) as session:
         new_run = (await session.execute(select(Run).where(Run.run_id == response_model.run_id))).scalar_one()
         assert new_run.run_group_id == run_group_id
-        assert new_run.run_status == RunStatus.initialised
+
+        if is_started_response:
+            assert new_run.run_status == RunStatus.started
+        else:
+            assert new_run.run_status == RunStatus.initialised
         assert new_run.finalised_at is None
         assert new_run.teststack_id in response_model.test_url
         assert_nowish(new_run.created_at)
@@ -292,7 +297,8 @@ async def test_spawn_teststack_and_init_run_static_uri_collision(
     subscription_domain = "abc.def"
     run_group_id = 1
 
-    # Arrange
+    k8s_mock.init.return_value = generate_class_instance(InitResponseBody, is_started=False)
+
     async with generate_async_session(pg_base_config) as session:
         user = (await session.execute(select(User).where(User.user_id == 1))).scalar_one()
         user.aggregator_certificate_x509_der = agg_cert_bytes

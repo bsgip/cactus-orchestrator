@@ -331,7 +331,7 @@ async def spawn_teststack_and_init_run(
         # inject initial state with either the device or aggregator cert data
         pem_encoded_cert = client_cert.public_bytes(serialization.Encoding.PEM).decode("utf-8")
         async with ClientSession(base_url=run_resource_names.runner_base_url, timeout=ClientTimeout(30)) as s:
-            await RunnerClient.init(
+            init_result = await RunnerClient.init(
                 session=s,
                 test_id=test.test_procedure_id,
                 csip_aus_version=CSIPAusVersion(run_group.csip_aus_version),
@@ -350,7 +350,8 @@ async def spawn_teststack_and_init_run(
         raise HTTPException(HTTPStatus.INTERNAL_SERVER_ERROR, detail="Internal Server Error")
 
     # commit DB changes
-    await update_run_run_status(db.session, run_id, RunStatus.initialised)
+    new_run_status = RunStatus.started if init_result.is_started else RunStatus.initialised
+    await update_run_run_status(db.session, run_id, new_run_status)
     await db.session.commit()
 
     # set location header
