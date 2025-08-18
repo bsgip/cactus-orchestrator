@@ -79,54 +79,107 @@ async def test_fetch_existing_config_domain_none_value(
 
 
 @pytest.mark.parametrize(
-    "user_vals, input_domain, input_is_static_uri, input_is_device_cert, expected_domain, expected_is_static_uri, expected_is_device_cert",
+    "user_vals, input_domain, input_is_static_uri, input_is_device_cert, input_pen, expected_domain, expected_is_static_uri, expected_is_device_cert, expected_pen",
     [
-        (User(subscription_domain="", is_static_uri=False, is_device_cert=True), "", True, False, "", True, False),
         (
-            User(subscription_domain="my.domain.example", is_static_uri=True, is_device_cert=True),
+            User(subscription_domain="", is_static_uri=False, is_device_cert=True, pen=0),
+            "",
+            True,
+            False,
+            0,
+            "",
+            True,
+            False,
+            0,
+        ),
+        (
+            User(subscription_domain="my.domain.example", is_static_uri=True, is_device_cert=True, pen=64),
             "my.domain.example",
+            None,
             None,
             None,
             "my.domain.example",
             True,
             True,
+            64,
         ),
         (
-            User(subscription_domain="my.domain.example", is_static_uri=True, is_device_cert=True),
+            User(subscription_domain="my.domain.example", is_static_uri=True, is_device_cert=True, pen=64),
             "my.domain.example",
             False,
             False,
+            64,
             "my.domain.example",
             False,
             False,
+            64,
         ),
         (
-            User(subscription_domain="foo", is_static_uri=False, is_device_cert=False),
+            User(subscription_domain="foo", is_static_uri=False, is_device_cert=False, pen=64),
             "http://my.other.example:123/foo/bar",
+            None,
             None,
             None,
             "my.other.example",
             False,
             False,
+            64,
         ),
         (
-            User(subscription_domain="foo", is_static_uri=True, is_device_cert=False),
+            User(subscription_domain="foo", is_static_uri=True, is_device_cert=False, pen=64),
             None,
             True,
             False,
+            None,
             "foo",
             True,
             False,
+            64,
         ),
         (
-            User(subscription_domain="foo", is_static_uri=False, is_device_cert=False),
+            User(subscription_domain="foo", is_static_uri=False, is_device_cert=False, pen=64),
             None,
             True,
             True,
+            None,
             "foo",
             True,
             True,
+            64,
         ),
+        (
+            User(subscription_domain="foo", is_static_uri=False, is_device_cert=False, pen=64),
+            None,
+            None,
+            None,
+            64,
+            "foo",
+            False,
+            False,
+            64,
+        ),  # Leave PEN unchanged
+        (
+            User(subscription_domain="foo", is_static_uri=False, is_device_cert=False, pen=64),
+            None,
+            None,
+            None,
+            108,
+            "foo",
+            False,
+            False,
+            108,
+        ),  # Update PEN
+        (
+            User(subscription_domain="foo", is_static_uri=False, is_device_cert=False, pen=64),
+            None,
+            None,
+            None,
+            0,
+            "foo",
+            False,
+            False,
+            0,
+        ),  # Reset PEN
     ],
 )
 async def test_update_existing_config(
@@ -137,9 +190,11 @@ async def test_update_existing_config(
     input_domain: str | None,
     input_is_static_uri: bool | None,
     input_is_device_cert: bool | None,
+    input_pen: int,
     expected_domain: str,
     expected_is_static_uri: bool,
     expected_is_device_cert: bool,
+    expected_pen: int,
 ):
     # Arrange
     async with generate_async_session(pg_base_config) as session:
@@ -147,11 +202,15 @@ async def test_update_existing_config(
         user.subscription_domain = user_vals.subscription_domain
         user.is_static_uri = user_vals.is_static_uri
         user.is_device_cert = user_vals.is_device_cert
+        user.pen = user_vals.pen
         await session.commit()
 
     # Act
     req = UserConfigurationRequest(
-        subscription_domain=input_domain, is_static_uri=input_is_static_uri, is_device_cert=input_is_device_cert
+        subscription_domain=input_domain,
+        is_static_uri=input_is_static_uri,
+        is_device_cert=input_is_device_cert,
+        pen=input_pen,
     )
     res = await client.post("/config", headers={"Authorization": f"Bearer {valid_jwt_user1}"}, json=req.model_dump())
 
@@ -162,6 +221,7 @@ async def test_update_existing_config(
     assert data.subscription_domain == expected_domain
     assert data.is_static_uri == expected_is_static_uri
     assert data.is_device_cert == expected_is_device_cert
+    assert data.pen == expected_pen
     if expected_is_static_uri:
         assert os.environ["TEST_EXECUTION_FQDN"] in data.static_uri
         assert data.static_uri.endswith("/dcap")

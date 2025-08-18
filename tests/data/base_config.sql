@@ -1,11 +1,11 @@
 
 -- Users
-INSERT INTO user_ (subject_id, issuer_id, aggregator_certificate_p12_bundle, aggregator_certificate_x509_der, device_certificate_p12_bundle, device_certificate_x509_der)
-VALUES ('user1', 'https://test-cactus-issuer.example.com', E'\\x01', E'\\x02', E'\\x03', E'\\x04');
-INSERT INTO user_ (subject_id, issuer_id, aggregator_certificate_p12_bundle, aggregator_certificate_x509_der, device_certificate_p12_bundle, device_certificate_x509_der)
-VALUES ('user2', 'https://test-cactus-issuer.example.com', NULL, NULL, NULL, NULL);
-INSERT INTO user_ (subject_id, issuer_id, aggregator_certificate_p12_bundle, aggregator_certificate_x509_der, device_certificate_p12_bundle, device_certificate_x509_der)
-VALUES ('user3', 'https://test-cactus-issuer.example.com', E'\\x', E'\\x', E'\\x', E'\\x');
+INSERT INTO user_ (subject_id, issuer_id, aggregator_certificate_p12_bundle, aggregator_certificate_x509_der, device_certificate_p12_bundle, device_certificate_x509_der, pen)
+VALUES ('user1', 'https://test-cactus-issuer.example.com', E'\\x01', E'\\x02', E'\\x03', E'\\x04', 64);
+INSERT INTO user_ (subject_id, issuer_id, aggregator_certificate_p12_bundle, aggregator_certificate_x509_der, device_certificate_p12_bundle, device_certificate_x509_der, pen)
+VALUES ('user2', 'https://test-cactus-issuer.example.com', NULL, NULL, NULL, NULL, 64);
+INSERT INTO user_ (subject_id, issuer_id, aggregator_certificate_p12_bundle, aggregator_certificate_x509_der, device_certificate_p12_bundle, device_certificate_x509_der, pen)
+VALUES ('user3', 'https://test-cactus-issuer.example.com', E'\\x', E'\\x', E'\\x', E'\\x', 64);
 
 -- 
 INSERT INTO run_group (user_id, name, csip_aus_version) VALUES (1, 'name-1', 'v1.2');

@@ -58,6 +58,7 @@ def user_to_config(user: User) -> UserConfigurationResponse:
         is_device_cert=user.is_device_cert,
         aggregator_certificate_expiry=aggregator_certificate_expiry,
         device_certificate_expiry=device_certificate_expiry,
+        pen=0 if user.pen is None else user.pen,
     )
 
 
@@ -105,6 +106,9 @@ async def update_config(
 
     if body.is_device_cert is not None:
         user.is_device_cert = body.is_device_cert
+
+    if body.pen is not None:
+        user.pen = body.pen
 
     await db.session.commit()
 

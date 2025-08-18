@@ -339,6 +339,7 @@ async def spawn_teststack_and_init_run(
                 device_certificate=pem_encoded_cert if user.is_device_cert else None,
                 subscription_domain=user.subscription_domain,
                 run_id=str(run_id),
+                pen=user.pen,
             )
 
         # finally, include new service in ingress rule

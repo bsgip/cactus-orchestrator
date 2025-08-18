@@ -51,6 +51,9 @@ class User(Base):
     is_device_cert: Mapped[bool] = mapped_column(
         BOOLEAN, server_default="0"
     )  # If True - init test runs using device certificate. Otherwise init using aggregator certificate
+    pen: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0
+    )  # 0 is the only reserved PEN so can be used as the NULL value.
 
     run_groups: Mapped[list["RunGroup"]] = relationship(lazy="raise", back_populates="user")
 
