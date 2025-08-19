@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from datetime import datetime, timezone
 from http import HTTPStatus
@@ -5,7 +6,7 @@ from typing import Annotated
 
 from cactus_runner.client import ClientSession, ClientTimeout, RunnerClient, RunnerClientException
 from cactus_runner.models import RunnerStatus
-from cactus_test_definitions import CSIPAusVersion
+from cactus_test_definitions import CSIPAusVersion, TestProcedureId
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
@@ -167,6 +168,29 @@ async def prepare_run_for_delete(run: Run) -> None:
             await teardown_teststack(resource_names)
         except Exception as exc:
             logger.error(f"Error tearing down test stack for run {run.run_id}", exc_info=exc)
+
+
+async def wait_for_runner_status(s: ClientSession) -> None:
+    """Executes the RunnerClient.status function (which works pre-init) until it successfully connects (or enough
+    attempts have passed). This is primarily to avoid situations where k8's says a pod is ready to go but the runner
+    is either not fully up or networking isn't routing"""
+
+    MAX_ATTEMPTS = 5
+
+    for attempt in range(MAX_ATTEMPTS):
+        try:
+            status = await RunnerClient.status(s)
+            if status is not None:
+                return
+        except Exception as exc:
+            logger.error(f"Failure accessing RunnerClient.status attempt {attempt}", exc_info=exc)
+
+        # Add a slight delay to give the pod a chance to standup
+        await asyncio.sleep(2)
+
+    raise CactusOrchestratorException(
+        f"Unable to fetch status from RunnerClient after {attempt+1} attempts. Will be treated as a failed start."
+    )
 
 
 @router.get("/run_group", status_code=HTTPStatus.OK)
@@ -335,6 +359,9 @@ async def spawn_teststack_and_init_run(
         # inject initial state with either the device or aggregator cert data
         pem_encoded_cert = client_cert.public_bytes(serialization.Encoding.PEM).decode("utf-8")
         async with ClientSession(base_url=run_resource_names.runner_base_url, timeout=ClientTimeout(30)) as s:
+
+            await wait_for_runner_status(s)
+
             init_result = await RunnerClient.init(
                 session=s,
                 test_id=test.test_procedure_id,
@@ -349,7 +376,7 @@ async def spawn_teststack_and_init_run(
         await add_ingress_rule(run_resource_names)
 
     except (CactusOrchestratorException, RunnerClientException) as exc:
-        logger.info(exc)
+        logger.info("Failure to initialise runner. Will teardown any resources.", exc_info=exc)
         await teardown_teststack(run_resource_names)
         raise HTTPException(HTTPStatus.INTERNAL_SERVER_ERROR, detail="Internal Server Error")
 
