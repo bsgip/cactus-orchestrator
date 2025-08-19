@@ -6,7 +6,7 @@ from typing import Annotated
 
 from cactus_runner.client import ClientSession, ClientTimeout, RunnerClient, RunnerClientException
 from cactus_runner.models import RunnerStatus
-from cactus_test_definitions import CSIPAusVersion, TestProcedureId
+from cactus_test_definitions import CSIPAusVersion
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
