@@ -1,12 +1,13 @@
 import os
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from http import HTTPMethod, HTTPStatus
 from itertools import product
 from typing import Generator
 from unittest.mock import Mock, patch
 
 import pytest
+from aiohttp import ClientConnectorDNSError
 from assertical.asserts.time import assert_nowish
 from assertical.fake.generator import generate_class_instance
 from assertical.fixtures.postgres import generate_async_session
@@ -118,6 +119,7 @@ async def test_spawn_teststack_and_init_run_dynamic_uris(
 
     subscription_domain = "abc.def"
 
+    k8s_mock.status.return_value = generate_class_instance(RunnerStatus, step_status={})
     k8s_mock.init.return_value = generate_class_instance(InitResponseBody, is_started=False)
 
     async with generate_async_session(pg_base_config) as session:
@@ -204,6 +206,7 @@ async def test_spawn_teststack_and_init_run_static_uri(
     run_group_id = 1
     expected_version = "v1.2"
 
+    k8s_mock.status.return_value = generate_class_instance(RunnerStatus, step_status={})
     k8s_mock.init.return_value = generate_class_instance(InitResponseBody, is_started=is_started_response)
 
     async with generate_async_session(pg_base_config) as session:
@@ -270,6 +273,120 @@ async def test_spawn_teststack_and_init_run_static_uri(
         assert new_run.teststack_id == expected_static_uri
 
 
+@pytest.mark.asyncio
+async def test_spawn_teststack_and_init_tolerant_to_status_errors(
+    client,
+    k8s_mock: MockedK8s,
+    pg_base_config,
+    valid_user_p12_and_der,
+    valid_jwt_user1,
+):
+    """The status will return failure a couple of times (as seen in real world testing) - the server should tolerate
+    a small number of failures if the status eventually becomes good"""
+
+    # The cert we WONT be using will be expired to ensure it doesn't block us
+    agg_cert_bytes = valid_user_p12_and_der[1]
+    subscription_domain = "abc.def"
+    run_group_id = 1
+
+    k8s_mock.status.side_effect = [
+        ClientConnectorDNSError("mock 1", Mock()),
+        ClientConnectorDNSError("mock 2", Mock()),
+        generate_class_instance(RunnerStatus, step_status={}),
+    ]
+    k8s_mock.init.return_value = generate_class_instance(InitResponseBody, is_started=False)
+
+    async with generate_async_session(pg_base_config) as session:
+        user = (await session.execute(select(User).where(User.user_id == 1))).scalar_one()
+        user.aggregator_certificate_x509_der = agg_cert_bytes
+        user.subscription_domain = subscription_domain
+        user.is_device_cert = False
+        user.is_static_uri = False
+        await session.commit()
+
+    # Act
+    req = InitRunRequest(test_procedure_id=TestProcedureId.ALL_01.value)
+    res = await client.post(
+        f"/run_group/{run_group_id}/run", json=req.model_dump(), headers={"Authorization": f"Bearer {valid_jwt_user1}"}
+    )
+
+    # Assert
+    assert res.status_code == HTTPStatus.CREATED
+    response_model = InitRunResponse.model_validate(res.json())
+    assert os.environ["TEST_EXECUTION_FQDN"] in response_model.test_url, "The returned URI should be public facing"
+    assert res.headers["Location"] == f"/run/{response_model.run_id}"
+
+    # Check the k8s services were provisioned
+    k8s_mock.clone_statefulset.assert_called_once()
+    k8s_mock.clone_service.assert_called_once()
+    k8s_mock.add_ingress_rule.assert_called_once()
+    k8s_mock.wait_for_pod.assert_called_once()
+
+    # Check init/status were called
+    k8s_mock.init.assert_awaited_once()
+    k8s_mock.status.call_count == 3
+
+    # Check the DB
+    async with generate_async_session(pg_base_config) as session:
+        new_run = (await session.execute(select(Run).where(Run.run_id == response_model.run_id))).scalar_one()
+        assert new_run.run_group_id == run_group_id
+        assert new_run.run_status == RunStatus.initialised
+        assert_nowish(new_run.created_at)
+
+
+@pytest.mark.asyncio
+async def test_spawn_teststack_and_init_too_many_status_errors(
+    client,
+    k8s_mock: MockedK8s,
+    pg_base_config,
+    valid_user_p12_and_der,
+    valid_jwt_user1,
+):
+    """If the status check during init is constantly failing - ensure that the init is aborted and the test stack
+    is torn down"""
+
+    # The cert we WONT be using will be expired to ensure it doesn't block us
+    agg_cert_bytes = valid_user_p12_and_der[1]
+    subscription_domain = "abc.def"
+    run_group_id = 1
+
+    k8s_mock.status.side_effect = ClientConnectorDNSError("mock 1", Mock())
+    k8s_mock.init.return_value = generate_class_instance(InitResponseBody, is_started=False)
+
+    async with generate_async_session(pg_base_config) as session:
+        user = (await session.execute(select(User).where(User.user_id == 1))).scalar_one()
+        user.aggregator_certificate_x509_der = agg_cert_bytes
+        user.subscription_domain = subscription_domain
+        user.is_device_cert = False
+        user.is_static_uri = False
+        await session.commit()
+
+    # Act
+    req = InitRunRequest(test_procedure_id=TestProcedureId.ALL_01.value)
+    res = await client.post(
+        f"/run_group/{run_group_id}/run",
+        json=req.model_dump(),
+        headers={"Authorization": f"Bearer {valid_jwt_user1}"},
+        timeout=timedelta(seconds=30),
+    )
+
+    # Assert
+    assert res.status_code == HTTPStatus.INTERNAL_SERVER_ERROR
+
+    # Check the k8s services were provisioned - and then torn down
+    k8s_mock.clone_statefulset.assert_called_once()
+    k8s_mock.clone_service.assert_called_once()
+    k8s_mock.wait_for_pod.assert_called_once()
+
+    k8s_mock.delete_service.assert_called_once()
+    k8s_mock.delete_statefulset.assert_called_once()
+    k8s_mock.remove_ingress_rule.assert_called_once()
+
+    # Check init/status were called
+    assert k8s_mock.status.call_count > 0
+    k8s_mock.init.assert_not_called()
+
+
 @pytest.mark.parametrize(
     "is_device_cert",
     [True, False],
@@ -297,6 +414,7 @@ async def test_spawn_teststack_and_init_run_static_uri_collision(
     subscription_domain = "abc.def"
     run_group_id = 1
 
+    k8s_mock.status.return_value = generate_class_instance(RunnerStatus, step_status={})
     k8s_mock.init.return_value = generate_class_instance(InitResponseBody, is_started=False)
 
     async with generate_async_session(pg_base_config) as session:
