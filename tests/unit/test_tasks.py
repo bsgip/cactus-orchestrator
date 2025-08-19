@@ -45,7 +45,7 @@ def k8s_mock() -> Generator[MockedK8s, None, None]:
 @pytest.mark.parametrize(
     ("idle", "created_at", "expect_teardown"),
     [
-        (True, datetime.now(tz=timezone.utc), True),  #  idle timeout,
+        (True, datetime.now(tz=timezone.utc), True),  # idle timeout,
         (False, datetime(2025, 1, 1, tzinfo=timezone.utc), True),  # max lifetime
         (False, datetime.now(tz=timezone.utc), False),
     ],

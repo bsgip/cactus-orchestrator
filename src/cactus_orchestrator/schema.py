@@ -91,12 +91,14 @@ class UserConfigurationRequest(BaseModel):
         bool | None
     )  # If true - all test instances will share the same URI (limit to 1 test at a time). If None - no update
     is_device_cert: bool | None  # whether test instances will init using the device certificate. Otherwise use agg cert
+    pen: int | None
 
 
 class UserConfigurationResponse(BaseModel):
     subscription_domain: str  # What domain will outgoing notifications be scoped to? Empty string = no value configured
     is_static_uri: bool  # If true - all test instances will share the same URI (limit to 1 test at a time).
     is_device_cert: bool  # if true - all test instances will spawn using the device certificate. Otherwise use agg cert
+    pen: int
     static_uri: str | None  # What the static URI will be for this user (readonly and only set if is_static_uri is True)
     aggregator_certificate_expiry: datetime | None  # When the current user aggregator cert expires. None = expired
     device_certificate_expiry: datetime | None  # When the current user device cert expires. None = expired
