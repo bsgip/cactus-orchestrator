@@ -73,6 +73,7 @@ class TestProcedureResponse(BaseModel):
     test_procedure_id: TestProcedureId
     description: str
     category: str
+    classes: list[str]
 
 
 class TestProcedureRunSummaryResponse(BaseModel):
