@@ -170,8 +170,8 @@ async def prepare_run_for_delete(run: Run) -> None:
             logger.error(f"Error tearing down test stack for run {run.run_id}", exc_info=exc)
 
 
-async def wait_for_runner_status(s: ClientSession) -> None:
-    """Executes the RunnerClient.status function (which works pre-init) until it successfully connects (or enough
+async def wait_for_runner_health(s: ClientSession) -> None:
+    """Executes the RunnerClient.health function (which works pre-init) until it successfully connects (or enough
     attempts have passed). This is primarily to avoid situations where k8's says a pod is ready to go but the runner
     is either not fully up or networking isn't routing"""
 
@@ -179,17 +179,16 @@ async def wait_for_runner_status(s: ClientSession) -> None:
 
     for attempt in range(MAX_ATTEMPTS):
         try:
-            status = await RunnerClient.status(s)
-            if status is not None:
+            if await RunnerClient.health(s):
                 return
         except Exception as exc:
-            logger.error(f"Failure accessing RunnerClient.status attempt {attempt}", exc_info=exc)
+            logger.error(f"Failure accessing RunnerClient.health attempt {attempt}", exc_info=exc)
 
         # Add a slight delay to give the pod a chance to standup
         await asyncio.sleep(2)
 
     raise CactusOrchestratorException(
-        f"Unable to fetch status from RunnerClient after {attempt+1} attempts. Will be treated as a failed start."
+        f"Unable to fetch health from RunnerClient after {attempt+1} attempts. Will be treated as a failed start."
     )
 
 
@@ -360,7 +359,7 @@ async def spawn_teststack_and_init_run(
         pem_encoded_cert = client_cert.public_bytes(serialization.Encoding.PEM).decode("utf-8")
         async with ClientSession(base_url=run_resource_names.runner_base_url, timeout=ClientTimeout(30)) as s:
 
-            await wait_for_runner_status(s)
+            await wait_for_runner_health(s)
 
             init_result = await RunnerClient.init(
                 session=s,

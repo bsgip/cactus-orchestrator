@@ -51,6 +51,7 @@ class MockedK8s:
     start: Mock
     finalize: Mock
     status: Mock
+    health: Mock
     last_interaction: Mock
 
 
@@ -69,6 +70,7 @@ def k8s_mock() -> Generator[MockedK8s, None, None]:
         patch("cactus_orchestrator.api.run.RunnerClient.finalize") as finalize,
         patch("cactus_orchestrator.api.run.RunnerClient.status") as status,
         patch("cactus_orchestrator.api.run.RunnerClient.last_interaction") as last_interaction,
+        patch("cactus_orchestrator.api.run.RunnerClient.health") as health,
     ):
         yield MockedK8s(
             add_ingress_rule=add_ingress_rule,
@@ -83,6 +85,7 @@ def k8s_mock() -> Generator[MockedK8s, None, None]:
             finalize=finalize,
             status=status,
             last_interaction=last_interaction,
+            health=health,
         )
 
 
@@ -119,7 +122,7 @@ async def test_spawn_teststack_and_init_run_dynamic_uris(
 
     subscription_domain = "abc.def"
 
-    k8s_mock.status.return_value = generate_class_instance(RunnerStatus, step_status={})
+    k8s_mock.health.return_value = True
     k8s_mock.init.return_value = generate_class_instance(InitResponseBody, is_started=False)
 
     async with generate_async_session(pg_base_config) as session:
@@ -206,7 +209,7 @@ async def test_spawn_teststack_and_init_run_static_uri(
     run_group_id = 1
     expected_version = "v1.2"
 
-    k8s_mock.status.return_value = generate_class_instance(RunnerStatus, step_status={})
+    k8s_mock.health.return_value = True
     k8s_mock.init.return_value = generate_class_instance(InitResponseBody, is_started=is_started_response)
 
     async with generate_async_session(pg_base_config) as session:
@@ -289,11 +292,7 @@ async def test_spawn_teststack_and_init_tolerant_to_status_errors(
     subscription_domain = "abc.def"
     run_group_id = 1
 
-    k8s_mock.status.side_effect = [
-        ClientConnectorDNSError("mock 1", Mock()),
-        ClientConnectorDNSError("mock 2", Mock()),
-        generate_class_instance(RunnerStatus, step_status={}),
-    ]
+    k8s_mock.health.side_effect = [ClientConnectorDNSError("mock 1", Mock()), False, True]
     k8s_mock.init.return_value = generate_class_instance(InitResponseBody, is_started=False)
 
     async with generate_async_session(pg_base_config) as session:
@@ -324,7 +323,7 @@ async def test_spawn_teststack_and_init_tolerant_to_status_errors(
 
     # Check init/status were called
     k8s_mock.init.assert_awaited_once()
-    k8s_mock.status.call_count == 3
+    k8s_mock.health.call_count == 3
 
     # Check the DB
     async with generate_async_session(pg_base_config) as session:
@@ -350,7 +349,7 @@ async def test_spawn_teststack_and_init_too_many_status_errors(
     subscription_domain = "abc.def"
     run_group_id = 1
 
-    k8s_mock.status.side_effect = ClientConnectorDNSError("mock 1", Mock())
+    k8s_mock.health.side_effect = False
     k8s_mock.init.return_value = generate_class_instance(InitResponseBody, is_started=False)
 
     async with generate_async_session(pg_base_config) as session:
@@ -383,7 +382,7 @@ async def test_spawn_teststack_and_init_too_many_status_errors(
     k8s_mock.remove_ingress_rule.assert_called_once()
 
     # Check init/status were called
-    assert k8s_mock.status.call_count > 0
+    assert k8s_mock.health.call_count > 0
     k8s_mock.init.assert_not_called()
 
 
@@ -414,7 +413,7 @@ async def test_spawn_teststack_and_init_run_static_uri_collision(
     subscription_domain = "abc.def"
     run_group_id = 1
 
-    k8s_mock.status.return_value = generate_class_instance(RunnerStatus, step_status={})
+    k8s_mock.health.return_value = True
     k8s_mock.init.return_value = generate_class_instance(InitResponseBody, is_started=False)
 
     async with generate_async_session(pg_base_config) as session:
