@@ -34,8 +34,11 @@ def map_from_definitions_to_responses(definitions: TestProcedures) -> list[TestP
     for k, v in definitions.test_procedures.items():
         if k in test_procedure_ids or k not in TestProcedureId:
             continue
+
         responses.append(
-            TestProcedureResponse(test_procedure_id=TestProcedureId(k), description=v.description, category=v.category)
+            TestProcedureResponse(
+                test_procedure_id=TestProcedureId(k), description=v.description, category=v.category, classes=v.classes
+            )
         )
         test_procedure_ids.append(k)
     return responses
@@ -97,14 +100,15 @@ async def get_procedure_run_summaries_for_group(
     user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_scopes({AuthScopes.user_all}))],
     run_group_id: int,
 ) -> list[TestProcedureRunSummaryResponse]:
+    """Will not serve summaries for test procedures outside the RunGroup csip_aus_version"""
     # Check permissions
-    await select_user_run_group_or_raise(db.session, user_context, run_group_id)
+    (_, run_group) = await select_user_run_group_or_raise(db.session, user_context, run_group_id)
 
     # Enumerate our aggregated summaries from the DB and combine them with additional metadata from the YAML definitions
     results: list[TestProcedureRunSummaryResponse] = []
     for agg in await select_group_runs_aggregated_by_procedure(db.session, run_group_id):
         definition = test_procedure_definitions.test_procedures.get(agg.test_procedure_id.value, None)
-        if definition:
+        if definition and (run_group.csip_aus_version in definition.target_versions):
             results.append(
                 TestProcedureRunSummaryResponse(
                     test_procedure_id=agg.test_procedure_id,

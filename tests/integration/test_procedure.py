@@ -95,7 +95,9 @@ async def test_procedure_run_summaries_for_group(
         assert res.status_code == HTTPStatus.OK
         data = res.json()
         assert isinstance(data, list)
-        assert len(data) == len(TestProcedureId), "Aggregation for each test procedure"
+        assert (
+            len(data) > 10
+        ), "Not every test is visible to every version (RunGroup) but there should be more tests than records in the DB"
 
         items = [TestProcedureRunSummaryResponse.model_validate(d) for d in data]
         counts_by_procedure_id = {procedure: count for procedure, count in expected_id_counts}
@@ -105,6 +107,26 @@ async def test_procedure_run_summaries_for_group(
 
         for summary in items:
             assert summary.run_count == counts_by_procedure_id.get(summary.test_procedure_id, 0)
+
+
+@pytest.mark.asyncio
+async def test_procedure_run_summaries_for_group_target_versions(client, pg_base_config, valid_jwt_user1):
+    """Test retrieving procedure run summaries also doesn't serve summaries for tests outside the RunGroup's version
+    target"""
+
+    # RunGroup 1 is v1.2
+    res = await client.get("/procedure_runs/1", headers={"Authorization": f"Bearer {valid_jwt_user1}"})
+    assert res.status_code == HTTPStatus.OK
+    v12_items = [TestProcedureRunSummaryResponse.model_validate(d) for d in res.json()]
+
+    # RunGroup 2 is v1.3-beta-storage
+    res = await client.get("/procedure_runs/2", headers={"Authorization": f"Bearer {valid_jwt_user1}"})
+    assert res.status_code == HTTPStatus.OK
+    v13_bess_items = [TestProcedureRunSummaryResponse.model_validate(d) for d in res.json()]
+
+    # BES_01 is definitely in v1.3-storage extensions but NOT in v1.2
+    assert TestProcedureId.BES_01 in [i.test_procedure_id for i in v13_bess_items]
+    assert TestProcedureId.BES_01 not in [i.test_procedure_id for i in v12_items]
 
 
 @pytest.mark.parametrize(
