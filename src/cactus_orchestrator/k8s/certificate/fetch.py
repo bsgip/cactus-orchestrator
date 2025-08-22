@@ -88,3 +88,4 @@ async def fetch_certificate_only(secret_name: str, namespace: str | None = None)
 
     # Deserialise
     return x509.load_pem_x509_certificate(crt_bytes, default_backend())
+
