@@ -40,10 +40,10 @@ def test_generate_client_p12_ec(ec_cert_key_pair: tuple[x509.Certificate, ec.Ell
     pfx_data, cl_cert = generate_client_p12(ca_key, ca_cert, client_common_name, p12_password)
 
     # Uncomment to view generated artifacts
-    #with open("ec_test_gen_certificate.pem", "wb") as f:
+    # with open("ec_test_gen_certificate.pem", "wb") as f:
     #    f.write(cl_cert.public_bytes(serialization.Encoding.PEM))
 
-    #with open("ec_test_gen.p12", "wb") as f:
+    # with open("ec_test_gen.p12", "wb") as f:
     #    f.write(pfx_data)
 
     # Assert
