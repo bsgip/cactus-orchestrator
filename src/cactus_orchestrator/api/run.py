@@ -180,6 +180,7 @@ async def wait_for_runner_health(s: ClientSession) -> None:
     for attempt in range(MAX_ATTEMPTS):
         try:
             if await RunnerClient.health(s):
+                logger.debug(f"Runner is healthy after attempt {attempt}")
                 return
         except Exception as exc:
             logger.error(f"Failure accessing RunnerClient.health attempt {attempt}", exc_info=exc)
