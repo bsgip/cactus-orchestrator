@@ -549,32 +549,37 @@ async def finalise_run_and_teardown_teststack(
     user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_scopes({AuthScopes.user_all}))],
 ) -> Response:
     """Returns 200 and a binary zip stream on success. Returns 201 if the finalize succeeded but there was an error
-    fetching the finalized data."""
+    fetching the finalized data. This call is idempotent - multiple calls will return the original values without
+    updating the database."""
     # get user
     user = await select_user_or_raise(db.session, user_context)
 
     # get run
     try:
-        run = await select_user_run(db.session, user.user_id, run_id)
+        run = await select_user_run_with_artifact(db.session, user.user_id, run_id)
     except NoResultFound as exc:
         logger.debug(exc)
         raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Not Found")
 
-    # get resource names
-    run_resource_names = get_resource_names(run.teststack_id)
+    # Don't attempt to cleanup / teardown if this has already been finalised
+    if run.run_status in ACTIVE_RUN_STATUSES:
+        # get resource names
+        run_resource_names = get_resource_names(run.teststack_id)
 
-    # finalise
-    artifact = await finalise_run(
-        run,
-        run_resource_names.runner_base_url,
-        db.session,
-        RunStatus.finalised_by_client,
-        datetime.now(timezone.utc),
-    )
-    await db.session.commit()
+        # finalise
+        artifact = await finalise_run(
+            run,
+            run_resource_names.runner_base_url,
+            db.session,
+            RunStatus.finalised_by_client,
+            datetime.now(timezone.utc),
+        )
+        await db.session.commit()
 
-    # teardown
-    await teardown_teststack(run_resource_names)
+        # teardown
+        await teardown_teststack(run_resource_names)
+    else:
+        artifact = run.run_artifact
 
     if artifact is None:
         return Response(status_code=HTTPStatus.NO_CONTENT)
@@ -628,7 +633,7 @@ async def get_run_status(
     except NoResultFound as exc:
         logger.debug(exc)
         raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Run does not exist.")
-    if run.run_status not in [RunStatus.started, RunStatus.initialised]:
+    if run.run_status not in ACTIVE_RUN_STATUSES:
         raise HTTPException(
             status_code=HTTPStatus.GONE,
             detail=f"Run {run_id} has terminated. Please download the final artifacts for status information.",
