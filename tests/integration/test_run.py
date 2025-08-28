@@ -981,6 +981,63 @@ async def test_finalise_run_and_teardown_teststack_success(client, pg_base_confi
         assert run.run_artifact.file_data == finalize_data
 
 
+@pytest.mark.asyncio
+async def test_finalise_run_and_teardown_teststack_idempotent(client, pg_base_config, k8s_mock, valid_jwt_user1):
+    """Tests that finalising the same run multiple times will not cause any weird side effects"""
+
+    # Arrange
+    finalize_data = b"\x1f\x8b\x08\x00I\xe9\xe4g\x02\xff\xcb,)N\xccM\xf5M,\xca\xcc\x07\x00\xcd\xcc5\xc5\x0b\x00\x00\x00"
+    k8s_mock.finalize.side_effect = [finalize_data, Exception("Mock exception - shouldn't be raised")]
+    k8s_mock.status.side_effect = [
+        generate_class_instance(RunnerStatus, step_status={}),
+        Exception("Mock exception - shouldn't be raised"),
+    ]
+
+    # First request should perform normally and update the DB
+    response1 = await client.post("/run/1/finalise", headers={"Authorization": f"Bearer {valid_jwt_user1}"})
+    assert response1.status_code == 200
+    assert response1.content == finalize_data
+    async with generate_async_session(pg_base_config) as session:
+        run = (
+            await session.execute(select(Run).where(Run.run_id == 1).options(selectinload(Run.run_artifact)))
+        ).scalar_one()
+
+        original_finalised_at = run.finalised_at
+
+        assert_nowish(run.finalised_at)
+        assert run.run_status == RunStatus.finalised_by_client
+        assert run.all_criteria_met is True
+        assert run.run_artifact.file_data == finalize_data
+
+    # We should've only cleaned up and finalised once (for the first request)
+    k8s_mock.delete_statefulset.assert_called_once()
+    k8s_mock.remove_ingress_rule.assert_called_once()
+    k8s_mock.delete_service.assert_called_once()
+    k8s_mock.finalize.assert_called_once()
+    k8s_mock.status.assert_called_once()
+
+    # Fire off the same request again - it should return the exact same data and the DB should still be OK
+    response2 = await client.post("/run/1/finalise", headers={"Authorization": f"Bearer {valid_jwt_user1}"})
+    assert response2.status_code == 200
+    assert response2.content == finalize_data
+    async with generate_async_session(pg_base_config) as session:
+        run = (
+            await session.execute(select(Run).where(Run.run_id == 1).options(selectinload(Run.run_artifact)))
+        ).scalar_one()
+
+        assert run.finalised_at == original_finalised_at, "This shouldn't have changed"
+        assert run.run_status == RunStatus.finalised_by_client
+        assert run.all_criteria_met is True
+        assert run.run_artifact.file_data == finalize_data
+
+    # We should've only cleaned up and finalised once (for the first request)
+    k8s_mock.delete_statefulset.assert_called_once()
+    k8s_mock.remove_ingress_rule.assert_called_once()
+    k8s_mock.delete_service.assert_called_once()
+    k8s_mock.finalize.assert_called_once()
+    k8s_mock.status.assert_called_once()
+
+
 @pytest.mark.parametrize(
     "run_id, expected_status",
     [
