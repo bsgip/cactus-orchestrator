@@ -40,7 +40,7 @@ async def insert_user(session: AsyncSession, user_context: UserContext) -> User:
     session.add(user)
     await session.flush()
 
-    new_user = await select_user(session, user_context, True, True, True, True)
+    new_user = await select_user(session, user_context, True, True, True, True, True, True, True, True)
     if new_user is None:
         raise Exception(f"Unable to insert new user for user_context {user_context}")
 
@@ -52,8 +52,12 @@ async def select_user(
     user_context: UserContext,
     with_aggregator_der: bool = False,
     with_aggregator_p12: bool = False,
+    with_aggregator_pem_cert: bool = False,
+    with_aggregator_pem_key: bool = False,
     with_device_der: bool = False,
     with_device_p12: bool = False,
+    with_device_pem_cert: bool = False,
+    with_device_pem_key: bool = False,
 ) -> User | None:
 
     stmt = select(User).where(
@@ -65,10 +69,18 @@ async def select_user(
         options_list.append(undefer(User.aggregator_certificate_p12_bundle))
     if with_aggregator_der:
         options_list.append(undefer(User.aggregator_certificate_x509_der))
+    if with_aggregator_pem_cert:
+        options_list.append(undefer(User.aggregator_certificate_pem))
+    if with_aggregator_pem_key:
+        options_list.append(undefer(User.aggregator_certificate_pem_key))
     if with_device_p12:
         options_list.append(undefer(User.device_certificate_p12_bundle))
     if with_device_der:
         options_list.append(undefer(User.device_certificate_x509_der))
+    if with_device_pem_cert:
+        options_list.append(undefer(User.device_certificate_pem))
+    if with_device_pem_key:
+        options_list.append(undefer(User.device_certificate_pem_key))
 
     if options_list:
         stmt = stmt.options(*options_list)

@@ -6,6 +6,7 @@ from typing import Annotated, Any
 import shortuuid
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.serialization import pkcs12
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
 from fastapi_async_sqlalchemy import db
@@ -32,6 +33,9 @@ router = APIRouter()
 
 MEDIA_TYPE_P12 = "application/x-pkcs12"
 MEDIA_TYPE_CA_CRT = "application/x-x509-ca-cert"
+# The following media types taken from https://pki-tutorial.readthedocs.io/en/latest/mime.html
+MEDIA_TYPE_PEM_CRT = "application/x-x509-user-cert"
+MEDIA_TYPE_PEM_KEY = "application/pkcs8"
 
 
 async def update_ca_certificate_cache(_: Any) -> dict[str, ExpiringValue[x509.Certificate]]:
@@ -133,6 +137,85 @@ async def fetch_client_certificate(
         )
 
 
+@router.get(
+    "/certificate/pem/{cert_type}",
+    response_class=Response,
+    responses={HTTPStatus.OK: {"content": {MEDIA_TYPE_PEM_CRT: {}}}},
+)
+async def fetch_client_pem(
+    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_scopes({AuthScopes.user_all}))],
+    cert_type: str,
+    key: bool = False,
+) -> Response:
+    """Fetches pem encoded stream of bytes, by default returning .crt
+
+    Path Variable
+    cert_type=device Returns the device certificate
+    cert_type=aggregator Returns the aggregator certificate
+
+    Query Parameter
+    key=False Returns pem .crt
+    key=True Return pem .key
+    """
+
+    if cert_type == CertificateRouteType.aggregator:
+        with_aggregator_pem = True
+        with_aggregator_pem_key = True
+        with_device_pem = False
+        with_device_pem_key = False
+    elif cert_type == CertificateRouteType.device:
+        with_aggregator_pem = False
+        with_aggregator_pem_key = False
+        with_device_pem = True
+        with_device_pem_key = True
+    else:
+        raise HTTPException(
+            status_code=HTTPStatus.NOT_FOUND,
+            detail=f"cert_type '{cert_type}' is not valid. Please use 'aggregator' or 'device'",
+        )
+
+    # get user with the appropriate p12 selected
+    user = await select_user(
+        db.session,
+        user_context,
+        with_aggregator_pem_cert=with_aggregator_pem,
+        with_aggregator_pem_key=with_aggregator_pem_key,
+        with_device_pem_cert=with_device_pem,
+        with_device_pem_key=with_device_pem_key,
+    )
+    if user is None:
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="No certificate exists, please register.")
+
+    # Extract the appropriate stream of bytes
+    if cert_type == CertificateRouteType.aggregator:
+        if key:
+            return Response(
+                content=user.aggregator_certificate_pem_key,
+                media_type=MEDIA_TYPE_PEM_KEY,
+            )
+        else:
+            return Response(
+                content=user.aggregator_certificate_pem,
+                media_type=MEDIA_TYPE_PEM_CRT,
+            )
+    elif cert_type == CertificateRouteType.device:
+        if key:
+            return Response(
+                content=user.device_certificate_pem_key,
+                media_type=MEDIA_TYPE_PEM_KEY,
+            )
+        else:
+            return Response(
+                content=user.device_certificate_pem,
+                media_type=MEDIA_TYPE_PEM_CRT,
+            )
+    else:
+        raise HTTPException(
+            status_code=HTTPStatus.NOT_FOUND,
+            detail=f"cert_type '{cert_type}' is not valid. Please use 'aggregator' or 'device'",
+        )
+
+
 @router.put(
     "/certificate/{cert_type}",
     status_code=HTTPStatus.OK,
@@ -168,14 +251,21 @@ async def generate_client_certificate(
     # generate client passphrase
     pass_phrase = SecretStr(shortuuid.random(length=20))
     client_p12, client_x509_der = await create_client_cert_binary(user_context, pass_phrase)
+    pem_key, pem_cert, _ = pkcs12.load_key_and_certificates(client_p12, pass_phrase.get_secret_value().encode())
 
     # update the certificate details on the user
     if cert_type == CertificateRouteType.aggregator:
         user.aggregator_certificate_p12_bundle = client_p12
         user.aggregator_certificate_x509_der = client_x509_der
+        if isinstance(pem_key, bytes) and isinstance(pem_cert, bytes):
+            user.aggregator_certificate_pem = pem_cert
+            user.aggregator_certificate_pem_key = pem_key
     elif cert_type == CertificateRouteType.device:
         user.device_certificate_p12_bundle = client_p12
         user.device_certificate_x509_der = client_x509_der
+        if isinstance(pem_key, bytes) and isinstance(pem_cert, bytes):
+            user.device_certificate_pem = pem_cert
+            user.device_certificate_pem_key = pem_key
     else:
         # Check above should've prevented this from happening
         raise HTTPException(

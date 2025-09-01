@@ -204,8 +204,12 @@ def test_generate_static_test_stack_id():
         is_static_uri=True,
         aggregator_certificate_p12_bundle=[],
         aggregator_certificate_x509_der=[],
+        aggregator_certificate_pem=[],
+        aggregator_certificate_pem_key=[],
         device_certificate_p12_bundle=[],
         device_certificate_x509_der=[],
+        device_certificate_pem=[],
+        device_certificate_pem_key=[],
     )
     u2 = generate_class_instance(
         User,
@@ -213,8 +217,12 @@ def test_generate_static_test_stack_id():
         is_static_uri=True,
         aggregator_certificate_p12_bundle=[],
         aggregator_certificate_x509_der=[],
+        aggregator_certificate_pem=[],
+        aggregator_certificate_pem_key=[],
         device_certificate_p12_bundle=[],
         device_certificate_x509_der=[],
+        device_certificate_pem=[],
+        device_certificate_pem_key=[],
     )
 
     u1_id = generate_static_test_stack_id(u1)

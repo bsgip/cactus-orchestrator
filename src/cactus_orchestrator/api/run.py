@@ -99,16 +99,24 @@ async def select_user_or_raise(
     user_context: UserContext,
     with_aggregator_der: bool = False,
     with_aggregator_p12: bool = False,
+    with_aggregator_pem_cert: bool = False,
+    with_aggregator_pem_key: bool = False,
     with_device_der: bool = False,
     with_device_p12: bool = False,
+    with_device_pem_cert: bool = False,
+    with_device_pem_key: bool = False,
 ) -> User:
     user = await select_user(
         session,
         user_context,
         with_aggregator_der=with_aggregator_der,
         with_aggregator_p12=with_aggregator_p12,
+        with_aggregator_pem_cert=with_aggregator_pem_cert,
+        with_aggregator_pem_key=with_aggregator_pem_key,
         with_device_der=with_device_der,
         with_device_p12=with_device_p12,
+        with_device_pem_cert=with_device_pem_cert,
+        with_device_pem_key=with_device_pem_key,
     )
 
     if user is None:
@@ -123,16 +131,24 @@ async def select_user_run_group_or_raise(
     run_group_id: int,
     with_aggregator_der: bool = False,
     with_aggregator_p12: bool = False,
+    with_aggregator_pem_cert: bool = False,
+    with_aggregator_pem_key: bool = False,
     with_device_der: bool = False,
     with_device_p12: bool = False,
+    with_device_pem_cert: bool = False,
+    with_device_pem_key: bool = False,
 ) -> tuple[User, RunGroup]:
     user = await select_user_or_raise(
         session,
         user_context,
         with_aggregator_der=with_aggregator_der,
         with_aggregator_p12=with_aggregator_p12,
+        with_aggregator_pem_cert=with_aggregator_pem_cert,
+        with_aggregator_pem_key=with_aggregator_pem_key,
         with_device_der=with_device_der,
         with_device_p12=with_device_p12,
+        with_device_pem_cert=with_device_pem_cert,
+        with_device_pem_key=with_device_pem_key,
     )
 
     run_group = await select_run_group_for_user(session, user.user_id, run_group_id)

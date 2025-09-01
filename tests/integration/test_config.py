@@ -79,7 +79,7 @@ async def test_fetch_existing_config_domain_none_value(
 
 
 @pytest.mark.parametrize(
-    "user_vals, input_domain, input_is_static_uri, input_is_device_cert, input_pen, expected_domain, expected_is_static_uri, expected_is_device_cert, expected_pen",
+    "user_vals, input_domain, input_is_static_uri, input_is_device_cert, input_pen, expected_domain, expected_is_static_uri, expected_is_device_cert, expected_pen",  # noqa 501
     [
         (
             User(subscription_domain="", is_static_uri=False, is_device_cert=True, pen=0),
