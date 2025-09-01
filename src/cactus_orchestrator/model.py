@@ -35,12 +35,24 @@ class User(Base):
     aggregator_certificate_x509_der: Mapped[bytes | None] = mapped_column(
         LargeBinary, nullable=True, unique=False, deferred=True
     )  # x509 DER-encoded - Aggregator certificate
+    aggregator_certificate_pem: Mapped[bytes | None] = mapped_column(
+        LargeBinary, nullable=True, unique=False, deferred=True
+    )  # pem - Aggregator certificate (the certificate bundled in the aggregator_certificate_p12_bundle)
+    aggregator_certificate_pem_key: Mapped[bytes | None] = mapped_column(
+        LargeBinary, nullable=True, unique=False, deferred=True
+    )  # pem - Aggregator private key (the key bundled in the aggregator_certificate_p12_bundle)
     device_certificate_p12_bundle: Mapped[bytes | None] = mapped_column(
         LargeBinary, nullable=True, unique=False, deferred=True
     )  # p12 - Device certificate + key
     device_certificate_x509_der: Mapped[bytes | None] = mapped_column(
         LargeBinary, nullable=True, unique=False, deferred=True
     )  # x509 DER-encoded - Device certificate
+    device_certificate_pem: Mapped[bytes | None] = mapped_column(
+        LargeBinary, nullable=True, unique=False, deferred=True
+    )  # pem - Device certificate (the certificate bundled in the aggregator_certificate_p12_bundle)
+    device_certificate_pem_key: Mapped[bytes | None] = mapped_column(
+        LargeBinary, nullable=True, unique=False, deferred=True
+    )  # pem - Device private key (the key bundled in the aggregator_certificate_p12_bundle)
 
     subscription_domain: Mapped[str | None] = mapped_column(
         String, nullable=True

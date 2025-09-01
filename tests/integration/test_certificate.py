@@ -19,6 +19,7 @@ class MockedK8s:
     generate_client_p12: Mock
     fetch_certificate_key_pair: Mock
     fetch_certificate_only: Mock
+    pkcs12: Mock
 
 
 @pytest.fixture
@@ -27,11 +28,13 @@ def k8s_mock() -> Generator[MockedK8s, None, None]:
         patch("cactus_orchestrator.api.certificate.generate_client_p12") as generate_client_p12,
         patch("cactus_orchestrator.api.certificate.fetch_certificate_key_pair") as fetch_certificate_key_pair,
         patch("cactus_orchestrator.api.certificate.fetch_certificate_only") as fetch_certificate_only,
+        patch("cactus_orchestrator.api.certificate.pkcs12") as pkcs12,
     ):
         yield MockedK8s(
             generate_client_p12=generate_client_p12,
             fetch_certificate_key_pair=fetch_certificate_key_pair,
             fetch_certificate_only=fetch_certificate_only,
+            pkcs12=pkcs12,
         )
 
 
@@ -88,8 +91,12 @@ async def test_create_new_certificate_existing_user(
         user = (await session.execute(select(User).where(User.user_id == 1))).scalar_one()
         user.aggregator_certificate_p12_bundle = existing_bytes
         user.aggregator_certificate_x509_der = existing_bytes
+        user.aggregator_certificate_pem = existing_bytes
+        user.aggregator_certificate_pem_key = existing_bytes
         user.device_certificate_p12_bundle = existing_bytes
         user.device_certificate_x509_der = existing_bytes
+        user.device_certificate_pem = existing_bytes
+        user.device_certificate_pem_key = existing_bytes
         await session.commit()
 
     mock_ca_key = b"mock_ca_key_data"
@@ -98,9 +105,12 @@ async def test_create_new_certificate_existing_user(
 
     mock_client_p12 = b"mock_client_p12_data"
     mock_client_cert_bytes = b"mock_client_cert_data"
+    mock_client_pem_cert = b"mock_client_pem_cert"
+    mock_client_pem_key = b"mock_client_pem_key"
     mock_client_cert = Mock()
     mock_client_cert.public_bytes = Mock(return_value=mock_client_cert_bytes)
     k8s_mock.generate_client_p12.return_value = (mock_client_p12, mock_client_cert)
+    k8s_mock.pkcs12.load_key_and_certificates.return_value = (mock_client_pem_key, mock_client_pem_cert, "dunder")
 
     # Act
     res = await client.put(f"/certificate/{cert_type.value}", headers={"Authorization": f"Bearer {valid_jwt_user1}"})
@@ -113,6 +123,7 @@ async def test_create_new_certificate_existing_user(
 
     k8s_mock.fetch_certificate_key_pair.assert_called_once()
     k8s_mock.generate_client_p12.assert_called_once()
+    k8s_mock.pkcs12.load_key_and_certificates.assert_called_once()
 
     async with generate_async_session(pg_base_config) as session:
         user = (
@@ -122,8 +133,12 @@ async def test_create_new_certificate_existing_user(
                 .options(
                     undefer(User.aggregator_certificate_p12_bundle),
                     undefer(User.aggregator_certificate_x509_der),
+                    undefer(User.aggregator_certificate_pem),
+                    undefer(User.aggregator_certificate_pem_key),
                     undefer(User.device_certificate_p12_bundle),
                     undefer(User.device_certificate_x509_der),
+                    undefer(User.device_certificate_pem),
+                    undefer(User.device_certificate_pem_key),
                 )
             )
         ).scalar_one()
@@ -131,13 +146,21 @@ async def test_create_new_certificate_existing_user(
         if cert_type == CertificateRouteType.aggregator:
             assert user.aggregator_certificate_p12_bundle == mock_client_p12
             assert user.aggregator_certificate_x509_der == mock_client_cert_bytes
+            assert user.aggregator_certificate_pem == mock_client_pem_cert
+            assert user.aggregator_certificate_pem_key == mock_client_pem_key
             assert user.device_certificate_p12_bundle == existing_bytes
             assert user.device_certificate_x509_der == existing_bytes
+            assert user.device_certificate_pem == existing_bytes
+            assert user.device_certificate_pem_key == existing_bytes
         else:
             assert user.aggregator_certificate_p12_bundle == existing_bytes
             assert user.aggregator_certificate_x509_der == existing_bytes
+            assert user.aggregator_certificate_pem == existing_bytes
+            assert user.aggregator_certificate_pem_key == existing_bytes
             assert user.device_certificate_p12_bundle == mock_client_p12
             assert user.device_certificate_x509_der == mock_client_cert_bytes
+            assert user.device_certificate_pem == mock_client_pem_cert
+            assert user.device_certificate_pem_key == mock_client_pem_key
 
 
 @pytest.mark.asyncio
