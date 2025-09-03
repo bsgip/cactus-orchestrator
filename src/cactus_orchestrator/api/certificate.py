@@ -252,20 +252,28 @@ async def generate_client_certificate(
     pass_phrase = SecretStr(shortuuid.random(length=20))
     client_p12, client_x509_der = await create_client_cert_binary(user_context, pass_phrase)
     pem_key, pem_cert, _ = pkcs12.load_key_and_certificates(client_p12, pass_phrase.get_secret_value().encode())
+    pem_cert_bytes = pem_cert.public_bytes(encoding=serialization.Encoding.PEM) if pem_cert else None
+    pem_key_bytes = (
+        pem_key.private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.PKCS8,
+            encryption_algorithm=serialization.NoEncryption(),
+        )
+        if pem_key
+        else None
+    )
 
     # update the certificate details on the user
     if cert_type == CertificateRouteType.aggregator:
         user.aggregator_certificate_p12_bundle = client_p12
         user.aggregator_certificate_x509_der = client_x509_der
-        if isinstance(pem_key, bytes) and isinstance(pem_cert, bytes):
-            user.aggregator_certificate_pem = pem_cert
-            user.aggregator_certificate_pem_key = pem_key
+        user.aggregator_certificate_pem = pem_cert_bytes
+        user.aggregator_certificate_pem_key = pem_key_bytes
     elif cert_type == CertificateRouteType.device:
         user.device_certificate_p12_bundle = client_p12
         user.device_certificate_x509_der = client_x509_der
-        if isinstance(pem_key, bytes) and isinstance(pem_cert, bytes):
-            user.device_certificate_pem = pem_cert
-            user.device_certificate_pem_key = pem_key
+        user.device_certificate_pem = pem_cert_bytes
+        user.device_certificate_pem_key = pem_key_bytes
     else:
         # Check above should've prevented this from happening
         raise HTTPException(
