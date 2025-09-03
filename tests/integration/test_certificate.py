@@ -105,8 +105,12 @@ async def test_create_new_certificate_existing_user(
 
     mock_client_p12 = b"mock_client_p12_data"
     mock_client_cert_bytes = b"mock_client_cert_data"
-    mock_client_pem_cert = b"mock_client_pem_cert"
-    mock_client_pem_key = b"mock_client_pem_key"
+    mock_client_pem_cert_bytes = b"mock_client_pem_cert"
+    mock_client_pem_key_bytes = b"mock_client_pem_key"
+    mock_client_pem_cert = Mock()
+    mock_client_pem_cert.public_bytes.return_value = mock_client_pem_cert_bytes
+    mock_client_pem_key = Mock()
+    mock_client_pem_key.private_bytes.return_value = mock_client_pem_key_bytes
     mock_client_cert = Mock()
     mock_client_cert.public_bytes = Mock(return_value=mock_client_cert_bytes)
     k8s_mock.generate_client_p12.return_value = (mock_client_p12, mock_client_cert)
@@ -146,8 +150,8 @@ async def test_create_new_certificate_existing_user(
         if cert_type == CertificateRouteType.aggregator:
             assert user.aggregator_certificate_p12_bundle == mock_client_p12
             assert user.aggregator_certificate_x509_der == mock_client_cert_bytes
-            assert user.aggregator_certificate_pem == mock_client_pem_cert
-            assert user.aggregator_certificate_pem_key == mock_client_pem_key
+            assert user.aggregator_certificate_pem == mock_client_pem_cert_bytes
+            assert user.aggregator_certificate_pem_key == mock_client_pem_key_bytes
             assert user.device_certificate_p12_bundle == existing_bytes
             assert user.device_certificate_x509_der == existing_bytes
             assert user.device_certificate_pem == existing_bytes
@@ -159,8 +163,8 @@ async def test_create_new_certificate_existing_user(
             assert user.aggregator_certificate_pem_key == existing_bytes
             assert user.device_certificate_p12_bundle == mock_client_p12
             assert user.device_certificate_x509_der == mock_client_cert_bytes
-            assert user.device_certificate_pem == mock_client_pem_cert
-            assert user.device_certificate_pem_key == mock_client_pem_key
+            assert user.device_certificate_pem == mock_client_pem_cert_bytes
+            assert user.device_certificate_pem_key == mock_client_pem_key_bytes
 
 
 @pytest.mark.asyncio
