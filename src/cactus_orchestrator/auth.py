@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 security = HTTPBearer()
 
 
-class AuthScopes(StrEnum):
+class AuthPerm(StrEnum):
     user_all = "user:all"
     admin_all = "admin:all"
 
@@ -39,6 +39,7 @@ class JWTClaims(BaseModel):
     exp: int  # expiry (unix epoch)
     iat: int | None  # issued at (unix epoch)
     scopes: set[str | None]  # set of strings or empty
+    permissions: set[str]
 
 
 class JWTValidator:
@@ -145,35 +146,39 @@ class JWTValidator:
         )
 
         scopes = set(payload.pop("scope", "").split())  # supposed to be space separated string of scopes
-        return JWTClaims(**payload, scopes=scopes)
+        permissions = set(payload.pop("permissions", []))  # permissions is a list
+        return JWTClaims(**payload, scopes=scopes, permissions=permissions)
 
-    def _check_scopes(self, required_scopes: set[str], jwt_claims: JWTClaims) -> JWTClaims:
-        if not (required_scopes & jwt_claims.scopes):
-            raise exceptions.JWTClaimsError("Insufficient scope permissions")
+    def _check_permissions(self, required_permissions: set[str], jwt_claims: JWTClaims) -> JWTClaims:
+        if not (required_permissions & jwt_claims.permissions):
+            raise exceptions.JWTClaimsError("Insufficient permission")
         return jwt_claims
 
-    def verify_jwt_and_check_scopes(
-        self, required_scopes: set[str]
+    def verify_jwt_and_check_perms(
+        self, required_permissions: set[str]
     ) -> Callable[[HTTPAuthorizationCredentials], Coroutine[Any, Any, UserContext]]:
-        """Wrap this method in Depends e.g. Depends(jwt_validator.verify_jwt_and_check_scopes({"scope1"}))"""
+        """Wrap this method in Depends e.g. Depends(jwt_validator.verify_jwt_and_check_perms({"perm1"}))"""
 
-        async def _verify_and_check_scopes(
+        async def _verify_and_check_permissions(
             auth: HTTPAuthorizationCredentials = Security(security),
         ) -> UserContext:
             token = auth.credentials
 
             try:
                 jwt_claims = await self._verify_jwt(token)
-                validated = self._check_scopes(required_scopes, jwt_claims)
+                validated = self._check_permissions(required_permissions, jwt_claims)
             except (exceptions.JWKError, exceptions.JWTClaimsError, exceptions.JWTError) as exc:
                 logger.debug(
                     f"jwks_url='{self._settings.jwks_url}' issuer='{self._settings.issuer}' audience='{self._settings.audience}'"  # noqa: 501
                 )
-                logger.error(f"Failure validating JWT claims. required_scopes={required_scopes}", exc_info=exc)
+                logger.error(
+                    f"Failure validating JWT claims. required_permissions={required_permissions}.",
+                    exc_info=exc,
+                )
                 raise HTTPException(status_code=HTTPStatus.UNAUTHORIZED, detail="Invalid token")
             return UserContext(subject_id=validated.sub, issuer_id=validated.iss)
 
-        return _verify_and_check_scopes
+        return _verify_and_check_permissions
 
 
 # NOTE: singleton

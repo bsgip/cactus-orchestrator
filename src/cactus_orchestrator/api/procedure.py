@@ -10,7 +10,7 @@ from fastapi_pagination import Page, paginate
 from fastapi_pagination.utils import disable_installed_extensions_check
 
 from cactus_orchestrator.api.run import map_run_to_run_response, select_user_run_group_or_raise
-from cactus_orchestrator.auth import AuthScopes, jwt_validator
+from cactus_orchestrator.auth import AuthPerm, jwt_validator
 from cactus_orchestrator.crud import select_group_runs_aggregated_by_procedure, select_group_runs_for_procedure
 from cactus_orchestrator.schema import (
     CSIPAusVersionResponse,
@@ -56,14 +56,14 @@ version_responses = map_versions()
 
 @router.get("/version", status_code=HTTPStatus.OK)
 async def get_versions_list_paginated(
-    _: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_scopes({AuthScopes.user_all}))],
+    _: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.user_all}))],
 ) -> Page[CSIPAusVersionResponse]:
     return paginate(version_responses)
 
 
 @router.get("/procedure", status_code=HTTPStatus.OK)
 async def get_test_procedure_list_paginated(
-    _: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_scopes({AuthScopes.user_all}))],
+    _: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.user_all}))],
 ) -> Page[TestProcedureResponse]:
     return paginate(test_procedure_responses)
 
@@ -71,7 +71,7 @@ async def get_test_procedure_list_paginated(
 @router.get("/procedure/{test_procedure_id}", status_code=HTTPStatus.OK)
 async def get_test_procedure_yaml(
     test_procedure_id: str,
-    _: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_scopes({AuthScopes.user_all}))],
+    _: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.user_all}))],
 ) -> Response:
 
     if test_procedure_id not in TestProcedureId:
@@ -97,7 +97,7 @@ async def get_test_procedure_yaml(
 
 @router.get("/procedure_runs/{run_group_id}", status_code=HTTPStatus.OK)
 async def get_procedure_run_summaries_for_group(
-    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_scopes({AuthScopes.user_all}))],
+    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.user_all}))],
     run_group_id: int,
 ) -> list[TestProcedureRunSummaryResponse]:
     """Will not serve summaries for test procedures outside the RunGroup csip_aus_version"""
@@ -125,7 +125,7 @@ async def get_procedure_run_summaries_for_group(
 
 @router.get("/procedure_runs/{run_group_id}/{test_procedure_id}", status_code=HTTPStatus.OK)
 async def get_runs_for_procedure_in_group(
-    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_scopes({AuthScopes.user_all}))],
+    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.user_all}))],
     run_group_id: int,
     test_procedure_id: str,
 ) -> Page[RunResponse]:

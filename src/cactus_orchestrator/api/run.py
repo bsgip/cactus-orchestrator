@@ -15,7 +15,7 @@ from fastapi_pagination import Page, paginate
 from sqlalchemy.exc import NoResultFound
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from cactus_orchestrator.auth import AuthScopes, jwt_validator
+from cactus_orchestrator.auth import AuthPerm, jwt_validator
 from cactus_orchestrator.crud import (
     ACTIVE_RUN_STATUSES,
     create_runartifact,
@@ -211,7 +211,7 @@ async def wait_for_runner_health(s: ClientSession) -> None:
 
 @router.get("/run_group", status_code=HTTPStatus.OK)
 async def get_groups_paginated(
-    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_scopes({AuthScopes.user_all}))],
+    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.user_all}))],
 ) -> Page[RunGroupResponse]:
     # get user
     user = await select_user_or_raise(db.session, user_context)
@@ -234,7 +234,7 @@ async def get_groups_paginated(
 @router.post("/run_group", status_code=HTTPStatus.CREATED)
 async def create_group(
     group_request: RunGroupRequest,
-    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_scopes({AuthScopes.user_all}))],
+    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.user_all}))],
 ) -> RunGroupResponse:
 
     # get user
@@ -257,7 +257,7 @@ async def create_group(
 async def update_group(
     run_group_id: int,
     group_request: RunGroupUpdateRequest,
-    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_scopes({AuthScopes.user_all}))],
+    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.user_all}))],
 ) -> RunGroupResponse:
 
     # get user
@@ -274,7 +274,7 @@ async def update_group(
 @router.delete("/run_group/{run_group_id}", status_code=HTTPStatus.NO_CONTENT)
 async def delete_group(
     run_group_id: int,
-    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_scopes({AuthScopes.user_all}))],
+    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.user_all}))],
 ) -> None:
 
     # get group
@@ -295,7 +295,7 @@ async def delete_group(
 @router.get("/run_group/{run_group_id}/run", status_code=HTTPStatus.OK)
 async def get_group_runs_paginated(
     run_group_id: int,
-    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_scopes({AuthScopes.user_all}))],
+    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.user_all}))],
     finalised: bool | None = Query(default=None),
     created_after: datetime = Query(default=None),
 ) -> Page[RunResponse]:
@@ -319,7 +319,7 @@ async def get_group_runs_paginated(
 async def spawn_teststack_and_init_run(
     test: InitRunRequest,
     run_group_id: int,
-    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_scopes({AuthScopes.user_all}))],
+    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.user_all}))],
     response: Response,
 ) -> InitRunResponse:
     """This endpoint sets up a test procedure as requested by client.
@@ -414,7 +414,7 @@ async def spawn_teststack_and_init_run(
 )
 async def start_run(
     run_id: int,
-    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_scopes({AuthScopes.user_all}))],
+    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.user_all}))],
 ) -> StartRunResponse:
     """Request a test run to progress to the execution phase."""
     # get user
@@ -522,7 +522,7 @@ async def finalise_run(
 @router.get("/run/{run_id}", status_code=HTTPStatus.OK)
 async def get_individual_run(
     run_id: int,
-    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_scopes({AuthScopes.user_all}))],
+    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.user_all}))],
 ) -> RunResponse:
 
     # get user
@@ -541,7 +541,7 @@ async def get_individual_run(
 @router.delete("/run/{run_id}", status_code=HTTPStatus.NO_CONTENT)
 async def delete_individual_run(
     run_id: int,
-    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_scopes({AuthScopes.user_all}))],
+    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.user_all}))],
 ) -> None:
 
     # get user
@@ -562,7 +562,7 @@ async def delete_individual_run(
 @router.post("/run/{run_id}/finalise", status_code=HTTPStatus.OK)
 async def finalise_run_and_teardown_teststack(
     run_id: int,
-    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_scopes({AuthScopes.user_all}))],
+    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.user_all}))],
 ) -> Response:
     """Returns 200 and a binary zip stream on success. Returns 201 if the finalize succeeded but there was an error
     fetching the finalized data. This call is idempotent - multiple calls will return the original values without
@@ -610,7 +610,7 @@ async def finalise_run_and_teardown_teststack(
 @router.get("/run/{run_id}/artifact", status_code=HTTPStatus.OK)
 async def get_run_artifact(
     run_id: int,
-    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_scopes({AuthScopes.user_all}))],
+    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.user_all}))],
 ) -> Response:
 
     # get user
@@ -635,7 +635,7 @@ async def get_run_artifact(
 @router.get("/run/{run_id}/status", status_code=HTTPStatus.OK)
 async def get_run_status(
     run_id: int,
-    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_scopes({AuthScopes.user_all}))],
+    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.user_all}))],
 ) -> RunnerStatus:
     """Can only fetch the status of a currently operating run.
 

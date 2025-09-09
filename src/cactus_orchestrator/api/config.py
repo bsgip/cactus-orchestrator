@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi_async_sqlalchemy import db
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from cactus_orchestrator.auth import AuthScopes, jwt_validator
+from cactus_orchestrator.auth import AuthPerm, jwt_validator
 from cactus_orchestrator.crud import insert_user, select_user
 from cactus_orchestrator.k8s.resource import generate_envoy_dcap_uri, generate_static_test_stack_id, get_resource_names
 from cactus_orchestrator.model import User
@@ -75,7 +75,7 @@ async def select_user_or_create(session: AsyncSession, user_context: UserContext
 
 @router.get("/config")
 async def fetch_existing_config(
-    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_scopes({AuthScopes.user_all}))],
+    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.user_all}))],
 ) -> UserConfigurationResponse:
     user = await select_user_or_create(db.session, user_context)
     result = user_to_config(user)
@@ -86,7 +86,7 @@ async def fetch_existing_config(
 @router.post("/config", status_code=HTTPStatus.CREATED)
 async def update_config(
     body: UserConfigurationRequest,
-    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_scopes({AuthScopes.user_all}))],
+    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.user_all}))],
 ) -> UserConfigurationResponse:
     user = await select_user_or_create(db.session, user_context)
 

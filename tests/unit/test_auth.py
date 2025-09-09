@@ -100,10 +100,11 @@ async def test_check_scopes_success(jwt_validator):
         exp=9999999999,
         iat=1700000000,
         scopes={"user:all"},
+        permissions={"user:all"},
     )
 
     # Act
-    res = jwt_validator._check_scopes({"user:all"}, claims)
+    res = jwt_validator._check_permissions({"user:all"}, claims)
 
     # Assert
     assert res == claims
@@ -118,6 +119,7 @@ async def test_check_scopes_fail(jwt_validator):
         exp=9999999999,
         iat=1700000000,
         scopes={"user:all"},
+        permissions={"user:all"},
     )
     with pytest.raises(exceptions.JWTClaimsError):
-        jwt_validator._check_scopes({"admin:all"}, claims)
+        jwt_validator._check_permissions({"admin:all"}, claims)
