@@ -27,6 +27,7 @@ class User(Base):
     user_id: Mapped[int] = mapped_column(name="id", primary_key=True, autoincrement=True)
     subject_id: Mapped[str] = mapped_column(String, nullable=False)  # JWT sub
     issuer_id: Mapped[str] = mapped_column(String, nullable=False)  # JWT iss
+    user_name: Mapped[str] = mapped_column(String, nullable=True)
 
     # NOTE: We assume these are unique, too big to enforce
     aggregator_certificate_p12_bundle: Mapped[bytes | None] = mapped_column(
