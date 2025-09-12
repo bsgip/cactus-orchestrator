@@ -201,6 +201,13 @@ def valid_jwt_no_user(mock_jwt_validator_jwks_cache, ca_cert_key_pair) -> str:
     return valid_token_for_user("user-dne", ca_key, kid, "user:all", ["user:all"])
 
 
+@pytest.fixture(scope="function")
+def valid_jwt_admin1(mock_jwt_validator_jwks_cache, ca_cert_key_pair) -> str:
+    _, ca_key = ca_cert_key_pair
+    kid = list(mock_jwt_validator_jwks_cache.keys())[0]
+    return valid_token_for_user("user1", ca_key, kid, "user:all", ["admin:all", "user:all"])
+
+
 @pytest.fixture
 def mock_k8s_tls_secret(ca_cert_key_pair):
     cert_pem, cert_key = ca_cert_key_pair

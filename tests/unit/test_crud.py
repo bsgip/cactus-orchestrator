@@ -18,15 +18,17 @@ from cactus_orchestrator.crud import (
     select_group_runs_aggregated_by_procedure,
     select_group_runs_for_procedure,
     select_nonfinalised_runs,
+    select_run_groups_by_user,
     select_run_group_counts_for_user,
     select_run_group_for_user,
     select_run_groups_for_user,
     select_runs_for_group,
+    update_run_run_status,
+    update_run_with_runartifact_and_finalise,
     select_user,
     select_user_run,
     select_user_run_with_artifact,
-    update_run_run_status,
-    update_run_with_runartifact_and_finalise,
+    select_users,
 )
 from cactus_orchestrator.model import Run, RunArtifact, RunGroup, RunStatus, User
 from cactus_orchestrator.schema import UserContext
@@ -164,6 +166,21 @@ async def test_select_run_group_counts_for_user(pg_base_config, run_group_ids, e
         result = await select_run_group_counts_for_user(session, run_group_ids)
         assert result == expected
         assert_dict_type(int, int, result, len(expected))
+
+
+@pytest.mark.asyncio
+async def test_select_run_groups_by_user(pg_base_config):
+    async with generate_async_session(pg_base_config) as session:
+        run_groups = await select_run_groups_by_user(session)
+        assert run_groups[1] == [1, 2]  # user_id=1
+        assert run_groups[2] == [3]  # user_id=2
+
+
+@pytest.mark.asyncio
+async def test_select_users(pg_base_config):
+    async with generate_async_session(pg_base_config) as session:
+        users = await select_users(session)
+        assert_list_type(User, users, 3)
 
 
 @pytest.mark.asyncio

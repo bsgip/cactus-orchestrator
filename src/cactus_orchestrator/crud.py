@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Sequence
+from collections import defaultdict
 
 from cactus_test_definitions.test_procedures import CSIPAusVersion, TestProcedureId
 from sqlalchemy import and_, delete, func, select, update
@@ -107,6 +108,20 @@ async def insert_run_for_run_group(
     session.add(run)
     await session.flush()
     return run.run_id
+
+
+async def select_run_groups_by_user(session: AsyncSession) -> dict[int, list[int]]:
+    stmt = select(RunGroup.run_group_id, RunGroup.user_id)
+    result = await session.execute(stmt)
+    run_groups_by_user = defaultdict(list)
+    for run_group_id, user_id in result.all():
+        run_groups_by_user[user_id].append(run_group_id)
+    return dict(run_groups_by_user)
+
+
+async def select_users(session: AsyncSession) -> Sequence[User]:
+    result = await session.execute(select(User))
+    return result.scalars().all()
 
 
 async def select_run_groups_for_user(session: AsyncSession, user_id: int) -> Sequence[RunGroup]:

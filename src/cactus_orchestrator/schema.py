@@ -62,6 +62,14 @@ class UserContext(BaseModel):
     issuer_id: str
 
 
+class UserWithRunGroupsResponse(BaseModel):
+    """Represents a user with all their associated run groups"""
+
+    user_id: int
+    name: str
+    run_groups: list[int]
+
+
 class CSIPAusVersionResponse(BaseModel):
     """Represents the various CSIP-Aus versions available for testing"""
 
