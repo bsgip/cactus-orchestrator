@@ -3,7 +3,8 @@ from http import HTTPStatus
 from importlib import resources
 from typing import Annotated
 
-from cactus_test_definitions import CSIPAusVersion, TestProcedureConfig, TestProcedureId, TestProcedures
+from cactus_test_definitions import CSIPAusVersion
+from cactus_test_definitions.client import TestProcedureConfig, TestProcedureId, TestProcedures
 from fastapi import APIRouter, Depends, HTTPException, Response
 from fastapi_async_sqlalchemy import db
 from fastapi_pagination import Page, paginate
@@ -81,7 +82,8 @@ async def get_test_procedure_yaml(
 
     try:
         file_name = (
-            resources.files("cactus_test_definitions.procedures") / f"{TestProcedureId(test_procedure_id).value}.yaml"
+            resources.files("cactus_test_definitions.client.procedures")
+            / f"{TestProcedureId(test_procedure_id).value}.yaml"
         )
         with resources.as_file(file_name) as yaml_file:
             with open(yaml_file, "r") as fp:

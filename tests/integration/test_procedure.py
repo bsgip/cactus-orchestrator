@@ -1,7 +1,8 @@
 from http import HTTPStatus
 
 import pytest
-from cactus_test_definitions import CSIPAusVersion, TestProcedureId
+from cactus_test_definitions import CSIPAusVersion
+from cactus_test_definitions.client import TestProcedureId
 
 from cactus_orchestrator.schema import TestProcedureRunSummaryResponse
 

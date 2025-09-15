@@ -13,7 +13,8 @@ from assertical.fake.generator import generate_class_instance
 from assertical.fixtures.postgres import generate_async_session
 from cactus_runner.client import RunnerClientException
 from cactus_runner.models import CriteriaEntry, InitResponseBody, RequestEntry, RunnerStatus, StepStatus
-from cactus_test_definitions import CSIPAusVersion, TestProcedureId
+from cactus_test_definitions import CSIPAusVersion
+from cactus_test_definitions.client import TestProcedureId
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization
 from sqlalchemy import func, select, update
