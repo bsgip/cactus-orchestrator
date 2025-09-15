@@ -12,7 +12,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509 import load_der_x509_certificate
 from fastapi import HTTPException, Security
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from jose import exceptions, jwt
+import jwt
 from pydantic import BaseModel, ConfigDict
 
 from cactus_orchestrator.cache import AsyncCache, ExpiringValue
@@ -34,12 +34,20 @@ class JWTClaims(BaseModel):
 
     # NOTE: we use sub + iss to identify a unique user
     sub: str  # subject
-    aud: str  # audience
+    aud: str | list[str]  # audience
     iss: str  # issuer
     exp: int  # expiry (unix epoch)
     iat: int | None  # issued at (unix epoch)
     scopes: set[str | None]  # set of strings or empty
     permissions: set[str]
+
+
+class JWKError(Exception):
+    pass
+
+
+class JWTClaimsError(Exception):
+    pass
 
 
 class JWTValidator:
@@ -67,7 +75,7 @@ class JWTValidator:
                 response.raise_for_status()
         except httpx.HTTPError as e:
             logger.error(f"Failed to update JWK cache. jwks_url={self._settings.jwks_url}", exc_info=e)
-            raise exceptions.JWKError(f"Failed to fetch JWKS: {str(e)}")
+            raise JWKError(f"Failed to fetch JWKS: {str(e)}")
 
         jwks = response.json().get("keys", [])
         now = datetime.now(tz=timezone.utc)
@@ -92,7 +100,7 @@ class JWTValidator:
             return new_cache
         else:
             logger.error(f"No RSAPublicKey found for jwks_url={self._settings.jwks_url}")
-            raise exceptions.JWKError("No RSAPublicKey found.")
+            raise JWKError("No RSAPublicKey found.")
 
     def _deserialise_rsa_jwk(self, jwk: dict[str, str]) -> rsa.RSAPublicKey:
         """We either get base64 url-encoded n/e and convert into an RSAPublicKey
@@ -109,7 +117,7 @@ class JWTValidator:
             cert = load_der_x509_certificate(cert_der)
             return cast(rsa.RSAPublicKey, cert.public_key())
 
-        raise exceptions.JWKError("JWK has invalid Form.")
+        raise JWKError("JWK has invalid Form.")
 
     def _extract_kid_from_jwt(self, token: str) -> str:
         """Extract 'kid' from the JWT header."""
@@ -124,7 +132,7 @@ class JWTValidator:
 
         if rsa_pkey is None:
             logger.error(f"No matching key-id '{kid}' found in JWKs.")
-            raise exceptions.JWKError(f"No matching key-id '{kid}' found in JWKs.")
+            raise JWKError(f"No matching key-id '{kid}' found in JWKs.")
 
         return cast(rsa.RSAPublicKey, serialization.load_pem_public_key(rsa_pkey.encode("utf-8")))
 
@@ -137,7 +145,7 @@ class JWTValidator:
 
         payload = jwt.decode(
             token,
-            public_key.public_bytes(
+            key=public_key.public_bytes(
                 encoding=serialization.Encoding.PEM, format=serialization.PublicFormat.SubjectPublicKeyInfo
             ),
             algorithms=["RS256"],
@@ -151,7 +159,7 @@ class JWTValidator:
 
     def _check_permissions(self, required_permissions: set[str], jwt_claims: JWTClaims) -> JWTClaims:
         if not (required_permissions & jwt_claims.permissions):
-            raise exceptions.JWTClaimsError("Insufficient permission")
+            raise JWTClaimsError("Insufficient permission")
         return jwt_claims
 
     def verify_jwt_and_check_perms(
@@ -167,7 +175,7 @@ class JWTValidator:
             try:
                 jwt_claims = await self._verify_jwt(token)
                 validated = self._check_permissions(required_permissions, jwt_claims)
-            except (exceptions.JWKError, exceptions.JWTClaimsError, exceptions.JWTError) as exc:
+            except Exception as exc:  # It's difficult to know what exception jwt.decode will raise so use catch-all
                 logger.debug(
                     f"jwks_url='{self._settings.jwks_url}' issuer='{self._settings.issuer}' audience='{self._settings.audience}'"  # noqa: 501
                 )
