@@ -12,7 +12,7 @@ from assertical.fixtures.postgres import generate_async_conn_str_from_connection
 from cryptography import x509
 from cryptography.hazmat.primitives import asymmetric, hashes, serialization
 from cryptography.x509.oid import NameOID
-from jose import jwt
+import jwt
 from kubernetes.client import V1Secret
 from psycopg import Connection
 from sqlalchemy import NullPool, create_engine

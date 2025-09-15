@@ -7,9 +7,9 @@ import pytest
 from assertical.fixtures.environment import environment_snapshot
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives.serialization import Encoding, NoEncryption, PrivateFormat, load_pem_public_key
-from jose import exceptions, jwt
+import jwt
 
-from cactus_orchestrator.auth import JWTClaims, JWTValidator
+from cactus_orchestrator.auth import JWTClaims, JWTValidator, JWTClaimsError
 
 TEST_JWT_AUDIENCE = "my-audience"
 TEST_JWT_ISSUER = "my.issuer"
@@ -121,5 +121,5 @@ async def test_check_scopes_fail(jwt_validator):
         scopes={"user:all"},
         permissions={"user:all"},
     )
-    with pytest.raises(exceptions.JWTClaimsError):
+    with pytest.raises(JWTClaimsError):
         jwt_validator._check_permissions({"admin:all"}, claims)
