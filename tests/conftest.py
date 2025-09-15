@@ -148,7 +148,7 @@ def patch_jwks_request(kid_and_jwks_stub):
         yield
 
 
-def valid_token_for_user(subject: str, ca_key, kid, scope) -> str:
+def valid_token_for_user(subject: str, ca_key, kid, scope, permissions) -> str:
     payload = {
         "sub": subject,
         "aud": os.environ["JWTAUTH_AUDIENCE"],
@@ -156,6 +156,7 @@ def valid_token_for_user(subject: str, ca_key, kid, scope) -> str:
         "exp": datetime.now(timezone.utc) + timedelta(hours=1),
         "iat": datetime.now(timezone.utc),
         "scope": scope,
+        "permissions": permissions,
     }
 
     token = jwt.encode(
@@ -176,28 +177,35 @@ def valid_token_for_user(subject: str, ca_key, kid, scope) -> str:
 def valid_jwt_user1(mock_jwt_validator_jwks_cache, ca_cert_key_pair) -> str:
     _, ca_key = ca_cert_key_pair
     kid = list(mock_jwt_validator_jwks_cache.keys())[0]
-    return valid_token_for_user("user1", ca_key, kid, "user:all")
+    return valid_token_for_user("user1", ca_key, kid, "user:all", ["user:all"])
 
 
 @pytest.fixture(scope="function")
 def valid_jwt_user2(mock_jwt_validator_jwks_cache, ca_cert_key_pair) -> str:
     _, ca_key = ca_cert_key_pair
     kid = list(mock_jwt_validator_jwks_cache.keys())[0]
-    return valid_token_for_user("user2", ca_key, kid, "user:all")
+    return valid_token_for_user("user2", ca_key, kid, "user:all", ["user:all"])
 
 
 @pytest.fixture(scope="function")
 def valid_jwt_user3(mock_jwt_validator_jwks_cache, ca_cert_key_pair) -> str:
     _, ca_key = ca_cert_key_pair
     kid = list(mock_jwt_validator_jwks_cache.keys())[0]
-    return valid_token_for_user("user3", ca_key, kid, "user:all")
+    return valid_token_for_user("user3", ca_key, kid, "user:all", ["user:all"])
 
 
 @pytest.fixture(scope="function")
 def valid_jwt_no_user(mock_jwt_validator_jwks_cache, ca_cert_key_pair) -> str:
     _, ca_key = ca_cert_key_pair
     kid = list(mock_jwt_validator_jwks_cache.keys())[0]
-    return valid_token_for_user("user-dne", ca_key, kid, "user:all")
+    return valid_token_for_user("user-dne", ca_key, kid, "user:all", ["user:all"])
+
+
+@pytest.fixture(scope="function")
+def valid_jwt_admin1(mock_jwt_validator_jwks_cache, ca_cert_key_pair) -> str:
+    _, ca_key = ca_cert_key_pair
+    kid = list(mock_jwt_validator_jwks_cache.keys())[0]
+    return valid_token_for_user("user1", ca_key, kid, "user:all", ["admin:all", "user:all"])
 
 
 @pytest.fixture

@@ -62,6 +62,14 @@ class UserContext(BaseModel):
     issuer_id: str
 
 
+class UserWithRunGroupsResponse(BaseModel):
+    """Represents a user with all their associated run groups"""
+
+    user_id: int
+    name: str
+    run_groups: list[int]
+
+
 class CSIPAusVersionResponse(BaseModel):
     """Represents the various CSIP-Aus versions available for testing"""
 
@@ -93,6 +101,10 @@ class UserConfigurationRequest(BaseModel):
     )  # If true - all test instances will share the same URI (limit to 1 test at a time). If None - no update
     is_device_cert: bool | None  # whether test instances will init using the device certificate. Otherwise use agg cert
     pen: int | None
+
+
+class UserUpdateRequest(BaseModel):
+    user_name: str
 
 
 class UserConfigurationResponse(BaseModel):

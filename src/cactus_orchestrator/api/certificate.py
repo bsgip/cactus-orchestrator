@@ -12,7 +12,7 @@ from fastapi.responses import Response
 from fastapi_async_sqlalchemy import db
 from pydantic import SecretStr
 
-from cactus_orchestrator.auth import AuthScopes, jwt_validator
+from cactus_orchestrator.auth import AuthPerm, jwt_validator
 from cactus_orchestrator.cache import AsyncCache, ExpiringValue
 from cactus_orchestrator.crud import insert_user, select_user
 from cactus_orchestrator.k8s.certificate.create import generate_client_p12
@@ -71,7 +71,7 @@ async def create_client_cert_binary(
     responses={HTTPStatus.OK: {"content": {MEDIA_TYPE_CA_CRT: {}}}},
 )
 async def fetch_current_certificate_authority_der(
-    _: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_scopes({AuthScopes.user_all}))],
+    _: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.user_all}))],
 ) -> Response:
 
     # fetch ca
@@ -92,7 +92,7 @@ async def fetch_current_certificate_authority_der(
     responses={HTTPStatus.OK: {"content": {MEDIA_TYPE_P12: {}}}},
 )
 async def fetch_client_certificate(
-    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_scopes({AuthScopes.user_all}))],
+    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.user_all}))],
     cert_type: str,
 ) -> Response:
     """Fetches the certificate as a p12/pfx encoded stream of bytes
@@ -143,7 +143,7 @@ async def fetch_client_certificate(
     responses={HTTPStatus.OK: {"content": {MEDIA_TYPE_PEM_CRT: {}}}},
 )
 async def fetch_client_pem(
-    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_scopes({AuthScopes.user_all}))],
+    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.user_all}))],
     cert_type: str,
     key: bool = False,
 ) -> Response:
@@ -228,7 +228,7 @@ async def fetch_client_pem(
     },
 )
 async def generate_client_certificate(
-    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_scopes({AuthScopes.user_all}))],
+    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.user_all}))],
     cert_type: str,
 ) -> Response:
     """Generates a user's certificate of cert_type. Replacing any existing certificate details
