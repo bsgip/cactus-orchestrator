@@ -103,6 +103,10 @@ class UserConfigurationRequest(BaseModel):
     pen: int | None
 
 
+class UserUpdateRequest(BaseModel):
+    user_name: str
+
+
 class UserConfigurationResponse(BaseModel):
     subscription_domain: str  # What domain will outgoing notifications be scoped to? Empty string = no value configured
     is_static_uri: bool  # If true - all test instances will share the same URI (limit to 1 test at a time).

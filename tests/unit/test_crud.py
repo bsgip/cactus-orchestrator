@@ -23,12 +23,13 @@ from cactus_orchestrator.crud import (
     select_run_group_for_user,
     select_run_groups_for_user,
     select_runs_for_group,
-    update_run_run_status,
-    update_run_with_runartifact_and_finalise,
     select_user,
     select_user_run,
     select_user_run_with_artifact,
     select_users,
+    update_run_run_status,
+    update_run_with_runartifact_and_finalise,
+    update_user_name,
 )
 from cactus_orchestrator.model import Run, RunArtifact, RunGroup, RunStatus, User
 from cactus_orchestrator.schema import UserContext
@@ -181,6 +182,25 @@ async def test_select_users(pg_base_config):
     async with generate_async_session(pg_base_config) as session:
         users = await select_users(session)
         assert_list_type(User, users, 3)
+
+
+@pytest.mark.parametrize(
+    "user_id, user_name",
+    [(1, "Foo Bar"), (2, "example@example.com"), (1, "Mr. Mister")],
+)
+@pytest.mark.asyncio
+async def test_update_user_name(pg_base_config, user_id: int, user_name: str):
+    """Test updating user name of user"""
+
+    # Act
+    async with generate_async_session(pg_base_config) as session:
+        await update_user_name(session, user_id, user_name)
+        await session.commit()
+
+    # Assert
+    async with generate_async_session(pg_base_config) as session:
+        updated_user = (await session.execute(select(User).where(User.user_id == user_id))).scalar_one()
+        assert updated_user.user_name == user_name
 
 
 @pytest.mark.asyncio

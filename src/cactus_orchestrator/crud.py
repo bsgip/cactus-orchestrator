@@ -129,6 +129,11 @@ async def select_run_groups_for_user(session: AsyncSession, user_id: int) -> Seq
     return resp.scalars().all()
 
 
+async def update_user_name(session: AsyncSession, user_id: int, user_name: str) -> None:
+    stmt = update(User).where(User.user_id == user_id).values(user_name=user_name)
+    await session.execute(stmt)
+
+
 async def select_run_group_counts_for_user(session: AsyncSession, run_group_ids: list[int]) -> dict[int, int]:
     """Returns a dictionary of run counts, keyed by run group id for all RunGroups owned by user_id."""
     resp = await session.execute(
