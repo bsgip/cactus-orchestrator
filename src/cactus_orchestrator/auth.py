@@ -135,6 +135,7 @@ class JWTValidator:
 
         public_key = await self.get_pubkey(kid)
 
+        logger.error(f"TOKEN {type(token)}: {token}")  # BACON
         payload = jwt.decode(
             token,
             public_key.public_bytes(
@@ -145,8 +146,12 @@ class JWTValidator:
             issuer=self._settings.issuer,
         )
 
+        logger.error(f"BEFORE PAYLOAD {type(payload)}: {payload}")  # BACON
         scopes = set(payload.pop("scope", "").split())  # supposed to be space separated string of scopes
         permissions = set(payload.pop("permissions", []))  # permissions is a list
+        logger.error(f"AFTER PAYLOAD {type(payload)}: {payload}")  # BACON
+        logger.error(f"SCOPES {type(scopes)}: {scopes}")  # BACON
+        logger.error(f"PERMISSIONS {type(permissions)}: {permissions}")  # BACON
         return JWTClaims(**payload, scopes=scopes, permissions=permissions)
 
     def _check_permissions(self, required_permissions: set[str], jwt_claims: JWTClaims) -> JWTClaims:
