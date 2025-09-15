@@ -5,7 +5,7 @@ from assertical.asserts.time import assert_nowish
 from assertical.asserts.type import assert_dict_type, assert_list_type
 from assertical.fixtures.postgres import generate_async_session
 from cactus_test_definitions import CSIPAusVersion
-from cactus_test_definitions.test_procedures import TestProcedureId
+from cactus_test_definitions.client import TestProcedureId
 from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError, NoResultFound
 
