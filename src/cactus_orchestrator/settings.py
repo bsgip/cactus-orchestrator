@@ -48,6 +48,7 @@ class CactusOrchestratorSettings(BaseSettings):
     test_execution_namespace: str = "test-execution"
     test_execution_ingress_name: str = "test-execution-ingress"
     teststack_service_port: int = 80
+    test_execution_comms_timeout_seconds: int = 120  # The default timeout to use when making requests to the test stack
 
     # teststack templates
     teststack_templates_namespace: str = "teststack-templates"
