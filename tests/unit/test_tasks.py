@@ -81,7 +81,7 @@ async def test_teardown_teststack_task(
     mock_select_nonfinalised_runs.return_value = mock_runs
 
     # Act
-    await generate_idleteardowntask(1, 1, 1)()
+    await generate_idleteardowntask(1, 1, 1, 100)()
 
     # Assert
     if expect_teardown:

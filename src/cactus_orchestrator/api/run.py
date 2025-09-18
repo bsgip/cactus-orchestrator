@@ -55,7 +55,7 @@ from cactus_orchestrator.schema import (
     StartRunResponse,
     UserContext,
 )
-from cactus_orchestrator.settings import CactusOrchestratorException
+from cactus_orchestrator.settings import CactusOrchestratorException, get_current_settings
 
 logger = logging.getLogger(__name__)
 
@@ -364,6 +364,8 @@ async def spawn_teststack_and_init_run(
         db.session, run_group_id, teststack_id, test.test_procedure_id, RunStatus.provisioning, user.is_device_cert
     )
 
+    settings = get_current_settings()
+
     try:
         # duplicate resources
         await clone_statefulset(template_resource_names, run_resource_names)
@@ -374,7 +376,10 @@ async def spawn_teststack_and_init_run(
 
         # inject initial state with either the device or aggregator cert data
         pem_encoded_cert = client_cert.public_bytes(serialization.Encoding.PEM).decode("utf-8")
-        async with ClientSession(base_url=run_resource_names.runner_base_url, timeout=ClientTimeout(30)) as s:
+        async with ClientSession(
+            base_url=run_resource_names.runner_base_url,
+            timeout=ClientTimeout(settings.test_execution_comms_timeout_seconds),
+        ) as s:
 
             await wait_for_runner_health(s)
 
@@ -431,7 +436,11 @@ async def start_run(
     run_resource_names = get_resource_names(run.teststack_id)
 
     # request runner starts run
-    async with ClientSession(base_url=run_resource_names.runner_base_url, timeout=ClientTimeout(30)) as s:
+    settings = get_current_settings()
+    async with ClientSession(
+        base_url=run_resource_names.runner_base_url,
+        timeout=ClientTimeout(settings.test_execution_comms_timeout_seconds),
+    ) as s:
         try:
             await RunnerClient.start(s)
         except RunnerClientException as exc:
@@ -481,10 +490,10 @@ def is_all_criteria_met(runner_status: RunnerStatus | None) -> bool | None:
 
 
 async def finalise_run(
-    run: Run, url: str, session: AsyncSession, run_status: RunStatus, finalised_at: datetime
+    run: Run, url: str, session: AsyncSession, run_status: RunStatus, finalised_at: datetime, comms_timeout_seconds: int
 ) -> RunArtifact | None:
 
-    async with ClientSession(base_url=url, timeout=ClientTimeout(30)) as s:
+    async with ClientSession(base_url=url, timeout=ClientTimeout(comms_timeout_seconds)) as s:
 
         # We need our final status to evaluate whether all criteria are passing
         # But we don't want to block the finalisation if there's an issue fetching it
@@ -579,6 +588,8 @@ async def finalise_run_and_teardown_teststack(
 
     # Don't attempt to cleanup / teardown if this has already been finalised
     if run.run_status in ACTIVE_RUN_STATUSES:
+        settings = get_current_settings()
+
         # get resource names
         run_resource_names = get_resource_names(run.teststack_id)
 
@@ -589,6 +600,7 @@ async def finalise_run_and_teardown_teststack(
             db.session,
             RunStatus.finalised_by_client,
             datetime.now(timezone.utc),
+            settings.test_execution_comms_timeout_seconds,
         )
         await db.session.commit()
 
@@ -657,7 +669,11 @@ async def get_run_status(
 
     # Connect to the pod and talk to the runner's "status" endpoint. Forward the result along
     run_resource_names = get_resource_names(run.teststack_id)
-    async with ClientSession(base_url=run_resource_names.runner_base_url, timeout=ClientTimeout(30)) as s:
+    settings = get_current_settings()
+    async with ClientSession(
+        base_url=run_resource_names.runner_base_url,
+        timeout=ClientTimeout(settings.test_execution_comms_timeout_seconds),
+    ) as s:
         try:
             return await RunnerClient.status(s)
         except Exception as exc:

@@ -21,8 +21,8 @@ from cactus_orchestrator.settings import CactusOrchestratorSettings
 logger = logging.getLogger(__name__)
 
 
-async def is_idle(now: datetime, url: str, idle_seconds: int) -> bool:
-    async with ClientSession(base_url=url, timeout=ClientTimeout(30)) as s:
+async def is_idle(now: datetime, url: str, idle_seconds: int, comms_timeout_seconds: int) -> bool:
+    async with ClientSession(base_url=url, timeout=ClientTimeout(comms_timeout_seconds)) as s:
         details = await RunnerClient.last_interaction(s)
 
     if (now.timestamp() - details.timestamp.timestamp()) > idle_seconds:
@@ -40,6 +40,7 @@ async def teardown_idle_teststack(
     session: AsyncSession,
     teardowntask_max_lifetime_seconds: int,
     teardowntask_idle_timeout_seconds: int,
+    comms_timeout_seconds: int,
 ) -> None:
     runs = await select_nonfinalised_runs(session)
 
@@ -49,7 +50,9 @@ async def teardown_idle_teststack(
 
         idle = False
         try:
-            idle = await is_idle(now, run_resource_names.runner_base_url, teardowntask_idle_timeout_seconds)
+            idle = await is_idle(
+                now, run_resource_names.runner_base_url, teardowntask_idle_timeout_seconds, comms_timeout_seconds
+            )
         except Exception as exc:
             logger.warning("Call to cactus-runner last request endpoint failed.")
             logger.debug("Exception", exc_info=exc)
@@ -58,7 +61,12 @@ async def teardown_idle_teststack(
             logger.info(f"(Idle/Overtime Task) Shutting down {run_resource_names.service}")
             try:
                 await finalise_run(
-                    run, run_resource_names.runner_base_url, session, RunStatus.finalised_by_timeout, now
+                    run,
+                    run_resource_names.runner_base_url,
+                    session,
+                    RunStatus.finalised_by_timeout,
+                    now,
+                    comms_timeout_seconds,
                 )
                 await session.commit()
                 await teardown_teststack(run_resource_names)
@@ -84,13 +92,17 @@ def generate_idleteardowntask(
     idleteardowntask_repeat_every_seconds: int,
     idleteardowntask_max_lifetime_seconds: int,
     idleteardowntask_idle_timeout_seconds: int,
+    comms_timeout_seconds: int,
 ) -> Callable[[], Coroutine[Any, Any, None]]:
     @repeat_every(seconds=idleteardowntask_repeat_every_seconds)
     async def idleteardowntask() -> None:
         """Task that monitors live teststacks and triggers teardown based on timeout rules."""
         async with db():
             await teardown_idle_teststack(
-                db.session, idleteardowntask_max_lifetime_seconds, idleteardowntask_idle_timeout_seconds
+                db.session,
+                idleteardowntask_max_lifetime_seconds,
+                idleteardowntask_idle_timeout_seconds,
+                comms_timeout_seconds,
             )
 
     return idleteardowntask
@@ -109,6 +121,7 @@ async def lifespan(app: FastAPI, settings: CactusOrchestratorSettings) -> AsyncI
             settings.idleteardowntask_repeat_every_seconds,
             settings.idleteardowntask_max_lifetime_seconds,
             settings.idleteardowntask_idle_timeout_seconds,
+            settings.test_execution_comms_timeout_seconds,
         )
         _task_references.add(asyncio.create_task(idleteardowntask()))
 

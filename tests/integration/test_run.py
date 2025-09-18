@@ -865,11 +865,14 @@ async def test_finalise_run_creates_run_artifact_and_updates_run(
     k8s_mock.status.return_value = runner_status
     k8s_mock.finalize.return_value = finalize_data
     finalise_time = datetime(2023, 4, 5, tzinfo=timezone.utc)
+    timeout_seconds = 10
 
     # Act
     async with generate_async_session(pg_base_config) as session:
         run = (await session.execute(select(Run).where(Run.run_id == 1))).scalar_one()
-        result = await finalise_run(run, "http://mockurl", session, RunStatus.finalised_by_client, finalise_time)
+        result = await finalise_run(
+            run, "http://mockurl", session, RunStatus.finalised_by_client, finalise_time, timeout_seconds
+        )
         assert isinstance(result, RunArtifact)
 
     # Assert
@@ -900,11 +903,14 @@ async def test_finalise_run_handles_runner_finalize_failure(
     k8s_mock.status.return_value = runner_status
     k8s_mock.finalize.side_effect = Exception("mock exception")
     finalise_time = datetime(2023, 4, 5, tzinfo=timezone.utc)
+    timeout_seconds = 10
 
     # Act
     async with generate_async_session(pg_base_config) as session:
         run = (await session.execute(select(Run).where(Run.run_id == 1))).scalar_one()
-        result = await finalise_run(run, "http://mockurl", session, RunStatus.finalised_by_client, finalise_time)
+        result = await finalise_run(
+            run, "http://mockurl", session, RunStatus.finalised_by_client, finalise_time, timeout_seconds
+        )
         assert result is None
 
     # Assert
@@ -933,11 +939,14 @@ async def test_finalise_run_handles_runner_status_failure(
     k8s_mock.status.side_effect = Exception("my mock exception")
     k8s_mock.finalize.return_value = finalize_data
     finalise_time = datetime(2023, 4, 5, tzinfo=timezone.utc)
+    timeout_seconds = 10
 
     # Act
     async with generate_async_session(pg_base_config) as session:
         run = (await session.execute(select(Run).where(Run.run_id == 1))).scalar_one()
-        result = await finalise_run(run, "http://mockurl", session, RunStatus.finalised_by_client, finalise_time)
+        result = await finalise_run(
+            run, "http://mockurl", session, RunStatus.finalised_by_client, finalise_time, timeout_seconds
+        )
         assert isinstance(result, RunArtifact)
 
     # Assert
