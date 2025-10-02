@@ -32,7 +32,7 @@ from cactus_orchestrator.crud import (
     update_user_name,
 )
 from cactus_orchestrator.model import Run, RunArtifact, RunGroup, RunStatus, User
-from cactus_orchestrator.schema import UserContext
+from cactus_orchestrator.auth import UserContext
 
 
 @pytest.mark.asyncio

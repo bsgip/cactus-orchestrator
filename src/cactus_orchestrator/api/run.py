@@ -15,7 +15,7 @@ from fastapi_pagination import Page, paginate
 from sqlalchemy.exc import NoResultFound
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from cactus_orchestrator.auth import AuthPerm, jwt_validator
+from cactus_orchestrator.auth import AuthPerm, jwt_validator, UserContext
 from cactus_orchestrator.crud import (
     ACTIVE_RUN_STATUSES,
     create_runartifact,
@@ -28,6 +28,7 @@ from cactus_orchestrator.crud import (
     select_run_groups_for_user,
     select_runs_for_group,
     select_user,
+    select_user_from_run_group,
     select_user_run,
     select_user_run_with_artifact,
     update_run_run_status,
@@ -53,7 +54,6 @@ from cactus_orchestrator.schema import (
     RunResponse,
     RunStatusResponse,
     StartRunResponse,
-    UserContext,
 )
 from cactus_orchestrator.settings import CactusOrchestratorException, get_current_settings
 

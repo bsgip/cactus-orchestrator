@@ -2,9 +2,9 @@ from http import HTTPStatus
 import logging
 from typing import Annotated
 from cactus_orchestrator.crud import select_run_groups_by_user, select_users
-from cactus_orchestrator.schema import UserContext, UserWithRunGroupsResponse
+from cactus_orchestrator.schema import UserWithRunGroupsResponse
 from fastapi_pagination import Page, paginate
-from cactus_orchestrator.auth import AuthPerm, jwt_validator
+from cactus_orchestrator.auth import AuthPerm, jwt_validator, UserContext
 from fastapi_async_sqlalchemy import db
 from fastapi import APIRouter, Depends
 

@@ -2,8 +2,8 @@ from http import HTTPStatus
 import logging
 from typing import Annotated
 from cactus_orchestrator.crud import select_user, update_user_name
-from cactus_orchestrator.schema import UserContext, UserUpdateRequest
-from cactus_orchestrator.auth import AuthPerm, jwt_validator
+from cactus_orchestrator.schema import UserUpdateRequest
+from cactus_orchestrator.auth import AuthPerm, jwt_validator, UserContext
 from fastapi_async_sqlalchemy import db
 from fastapi import APIRouter, Depends
 from fastapi import HTTPException

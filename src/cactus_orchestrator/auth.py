@@ -16,7 +16,6 @@ import jwt
 from pydantic import BaseModel, ConfigDict
 
 from cactus_orchestrator.cache import AsyncCache, ExpiringValue
-from cactus_orchestrator.schema import UserContext
 from cactus_orchestrator.settings import JWTAuthSettings
 
 logger = logging.getLogger(__name__)
@@ -27,6 +26,14 @@ security = HTTPBearer()
 class AuthPerm(StrEnum):
     user_all = "user:all"
     admin_all = "admin:all"
+
+
+class UserContext(BaseModel):
+    """Model for validated user context"""
+
+    subject_id: str
+    issuer_id: str
+    permissions: list[AuthPerm] = [AuthPerm.user_all]
 
 
 class JWTClaims(BaseModel):
@@ -175,6 +182,7 @@ class JWTValidator:
             try:
                 jwt_claims = await self._verify_jwt(token)
                 validated = self._check_permissions(required_permissions, jwt_claims)
+                permissions = [AuthPerm(p) for p in validated.permissions]
             except Exception as exc:  # It's difficult to know what exception jwt.decode will raise so use catch-all
                 logger.debug(
                     f"jwks_url='{self._settings.jwks_url}' issuer='{self._settings.issuer}' audience='{self._settings.audience}'"  # noqa: 501
@@ -184,7 +192,7 @@ class JWTValidator:
                     exc_info=exc,
                 )
                 raise HTTPException(status_code=HTTPStatus.UNAUTHORIZED, detail="Invalid token")
-            return UserContext(subject_id=validated.sub, issuer_id=validated.iss)
+            return UserContext(subject_id=validated.sub, issuer_id=validated.iss, permissions=permissions)
 
         return _verify_and_check_permissions
 
