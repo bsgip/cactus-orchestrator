@@ -91,6 +91,53 @@ async def select_user(
     return res.scalar_one_or_none()
 
 
+async def select_user_from_run_group(
+    session: AsyncSession,
+    run_group_id: int,
+    with_aggregator_der: bool = False,
+    with_aggregator_p12: bool = False,
+    with_aggregator_pem_cert: bool = False,
+    with_aggregator_pem_key: bool = False,
+    with_device_der: bool = False,
+    with_device_p12: bool = False,
+    with_device_pem_cert: bool = False,
+    with_device_pem_key: bool = False,
+) -> User | None:
+
+    stmt = select(RunGroup).where(RunGroup.run_group_id == run_group_id)
+    res = await session.execute(stmt)
+    run_group = res.scalar_one_or_none()
+
+    if not run_group:
+        return None
+
+    stmt = select(User).where(User.user_id == run_group.user_id)
+
+    options_list = []
+    if with_aggregator_p12:
+        options_list.append(undefer(User.aggregator_certificate_p12_bundle))
+    if with_aggregator_der:
+        options_list.append(undefer(User.aggregator_certificate_x509_der))
+    if with_aggregator_pem_cert:
+        options_list.append(undefer(User.aggregator_certificate_pem))
+    if with_aggregator_pem_key:
+        options_list.append(undefer(User.aggregator_certificate_pem_key))
+    if with_device_p12:
+        options_list.append(undefer(User.device_certificate_p12_bundle))
+    if with_device_der:
+        options_list.append(undefer(User.device_certificate_x509_der))
+    if with_device_pem_cert:
+        options_list.append(undefer(User.device_certificate_pem))
+    if with_device_pem_key:
+        options_list.append(undefer(User.device_certificate_pem_key))
+
+    if options_list:
+        stmt = stmt.options(*options_list)
+
+    res = await session.execute(stmt)
+    return res.scalar_one_or_none()
+
+
 async def insert_run_for_run_group(
     session: AsyncSession,
     run_group_id: int,

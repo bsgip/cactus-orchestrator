@@ -24,6 +24,7 @@ from cactus_orchestrator.crud import (
     select_run_groups_for_user,
     select_runs_for_group,
     select_user,
+    select_user_from_run_group,
     select_user_run,
     select_user_run_with_artifact,
     select_users,
@@ -182,6 +183,14 @@ async def test_select_users(pg_base_config):
     async with generate_async_session(pg_base_config) as session:
         users = await select_users(session)
         assert_list_type(User, users, 3)
+
+
+@pytest.mark.parametrize("run_group_id,user_id", [(1, 1), (2, 1), (3, 2), (4, None)])
+@pytest.mark.asyncio
+async def test_select_user_from_run_group(pg_base_config, run_group_id, user_id):
+    async with generate_async_session(pg_base_config) as session:
+        user = await select_user_from_run_group(session=session, run_group_id=run_group_id)
+        assert user.user_id if user else None == user_id
 
 
 @pytest.mark.parametrize(
