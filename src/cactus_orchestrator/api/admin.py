@@ -1,12 +1,26 @@
-from http import HTTPStatus
 import logging
+from http import HTTPStatus
 from typing import Annotated
-from cactus_orchestrator.crud import select_run_groups_by_user, select_users
-from cactus_orchestrator.schema import UserWithRunGroupsResponse
-from fastapi_pagination import Page, paginate
-from cactus_orchestrator.auth import AuthPerm, jwt_validator, UserContext
-from fastapi_async_sqlalchemy import db
+
 from fastapi import APIRouter, Depends
+from fastapi.exceptions import HTTPException
+from fastapi_async_sqlalchemy import db
+from fastapi_pagination import Page, paginate
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from cactus_orchestrator.api.procedure import test_procedure_definitions
+from cactus_orchestrator.api.run import (
+    map_group_to_group_response,
+    select_run_group_counts_for_user,
+    select_run_groups_for_user,
+    select_user_from_run_group,
+    select_user_or_raise,
+    select_user_run_group_or_raise,
+)
+from cactus_orchestrator.auth import AuthPerm, UserContext, jwt_validator
+from cactus_orchestrator.crud import select_group_runs_aggregated_by_procedure, select_run_groups_by_user, select_users
+from cactus_orchestrator.model import User
+from cactus_orchestrator.schema import RunGroupResponse, TestProcedureRunSummaryResponse, UserWithRunGroupsResponse
 
 logger = logging.getLogger(__name__)
 
@@ -14,8 +28,73 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-@router.get("/users", status_code=HTTPStatus.OK)
-async def get_groups_paginated(
+async def select_user_with_run_group_or_raise(
+    session: AsyncSession,
+    run_group_id: int,
+    with_aggregator_der: bool = False,
+    with_aggregator_p12: bool = False,
+    with_aggregator_pem_cert: bool = False,
+    with_aggregator_pem_key: bool = False,
+    with_device_der: bool = False,
+    with_device_p12: bool = False,
+    with_device_pem_cert: bool = False,
+    with_device_pem_key: bool = False,
+) -> User:
+
+    user = await select_user_from_run_group(
+        session=session,
+        run_group_id=run_group_id,
+        with_aggregator_der=with_aggregator_der,
+        with_aggregator_p12=with_aggregator_p12,
+        with_aggregator_pem_cert=with_aggregator_pem_cert,
+        with_aggregator_pem_key=with_aggregator_pem_key,
+        with_device_der=with_device_der,
+        with_device_p12=with_device_p12,
+        with_device_pem_cert=with_device_pem_cert,
+        with_device_pem_key=with_device_pem_key,
+    )
+
+    if user is None:
+        logger.error(f"Cannot find user associated with run group {run_group_id}")
+        raise HTTPException(status_code=HTTPStatus.FORBIDDEN, detail=f"Cannot find run_group {run_group_id}.")
+    return user
+
+
+async def assume_user_context_from_run_group(
+    session: AsyncSession, user_context: UserContext, run_group_id: int
+) -> tuple[UserContext, UserContext]:
+    """Assumes user context of user with run group given by run_group_id.
+
+    User must have admin permissions to assume user context of another user.
+
+    Args:
+        session (AsyncSession): A async database session
+        user_context: The user context
+        run_group_id: The run group id belonging to the user who user context we will assume.
+
+    Returns:
+        A tuple of the assumed user context (with run group 'run_group_id') and the original user context (passed in to function).
+        If the user is not an admin, the returned user contexts are the same i.e. the one passed into the function.
+
+    Raises:
+        HTTPException if no user can be found associated with the 'run_group_id'.
+    """
+
+    # user is not an admin so can't assume the user context of a different user
+    if AuthPerm.admin_all not in user_context.permissions:
+        return user_context, user_context
+
+    user = await select_user_with_run_group_or_raise(
+        session=session,
+        run_group_id=run_group_id,
+    )
+
+    assumed_user_context = UserContext(subject_id=user.subject_id, issuer_id=user.issuer_id)
+    return assumed_user_context, user_context
+
+
+@router.get("/admin/users", status_code=HTTPStatus.OK)
+async def admin_get_users(
     _: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.admin_all}))],
 ) -> Page[UserWithRunGroupsResponse]:
     run_groups_by_user = await select_run_groups_by_user(db.session)
@@ -30,4 +109,65 @@ async def get_groups_paginated(
         for user in users
     ]
 
+    return paginate(resp)
+
+
+@router.get("/admin/procedure_runs/{run_group_id}", status_code=HTTPStatus.OK)
+async def admin_get_procedure_run_summaries_for_group(
+    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.user_all}))],
+    run_group_id: int,
+) -> list[TestProcedureRunSummaryResponse]:
+    """Will not serve summaries for test procedures outside the RunGroup csip_aus_version"""
+    # Check permissions
+    user_context, _ = await assume_user_context_from_run_group(
+        session=db.session, user_context=user_context, run_group_id=run_group_id
+    )
+    (_, run_group) = await select_user_run_group_or_raise(db.session, user_context, run_group_id)
+
+    # Enumerate our aggregated summaries from the DB and combine them with additional metadata from the YAML definitions
+    results: list[TestProcedureRunSummaryResponse] = []
+    for agg in await select_group_runs_aggregated_by_procedure(db.session, run_group_id):
+        definition = test_procedure_definitions.test_procedures.get(agg.test_procedure_id.value, None)
+        if definition and (run_group.csip_aus_version in definition.target_versions):
+            results.append(
+                TestProcedureRunSummaryResponse(
+                    test_procedure_id=agg.test_procedure_id,
+                    description=definition.description,
+                    category=definition.category,
+                    classes=definition.classes,
+                    run_count=agg.count,
+                    latest_all_criteria_met=agg.latest_all_criteria_met,
+                )
+            )
+
+    return results
+
+
+@router.get("/admin/run_group/{run_group_id}", status_code=HTTPStatus.OK)
+async def admin_get_groups_paginated(
+    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.user_all}))],
+    run_group_id: int,
+) -> Page[RunGroupResponse]:
+    """Gets all the run groups for a user which owns 'run_group_id'.
+
+    This is the admin equivalent to 'get_groups_paginated'.
+    """
+    # get user
+    user_context, _ = await assume_user_context_from_run_group(
+        session=db.session, user_context=user_context, run_group_id=run_group_id
+    )
+    user = await select_user_or_raise(db.session, user_context)
+
+    # get runs
+    run_groups = await select_run_groups_for_user(db.session, user.user_id)
+    run_group_counts = await select_run_group_counts_for_user(db.session, [r.run_group_id for r in run_groups])
+
+    if run_groups:
+        resp = [
+            map_group_to_group_response(group, run_group_counts.get(group.run_group_id, 0))
+            for group in run_groups
+            if group
+        ]
+    else:
+        resp = []
     return paginate(resp)

@@ -1,8 +1,8 @@
 from http import HTTPStatus
 
 import pytest
-
 from assertical.fixtures.postgres import generate_async_session
+
 from cactus_orchestrator.schema import UserWithRunGroupsResponse
 
 
@@ -14,7 +14,7 @@ async def test_get_test_user_list_populated(pg_base_config, client, valid_jwt_ad
         await session.commit()
 
     # Act
-    res = await client.get("/users", headers={"Authorization": f"Bearer {valid_jwt_admin1}"})
+    res = await client.get("/admin/users", headers={"Authorization": f"Bearer {valid_jwt_admin1}"})
 
     # Assert
     assert res.status_code == HTTPStatus.OK
@@ -30,7 +30,7 @@ async def test_get_test_user_list_not_authorised(client, valid_jwt_user1):
     """Verifies that jwt must have admin privileges to access /users admin endpoint"""
 
     # Act
-    res = await client.get("/users", headers={"Authorization": f"Bearer {valid_jwt_user1}"})
+    res = await client.get("/admin/users", headers={"Authorization": f"Bearer {valid_jwt_user1}"})
 
     # Assert
     assert res.status_code == HTTPStatus.UNAUTHORIZED

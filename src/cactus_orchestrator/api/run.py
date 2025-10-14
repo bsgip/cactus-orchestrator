@@ -170,32 +170,18 @@ async def select_user_run_group_or_raise(
     with_device_pem_cert: bool = False,
     with_device_pem_key: bool = False,
 ) -> tuple[User, RunGroup]:
-    if AuthPerm.admin_all in user_context.permissions:
-        user = await select_user_with_run_group_or_raise(
-            session=session,
-            run_group_id=run_group_id,
-            with_aggregator_der=with_aggregator_der,
-            with_aggregator_p12=with_aggregator_p12,
-            with_aggregator_pem_cert=with_aggregator_pem_cert,
-            with_aggregator_pem_key=with_aggregator_pem_key,
-            with_device_der=with_device_der,
-            with_device_p12=with_device_p12,
-            with_device_pem_cert=with_device_pem_cert,
-            with_device_pem_key=with_device_pem_key,
-        )
-    else:
-        user = await select_user_or_raise(
-            session,
-            user_context,
-            with_aggregator_der=with_aggregator_der,
-            with_aggregator_p12=with_aggregator_p12,
-            with_aggregator_pem_cert=with_aggregator_pem_cert,
-            with_aggregator_pem_key=with_aggregator_pem_key,
-            with_device_der=with_device_der,
-            with_device_p12=with_device_p12,
-            with_device_pem_cert=with_device_pem_cert,
-            with_device_pem_key=with_device_pem_key,
-        )
+    user = await select_user_or_raise(
+        session,
+        user_context,
+        with_aggregator_der=with_aggregator_der,
+        with_aggregator_p12=with_aggregator_p12,
+        with_aggregator_pem_cert=with_aggregator_pem_cert,
+        with_aggregator_pem_key=with_aggregator_pem_key,
+        with_device_der=with_device_der,
+        with_device_p12=with_device_p12,
+        with_device_pem_cert=with_device_pem_cert,
+        with_device_pem_key=with_device_pem_key,
+    )
 
     run_group = await select_run_group_for_user(session, user.user_id, run_group_id)
     if run_group is None:
