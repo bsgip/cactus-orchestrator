@@ -1,7 +1,7 @@
+from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Sequence
-from collections import defaultdict
 
 from cactus_test_definitions import CSIPAusVersion
 from cactus_test_definitions.client import TestProcedureId
@@ -9,8 +9,8 @@ from sqlalchemy import and_, delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload, selectinload, undefer
 
-from cactus_orchestrator.model import Run, RunArtifact, RunGroup, RunStatus, User
 from cactus_orchestrator.auth import UserContext
+from cactus_orchestrator.model import Run, RunArtifact, RunGroup, RunStatus, User
 
 ACTIVE_RUN_STATUSES: set[RunStatus] = {RunStatus.provisioning, RunStatus.started, RunStatus.initialised}
 FINALISED_RUN_STATUSES: set[RunStatus] = {
@@ -104,9 +104,8 @@ async def select_user_from_run_group(
     with_device_pem_key: bool = False,
 ) -> User | None:
 
-    stmt = select(RunGroup).where(RunGroup.run_group_id == run_group_id)
-    res = await session.execute(stmt)
-    run_group = res.scalar_one_or_none()
+    rg_res = await session.execute(select(RunGroup).where(RunGroup.run_group_id == run_group_id))
+    run_group = rg_res.scalar_one_or_none()
 
     if not run_group:
         return None
@@ -132,7 +131,7 @@ async def select_user_from_run_group(
         options_list.append(undefer(User.device_certificate_pem_key))
 
     if options_list:
-        stmt = stmt.options(*options_list)
+        stmt = stmt.options(*options_list)  #  type: ignore
 
     res = await session.execute(stmt)
     return res.scalar_one_or_none()

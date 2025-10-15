@@ -15,7 +15,7 @@ from fastapi_pagination import Page, paginate
 from sqlalchemy.exc import NoResultFound
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from cactus_orchestrator.auth import AuthPerm, jwt_validator, UserContext
+from cactus_orchestrator.auth import AuthPerm, UserContext, jwt_validator
 from cactus_orchestrator.crud import (
     ACTIVE_RUN_STATUSES,
     create_runartifact,
@@ -28,7 +28,6 @@ from cactus_orchestrator.crud import (
     select_run_groups_for_user,
     select_runs_for_group,
     select_user,
-    select_user_from_run_group,
     select_user_run,
     select_user_run_with_artifact,
     update_run_run_status,
@@ -122,38 +121,6 @@ async def select_user_or_raise(
     if user is None:
         logger.error(f"Cannot find user for user context {user_context}")
         raise HTTPException(status_code=HTTPStatus.FORBIDDEN, detail="Certificate has not been registered.")
-    return user
-
-
-async def select_user_with_run_group_or_raise(
-    session: AsyncSession,
-    run_group_id: int,
-    with_aggregator_der: bool = False,
-    with_aggregator_p12: bool = False,
-    with_aggregator_pem_cert: bool = False,
-    with_aggregator_pem_key: bool = False,
-    with_device_der: bool = False,
-    with_device_p12: bool = False,
-    with_device_pem_cert: bool = False,
-    with_device_pem_key: bool = False,
-) -> User:
-
-    user = await select_user_from_run_group(
-        session=session,
-        run_group_id=run_group_id,
-        with_aggregator_der=with_aggregator_der,
-        with_aggregator_p12=with_aggregator_p12,
-        with_aggregator_pem_cert=with_aggregator_pem_cert,
-        with_aggregator_pem_key=with_aggregator_pem_key,
-        with_device_der=with_device_der,
-        with_device_p12=with_device_p12,
-        with_device_pem_cert=with_device_pem_cert,
-        with_device_pem_key=with_device_pem_key,
-    )
-
-    if user is None:
-        logger.error(f"Cannot find user associated with run group {run_group_id}")
-        raise HTTPException(status_code=HTTPStatus.FORBIDDEN, detail=f"Cannot find run_group {run_group_id}.")
     return user
 
 

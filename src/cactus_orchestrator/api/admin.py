@@ -73,7 +73,8 @@ async def assume_user_context_from_run_group(
         run_group_id: The run group id belonging to the user who user context we will assume.
 
     Returns:
-        A tuple of the assumed user context (with run group 'run_group_id') and the original user context (passed in to function).
+        A tuple of the assumed user context (with run group 'run_group_id') and the original
+        user context (passed in to function).
         If the user is not an admin, the returned user contexts are the same i.e. the one passed into the function.
 
     Raises:
