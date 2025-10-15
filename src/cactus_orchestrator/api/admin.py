@@ -13,12 +13,16 @@ from cactus_orchestrator.api.run import (
     map_group_to_group_response,
     select_run_group_counts_for_user,
     select_run_groups_for_user,
-    select_user_from_run_group,
     select_user_or_raise,
     select_user_run_group_or_raise,
 )
 from cactus_orchestrator.auth import AuthPerm, UserContext, jwt_validator
-from cactus_orchestrator.crud import select_group_runs_aggregated_by_procedure, select_run_groups_by_user, select_users
+from cactus_orchestrator.crud import (
+    select_group_runs_aggregated_by_procedure,
+    select_run_groups_by_user,
+    select_user_from_run_group,
+    select_users,
+)
 from cactus_orchestrator.model import User
 from cactus_orchestrator.schema import RunGroupResponse, TestProcedureRunSummaryResponse, UserWithRunGroupsResponse
 

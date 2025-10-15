@@ -131,7 +131,7 @@ async def select_user_from_run_group(
         options_list.append(undefer(User.device_certificate_pem_key))
 
     if options_list:
-        stmt = stmt.options(*options_list)  #  type: ignore
+        stmt = stmt.options(*options_list)  # type: ignore
 
     res = await session.execute(stmt)
     return res.scalar_one_or_none()
