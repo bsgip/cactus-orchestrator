@@ -12,12 +12,11 @@ from fastapi.responses import Response
 from fastapi_async_sqlalchemy import db
 from pydantic import SecretStr
 
-from cactus_orchestrator.auth import AuthPerm, jwt_validator
+from cactus_orchestrator.auth import AuthPerm, jwt_validator, UserContext
 from cactus_orchestrator.cache import AsyncCache, ExpiringValue
 from cactus_orchestrator.crud import insert_user, select_user
 from cactus_orchestrator.k8s.certificate.create import generate_client_p12
 from cactus_orchestrator.k8s.certificate.fetch import fetch_certificate_key_pair, fetch_certificate_only
-from cactus_orchestrator.schema import UserContext
 from cactus_orchestrator.settings import CactusOrchestratorException, get_current_settings
 
 logger = logging.getLogger(__name__)

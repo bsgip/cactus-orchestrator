@@ -9,11 +9,11 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi_async_sqlalchemy import db
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from cactus_orchestrator.auth import AuthPerm, jwt_validator
+from cactus_orchestrator.auth import AuthPerm, jwt_validator, UserContext
 from cactus_orchestrator.crud import insert_user, select_user
 from cactus_orchestrator.k8s.resource import generate_envoy_dcap_uri, generate_static_test_stack_id, get_resource_names
 from cactus_orchestrator.model import User
-from cactus_orchestrator.schema import UserConfigurationRequest, UserConfigurationResponse, UserContext
+from cactus_orchestrator.schema import UserConfigurationRequest, UserConfigurationResponse
 
 logger = logging.getLogger(__name__)
 

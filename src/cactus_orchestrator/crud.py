@@ -1,7 +1,7 @@
+from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Sequence
-from collections import defaultdict
 
 from cactus_test_definitions import CSIPAusVersion
 from cactus_test_definitions.client import TestProcedureId
@@ -9,8 +9,8 @@ from sqlalchemy import and_, delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload, selectinload, undefer
 
+from cactus_orchestrator.auth import UserContext
 from cactus_orchestrator.model import Run, RunArtifact, RunGroup, RunStatus, User
-from cactus_orchestrator.schema import UserContext
 
 ACTIVE_RUN_STATUSES: set[RunStatus] = {RunStatus.provisioning, RunStatus.started, RunStatus.initialised}
 FINALISED_RUN_STATUSES: set[RunStatus] = {
@@ -86,6 +86,52 @@ async def select_user(
 
     if options_list:
         stmt = stmt.options(*options_list)
+
+    res = await session.execute(stmt)
+    return res.scalar_one_or_none()
+
+
+async def select_user_from_run_group(
+    session: AsyncSession,
+    run_group_id: int,
+    with_aggregator_der: bool = False,
+    with_aggregator_p12: bool = False,
+    with_aggregator_pem_cert: bool = False,
+    with_aggregator_pem_key: bool = False,
+    with_device_der: bool = False,
+    with_device_p12: bool = False,
+    with_device_pem_cert: bool = False,
+    with_device_pem_key: bool = False,
+) -> User | None:
+
+    rg_res = await session.execute(select(RunGroup).where(RunGroup.run_group_id == run_group_id))
+    run_group = rg_res.scalar_one_or_none()
+
+    if not run_group:
+        return None
+
+    stmt = select(User).where(User.user_id == run_group.user_id)
+
+    options_list = []
+    if with_aggregator_p12:
+        options_list.append(undefer(User.aggregator_certificate_p12_bundle))
+    if with_aggregator_der:
+        options_list.append(undefer(User.aggregator_certificate_x509_der))
+    if with_aggregator_pem_cert:
+        options_list.append(undefer(User.aggregator_certificate_pem))
+    if with_aggregator_pem_key:
+        options_list.append(undefer(User.aggregator_certificate_pem_key))
+    if with_device_p12:
+        options_list.append(undefer(User.device_certificate_p12_bundle))
+    if with_device_der:
+        options_list.append(undefer(User.device_certificate_x509_der))
+    if with_device_pem_cert:
+        options_list.append(undefer(User.device_certificate_pem))
+    if with_device_pem_key:
+        options_list.append(undefer(User.device_certificate_pem_key))
+
+    if options_list:
+        stmt = stmt.options(*options_list)  # type: ignore
 
     res = await session.execute(stmt)
     return res.scalar_one_or_none()

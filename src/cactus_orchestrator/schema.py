@@ -55,13 +55,6 @@ class RunGroupResponse(BaseModel):
     total_runs: int  # How many runs live underneath this group
 
 
-class UserContext(BaseModel):
-    """Model for validated user context"""
-
-    subject_id: str
-    issuer_id: str
-
-
 class UserWithRunGroupsResponse(BaseModel):
     """Represents a user with all their associated run groups"""
 

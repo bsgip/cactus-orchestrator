@@ -11,14 +11,13 @@ from fastapi_pagination import Page, paginate
 from fastapi_pagination.utils import disable_installed_extensions_check
 
 from cactus_orchestrator.api.run import map_run_to_run_response, select_user_run_group_or_raise
-from cactus_orchestrator.auth import AuthPerm, jwt_validator
+from cactus_orchestrator.auth import AuthPerm, UserContext, jwt_validator
 from cactus_orchestrator.crud import select_group_runs_aggregated_by_procedure, select_group_runs_for_procedure
 from cactus_orchestrator.schema import (
     CSIPAusVersionResponse,
     RunResponse,
     TestProcedureResponse,
     TestProcedureRunSummaryResponse,
-    UserContext,
 )
 
 logger = logging.getLogger(__name__)

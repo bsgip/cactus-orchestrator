@@ -38,6 +38,7 @@ dev = [
     "black",
     "coverage",
     "kubernetes-stubs",
+    "isort",
 ]
 test = [
     "pytest",
