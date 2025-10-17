@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Generator
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
+import jwt
 import pytest
 from assertical.fixtures.environment import environment_snapshot
 from assertical.fixtures.fastapi import start_app_with_client
@@ -12,7 +13,6 @@ from assertical.fixtures.postgres import generate_async_conn_str_from_connection
 from cryptography import x509
 from cryptography.hazmat.primitives import asymmetric, hashes, serialization
 from cryptography.x509.oid import NameOID
-import jwt
 from kubernetes.client import V1Secret
 from psycopg import Connection
 from sqlalchemy import NullPool, create_engine
@@ -205,7 +205,7 @@ def valid_jwt_no_user(mock_jwt_validator_jwks_cache, ca_cert_key_pair) -> str:
 def valid_jwt_admin1(mock_jwt_validator_jwks_cache, ca_cert_key_pair) -> str:
     _, ca_key = ca_cert_key_pair
     kid = list(mock_jwt_validator_jwks_cache.keys())[0]
-    return valid_token_for_user("user1", ca_key, kid, "user:all", ["admin:all", "user:all"])
+    return valid_token_for_user("admin-user", ca_key, kid, "user:all", ["admin:all", "user:all"])
 
 
 @pytest.fixture

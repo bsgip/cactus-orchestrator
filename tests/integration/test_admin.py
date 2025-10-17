@@ -3,7 +3,9 @@ from http import HTTPStatus
 import pytest
 from assertical.fixtures.postgres import generate_async_session
 
+from cactus_orchestrator.main import generate_app
 from cactus_orchestrator.schema import UserWithRunGroupsResponse
+from cactus_orchestrator.settings import get_current_settings
 
 
 @pytest.mark.asyncio
@@ -25,16 +27,35 @@ async def test_get_test_user_list_populated(pg_base_config, client, valid_jwt_ad
     assert items[0] == UserWithRunGroupsResponse(**{"user_id": 1, "name": "user1", "run_groups": [1, 2]})
 
 
+@pytest.fixture(scope="session")
+def admin_endpoints() -> list[str]:
+    app = generate_app(get_current_settings())
+    paths = []
+    # The values of the path parameters don't matter.
+    # We only need an properly constructed URL to test whether the route is authorised
+    path_parameters = {"{run_group_id}": "1", "{run_id}": "1"}
+
+    for route in app.routes:
+        path = route.path
+        if path.startswith("/admin"):
+            for match, replacement in path_parameters.items():
+                if match in path:
+                    path = path.replace(match, replacement)
+            paths.append(path)
+
+    return paths
+
+
 @pytest.mark.asyncio
-@pytest.mark.parametrize("endpoint", ["/admin/users"])
-async def test_get_admin_endpoint_not_authorised_for_nonadmin(endpoint: str, client, valid_jwt_user1):
+async def test_get_admin_endpoint_not_authorised_for_nonadmin(admin_endpoints: list[str], client, valid_jwt_user1):
     """Verifies that jwt must have admin privileges to access admin endpoints"""
 
-    # Act
-    res = await client.get(endpoint, headers={"Authorization": f"Bearer {valid_jwt_user1}"})
+    for endpoint in admin_endpoints:
+        # Act
+        res = await client.get(endpoint, headers={"Authorization": f"Bearer {valid_jwt_user1}"})
 
-    # Assert
-    assert res.status_code == HTTPStatus.UNAUTHORIZED
+        # Assert
+        assert res.status_code == HTTPStatus.UNAUTHORIZED
 
 
 @pytest.mark.asyncio

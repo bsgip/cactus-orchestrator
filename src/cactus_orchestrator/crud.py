@@ -137,6 +137,39 @@ async def select_user_from_run_group(
     return res.scalar_one_or_none()
 
 
+async def select_user_from_run(
+    session: AsyncSession,
+    run_id: int,
+    with_aggregator_der: bool = False,
+    with_aggregator_p12: bool = False,
+    with_aggregator_pem_cert: bool = False,
+    with_aggregator_pem_key: bool = False,
+    with_device_der: bool = False,
+    with_device_p12: bool = False,
+    with_device_pem_cert: bool = False,
+    with_device_pem_key: bool = False,
+) -> User | None:
+
+    run_res = await session.execute(select(Run).where(Run.run_id == run_id))
+    run = run_res.scalar_one_or_none()
+
+    if not run:
+        return None
+
+    return await select_user_from_run_group(
+        session=session,
+        run_group_id=run.run_group_id,
+        with_aggregator_der=with_aggregator_der,
+        with_aggregator_p12=with_aggregator_p12,
+        with_aggregator_pem_cert=with_aggregator_pem_cert,
+        with_aggregator_pem_key=with_aggregator_pem_key,
+        with_device_der=with_device_der,
+        with_device_p12=with_device_p12,
+        with_device_pem_cert=with_device_pem_cert,
+        with_device_pem_key=with_device_pem_key,
+    )
+
+
 async def insert_run_for_run_group(
     session: AsyncSession,
     run_group_id: int,
