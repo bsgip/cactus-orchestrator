@@ -59,13 +59,13 @@ async def test_get_admin_endpoint_not_authorised_for_nonadmin(admin_endpoints: l
 
 
 @pytest.mark.asyncio
-async def test_admin_get_procedure_run_summaries_for_group(pg_base_config, client, valid_jwt_admin1):
+@pytest.mark.parametrize("run_group_id", [1, 2, 3])
+async def test_admin_get_procedure_run_summaries_for_group(run_group_id: int, pg_base_config, client, valid_jwt_admin1):
     """Basic test checking that we can fetch list of run groups for a user"""
 
     async with generate_async_session(pg_base_config) as session:
         await session.commit()
 
-    run_group_id = 1
     # Act
     res = await client.get(
         f"/admin/procedure_runs/{run_group_id}", headers={"Authorization": f"Bearer {valid_jwt_admin1}"}

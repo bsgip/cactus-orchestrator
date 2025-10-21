@@ -194,9 +194,11 @@ async def admin_get_procedure_run_summaries_for_group(
 ) -> list[TestProcedureRunSummaryResponse]:
     """Will not serve summaries for test procedures outside the RunGroup csip_aus_version"""
     # Check permissions
-    user_context, _ = await assume_user_context_from_run_group(
+    user_context, original_user_context = await assume_user_context_from_run_group(
         session=db.session, user_context=user_context, run_group_id=run_group_id
     )
+    if user_context == original_user_context:
+        logger.error(f"Failed to assume new user context ({run_group_id=}, assumed_user_context={user_context}, {original_user_context=)")
     (_, run_group) = await select_user_run_group_or_raise(db.session, user_context, run_group_id)
 
     # Enumerate our aggregated summaries from the DB and combine them with additional metadata from the YAML definitions
@@ -228,9 +230,11 @@ async def admin_get_groups_paginated(
     This is the admin equivalent to 'get_groups_paginated'.
     """
     # get user
-    user_context, _ = await assume_user_context_from_run_group(
+    user_context, original_user_context = await assume_user_context_from_run_group(
         session=db.session, user_context=user_context, run_group_id=run_group_id
     )
+    if user_context == original_user_context:
+        logger.error(f"Failed to assume new user context ({run_group_id=}, assumed_user_context={user_context}, {original_user_context=)")
     user = await select_user_or_raise(db.session, user_context)
 
     # get runs
@@ -255,7 +259,11 @@ async def get_run_artifact(
 ) -> Response:
 
     # get user
-    user_context, _ = await assume_user_context_from_run(session=db.session, user_context=user_context, run_id=run_id)
+    user_context, original_user_context = await assume_user_context_from_run(
+        session=db.session, user_context=user_context, run_id=run_id
+    )
+    if user_context == original_user_context:
+        logger.error(f"Failed to assume new user context ({run_id=}, assumed_user_context={user_context}, {original_user_context=)")
     user = await select_user_or_raise(db.session, user_context)
 
     # get run
