@@ -1,8 +1,9 @@
 import logging
+from datetime import datetime
 from http import HTTPStatus
 from typing import Annotated
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from fastapi.exceptions import HTTPException
 from fastapi.responses import Response
 from fastapi_async_sqlalchemy import db
@@ -13,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from cactus_orchestrator.api.procedure import test_procedure_definitions
 from cactus_orchestrator.api.run import (
     map_group_to_group_response,
+    map_run_to_run_response,
     select_run_group_counts_for_user,
     select_run_groups_for_user,
     select_user_or_raise,
@@ -22,13 +24,20 @@ from cactus_orchestrator.api.run import (
 from cactus_orchestrator.auth import AuthPerm, UserContext, jwt_validator
 from cactus_orchestrator.crud import (
     select_group_runs_aggregated_by_procedure,
+    select_group_runs_for_procedure,
     select_run_groups_by_user,
+    select_runs_for_group,
     select_user_from_run,
     select_user_from_run_group,
     select_users,
 )
 from cactus_orchestrator.model import User
-from cactus_orchestrator.schema import RunGroupResponse, TestProcedureRunSummaryResponse, UserWithRunGroupsResponse
+from cactus_orchestrator.schema import (
+    RunGroupResponse,
+    RunResponse,
+    TestProcedureRunSummaryResponse,
+    UserWithRunGroupsResponse,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -198,7 +207,9 @@ async def admin_get_procedure_run_summaries_for_group(
         session=db.session, user_context=user_context, run_group_id=run_group_id
     )
     if user_context == original_user_context:
-        logger.error(f"Failed to assume new user context ({run_group_id=}, assumed_user_context={user_context}, {original_user_context=)")
+        logger.error(
+            f"Failed to assume new user context ({run_group_id=}, assumed_user_context={user_context}, {original_user_context=})"
+        )
     (_, run_group) = await select_user_run_group_or_raise(db.session, user_context, run_group_id)
 
     # Enumerate our aggregated summaries from the DB and combine them with additional metadata from the YAML definitions
@@ -234,7 +245,9 @@ async def admin_get_groups_paginated(
         session=db.session, user_context=user_context, run_group_id=run_group_id
     )
     if user_context == original_user_context:
-        logger.error(f"Failed to assume new user context ({run_group_id=}, assumed_user_context={user_context}, {original_user_context=)")
+        logger.error(
+            f"Failed to assume new user context ({run_group_id=}, assumed_user_context={user_context}, {original_user_context=})"
+        )
     user = await select_user_or_raise(db.session, user_context)
 
     # get runs
@@ -253,7 +266,7 @@ async def admin_get_groups_paginated(
 
 
 @router.get("/admin/run/{run_id}/artifact", status_code=HTTPStatus.OK)
-async def get_run_artifact(
+async def admin_get_run_artifact(
     run_id: int,
     user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.admin_all}))],
 ) -> Response:
@@ -263,7 +276,9 @@ async def get_run_artifact(
         session=db.session, user_context=user_context, run_id=run_id
     )
     if user_context == original_user_context:
-        logger.error(f"Failed to assume new user context ({run_id=}, assumed_user_context={user_context}, {original_user_context=)")
+        logger.error(
+            f"Failed to assume new user context ({run_id=}, assumed_user_context={user_context}, {original_user_context=})"
+        )
     user = await select_user_or_raise(db.session, user_context)
 
     # get run
@@ -280,3 +295,38 @@ async def get_run_artifact(
         content=run.run_artifact.file_data,
         media_type=f"application/{run.run_artifact.compression}",
     )
+
+
+@router.get("/admin/procedure_runs/{run_group_id}/{test_procedure_id}", status_code=HTTPStatus.OK)
+async def admin_get_runs_for_procedure_in_group(
+    _: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.admin_all}))],
+    run_group_id: int,
+    test_procedure_id: str,
+) -> Page[RunResponse]:
+
+    # Get runs
+    runs = await select_group_runs_for_procedure(db.session, run_group_id, test_procedure_id)
+
+    if runs:
+        resp = [map_run_to_run_response(run) for run in runs if run]
+    else:
+        resp = []
+    return paginate(resp)
+
+
+@router.get("/admin/run_group/{run_group_id}/run", status_code=HTTPStatus.OK)
+async def admin_get_group_runs_paginated(
+    run_group_id: int,
+    _: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.admin_all}))],
+    finalised: bool | None = Query(default=None),
+    created_after: datetime = Query(default=None),
+) -> Page[RunResponse]:
+
+    # get runs
+    runs = await select_runs_for_group(db.session, run_group_id, finalised=finalised, created_at_gte=created_after)
+
+    if runs:
+        resp = [map_run_to_run_response(run) for run in runs if run]
+    else:
+        resp = []
+    return paginate(resp)

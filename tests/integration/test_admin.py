@@ -98,3 +98,50 @@ async def test_admin_get_groups_paginated(run_group_id, run_group_count, pg_base
     data = res.json()
     assert "total" in data
     assert len(data["items"]) == run_group_count
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "run_group_id,test_procedure_id,expected_count",
+    [(1, "ALL-01", 2), (1, "ALL-05", 1), (2, "ALL-01", 1), (3, "GEN-02", 1), (1, "GEN-02", 0)],
+)
+async def test_admin_get_runs_for_procedure_in_group(
+    run_group_id: int, test_procedure_id: str, expected_count: int, pg_base_config, client, valid_jwt_admin1
+):
+
+    async with generate_async_session(pg_base_config) as session:
+        await session.commit()
+
+    # Act
+    res = await client.get(
+        f"/admin/procedure_runs/{run_group_id}/{test_procedure_id}",
+        headers={"Authorization": f"Bearer {valid_jwt_admin1}"},
+    )
+
+    # Assert
+    assert res.status_code == HTTPStatus.OK
+    data = res.json()
+    assert "items" in data
+    assert len(data["items"]) == expected_count
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("run_group_id,expected_run_count", [(1, 6), (2, 1), (3, 1)])
+async def test_admin_get_group_runs_paginated(
+    run_group_id: int, expected_run_count: int, pg_base_config, client, valid_jwt_admin1
+):
+
+    async with generate_async_session(pg_base_config) as session:
+        await session.commit()
+
+    # Act
+    res = await client.get(
+        f"/admin/run_group/{run_group_id}/run",
+        headers={"Authorization": f"Bearer {valid_jwt_admin1}"},
+    )
+
+    # Assert
+    assert res.status_code == HTTPStatus.OK
+    data = res.json()
+    assert "items" in data
+    assert len(data["items"]) == expected_run_count
