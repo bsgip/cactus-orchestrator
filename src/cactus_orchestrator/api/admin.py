@@ -3,6 +3,8 @@ from datetime import datetime
 from http import HTTPStatus
 from typing import Annotated
 
+from cactus_runner.client import ClientSession, ClientTimeout, RunnerClient
+from cactus_runner.models import RunnerStatus
 from fastapi import APIRouter, Depends, Query
 from fastapi.exceptions import HTTPException
 from fastapi.responses import Response
@@ -23,14 +25,17 @@ from cactus_orchestrator.api.run import (
 )
 from cactus_orchestrator.auth import AuthPerm, UserContext, jwt_validator
 from cactus_orchestrator.crud import (
+    ACTIVE_RUN_STATUSES,
     select_group_runs_aggregated_by_procedure,
     select_group_runs_for_procedure,
     select_run_groups_by_user,
     select_runs_for_group,
     select_user_from_run,
     select_user_from_run_group,
+    select_user_run,
     select_users,
 )
+from cactus_orchestrator.k8s.resource import get_resource_names
 from cactus_orchestrator.model import User
 from cactus_orchestrator.schema import (
     RunGroupResponse,
@@ -38,6 +43,7 @@ from cactus_orchestrator.schema import (
     TestProcedureRunSummaryResponse,
     UserWithRunGroupsResponse,
 )
+from cactus_orchestrator.settings import get_current_settings
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +79,7 @@ async def select_user_with_run_group_or_raise(
 
     if user is None:
         logger.error(f"Cannot find user associated with run group {run_group_id}")
-        raise HTTPException(status_code=HTTPStatus.FORBIDDEN, detail=f"Cannot find run_group {run_group_id}.")
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail=f"Cannot find run_group {run_group_id}.")
     return user
 
 
@@ -105,7 +111,7 @@ async def select_user_with_run_or_raise(
 
     if user is None:
         logger.error(f"Cannot find user associated with run {run_id}")
-        raise HTTPException(status_code=HTTPStatus.FORBIDDEN, detail=f"Cannot find run {run_id}.")
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail=f"Cannot find run {run_id}.")
     return user
 
 
@@ -208,7 +214,10 @@ async def admin_get_procedure_run_summaries_for_group(
     )
     if user_context == original_user_context:
         logger.error(
-            f"Failed to assume new user context ({run_group_id=}, assumed_user_context={user_context}, {original_user_context=})"
+            (
+                f"Failed to assume new user context ({run_group_id=},"
+                f" assumed_user_context={user_context}, {original_user_context=})"
+            )
         )
     (_, run_group) = await select_user_run_group_or_raise(db.session, user_context, run_group_id)
 
@@ -231,22 +240,28 @@ async def admin_get_procedure_run_summaries_for_group(
     return results
 
 
-@router.get("/admin/run_group/{run_group_id}", status_code=HTTPStatus.OK)
+@router.get("/admin/run_group", status_code=HTTPStatus.OK)
 async def admin_get_groups_paginated(
     user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.admin_all}))],
-    run_group_id: int,
+    run_group_id: int | None = Query(default=None),
 ) -> Page[RunGroupResponse]:
     """Gets all the run groups for a user which owns 'run_group_id'.
 
     This is the admin equivalent to 'get_groups_paginated'.
     """
+    if run_group_id is None:
+        raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail="run_group_id query parameter must be supplied.")
+
     # get user
     user_context, original_user_context = await assume_user_context_from_run_group(
         session=db.session, user_context=user_context, run_group_id=run_group_id
     )
     if user_context == original_user_context:
         logger.error(
-            f"Failed to assume new user context ({run_group_id=}, assumed_user_context={user_context}, {original_user_context=})"
+            (
+                f"Failed to assume new user context ({run_group_id=},"
+                f" assumed_user_context={user_context}, {original_user_context=})"
+            )
         )
     user = await select_user_or_raise(db.session, user_context)
 
@@ -277,7 +292,10 @@ async def admin_get_run_artifact(
     )
     if user_context == original_user_context:
         logger.error(
-            f"Failed to assume new user context ({run_id=}, assumed_user_context={user_context}, {original_user_context=})"
+            (
+                f"Failed to assume new user context ({run_id=},"
+                f" assumed_user_context={user_context}, {original_user_context=})"
+            )
         )
     user = await select_user_or_raise(db.session, user_context)
 
@@ -330,3 +348,86 @@ async def admin_get_group_runs_paginated(
     else:
         resp = []
     return paginate(resp)
+
+
+@router.get("/admin/run/{run_id}/status", status_code=HTTPStatus.OK)
+async def admin_get_run_status(
+    run_id: int,
+    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.admin_all}))],
+) -> RunnerStatus:
+    """Can only fetch the status of a currently operating run.
+
+    returns HTTP 200 on success with"""
+
+    # get user
+    user_context, original_user_context = await assume_user_context_from_run(
+        session=db.session, user_context=user_context, run_id=run_id
+    )
+    if user_context == original_user_context:
+        logger.error(
+            (
+                f"Failed to assume new user context ({run_id=},"
+                f" assumed_user_context={user_context}, {original_user_context=})"
+            )
+        )
+    user = await select_user_or_raise(db.session, user_context)
+
+    # get the run - make sure it's still "running"
+    try:
+        run = await select_user_run(db.session, user.user_id, run_id)
+    except NoResultFound as exc:
+        logger.debug(exc)
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Run does not exist.")
+    if run.run_status not in ACTIVE_RUN_STATUSES:
+        raise HTTPException(
+            status_code=HTTPStatus.GONE,
+            detail=f"Run {run_id} has terminated. Please download the final artifacts for status information.",
+        )
+
+    # Connect to the pod and talk to the runner's "status" endpoint. Forward the result along
+    run_resource_names = get_resource_names(run.teststack_id)
+    settings = get_current_settings()
+    async with ClientSession(
+        base_url=run_resource_names.runner_base_url,
+        timeout=ClientTimeout(settings.test_execution_comms_timeout_seconds),
+    ) as s:
+        try:
+            return await RunnerClient.status(s)
+        except Exception as exc:
+            logger.error(
+                f"Error fetching runner status for run {run.run_id} @ {run_resource_names.runner_base_url}.",
+                exc_info=exc,
+            )
+            raise HTTPException(
+                status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
+                detail=f"Unable to connect to run {run.run_id}'s pod to fetch status.",
+            )
+
+
+@router.get("/admin/run/{run_id}", status_code=HTTPStatus.OK)
+async def admin_get_individual_run(
+    run_id: int,
+    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.admin_all}))],
+) -> RunResponse:
+
+    # get user
+    user_context, original_user_context = await assume_user_context_from_run(
+        session=db.session, user_context=user_context, run_id=run_id
+    )
+    if user_context == original_user_context:
+        logger.error(
+            (
+                f"Failed to assume new user context ({run_id=},"
+                f" assumed_user_context={user_context}, {original_user_context=})"
+            )
+        )
+    user = await select_user_or_raise(db.session, user_context)
+
+    # get run
+    try:
+        run = await select_user_run(db.session, user.user_id, run_id)
+    except NoResultFound as exc:
+        logger.debug(exc)
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Not Found")
+
+    return map_run_to_run_response(run)
