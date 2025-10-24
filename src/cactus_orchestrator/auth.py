@@ -7,12 +7,12 @@ from http import HTTPStatus
 from typing import Any, Callable, Coroutine, cast
 
 import httpx
+import jwt
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509 import load_der_x509_certificate
 from fastapi import HTTPException, Security
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-import jwt
 from pydantic import BaseModel, ConfigDict
 
 from cactus_orchestrator.cache import AsyncCache, ExpiringValue
