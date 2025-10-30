@@ -12,6 +12,7 @@ from assertical.fixtures.fastapi import start_app_with_client
 from assertical.fixtures.postgres import generate_async_conn_str_from_connection
 from cryptography import x509
 from cryptography.hazmat.primitives import asymmetric, hashes, serialization
+from cryptography.hazmat import backends
 from cryptography.x509.oid import NameOID
 from kubernetes.client import V1Secret
 from psycopg import Connection
@@ -78,6 +79,62 @@ def ca_cert_key_pair():
         .sign(ca_key, hashes.SHA256())
     )
     return (ca_cert, ca_key)
+
+
+@pytest.fixture(scope="session")
+def ec_ca_cert_key_pair() -> tuple[x509.Certificate, asymmetric.ec.EllipticCurvePrivateKey]:
+    # Generate EC private key using secp256r1 (aka prime256v1)
+    ca_key = asymmetric.ec.generate_private_key(asymmetric.ec.SECP256R1())
+
+    # CA subject
+    subject = x509.Name(
+        [
+            x509.NameAttribute(NameOID.COMMON_NAME, "IEEE 2030.5 Root"),
+            x509.NameAttribute(NameOID.ORGANIZATION_NAME, "CACTUS"),
+        ]
+    )
+
+    # Build self-signed certificate with ECDSA
+    ca_cert = (
+        x509.CertificateBuilder()
+        .subject_name(subject)
+        .issuer_name(subject)
+        .public_key(ca_key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(datetime.now(timezone.utc))
+        .not_valid_after(datetime.now(timezone.utc) + timedelta(days=365))
+        .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
+        .sign(ca_key, hashes.SHA256())  # ECDSA signature with SHA-256
+    )
+
+    return (ca_cert, ca_key)
+
+
+@pytest.fixture(scope="session")
+def ec_mica_cert_key_pair_from_file() -> tuple[x509.Certificate, asymmetric.ec.EllipticCurvePrivateKey]:
+    """Get cert and key from files."""
+    with open("tests/data/mica.crt", "rb") as cert_file:
+        cert_data = cert_file.read()
+
+    with open("tests/data/mica.key", "rb") as key_file:
+        key_data = key_file.read()
+
+    mica_cert = x509.load_pem_x509_certificate(cert_data, backends.default_backend())
+    mica_key = serialization.load_pem_private_key(key_data, password=None, backend=backends.default_backend())
+    assert isinstance(mica_key, asymmetric.ec.EllipticCurvePrivateKey)
+
+    return (mica_cert, mica_key)
+
+
+@pytest.fixture
+def ec_cert_key_pair(request: pytest.FixtureRequest) -> tuple[x509.Certificate, asymmetric.ec.EllipticCurvePrivateKey]:
+    """Indirect proxying of related fixtures for parametrization."""
+    if request.param == "ec_ca_cert_key_pair":
+        return request.getfixturevalue("ec_ca_cert_key_pair")
+    elif request.param == "ec_mica_cert_key_pair_from_file":
+        return request.getfixturevalue("ec_mica_cert_key_pair_from_file")
+    else:
+        raise ValueError(f"Unknown fixture name: {request.param}")
 
 
 @pytest.fixture(scope="function")
