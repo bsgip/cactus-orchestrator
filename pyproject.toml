@@ -23,7 +23,7 @@ dependencies = [
     "cactus-runner @ git+https://github.com/bsgip/cactus-runner.git",
     "fastapi-pagination",
     "fastapi-utils",
-    "typing_inspect",                                                   # fastapi-utils missing dep?
+    "typing_inspect",                                                 # fastapi-utils missing dep?
     "pyasn1",
 ]
 name = "cactus-orchestrator"
@@ -36,6 +36,7 @@ dev = [
     "mypy",
     "types-python-dateutil",
     "types-tzlocal",
+    "types-pyasn1",
     "black",
     "coverage",
     "kubernetes-stubs",

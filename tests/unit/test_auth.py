@@ -3,20 +3,20 @@ import json
 import os
 from datetime import timedelta
 
+import jwt
 import pytest
 from assertical.fixtures.environment import environment_snapshot
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives.serialization import Encoding, NoEncryption, PrivateFormat, load_pem_public_key
-import jwt
 
-from cactus_orchestrator.auth import JWTClaims, JWTValidator, JWTClaimsError
+from cactus_orchestrator.auth import JWTClaims, JWTClaimsError, JWTValidator
 
 TEST_JWT_AUDIENCE = "my-audience"
 TEST_JWT_ISSUER = "my.issuer"
 
 
 @pytest.fixture
-def jwt_validator():
+def jwt_validator(patch_jwks_request):
     with environment_snapshot():
         os.environ["JWTAUTH_AUDIENCE"] = TEST_JWT_AUDIENCE
         os.environ["JWTAUTH_ISSUER"] = TEST_JWT_ISSUER
@@ -61,10 +61,9 @@ async def test_get_pubkey(jwt_validator, kid_and_jwks_stub):
 
 
 @pytest.mark.asyncio
-async def test_verify_jwt(jwt_validator, kid_and_jwks_stub, ca_cert_key_pair):
+async def test_verify_jwt(jwt_validator, kid_and_jwks_stub, rsa_key):
     # Arrange
     kid, _ = kid_and_jwks_stub
-    _, private_key = ca_cert_key_pair
 
     claims = {
         "sub": "user123",
@@ -74,7 +73,7 @@ async def test_verify_jwt(jwt_validator, kid_and_jwks_stub, ca_cert_key_pair):
         "iat": 1700000000,
         "scope": "user:read user:create",
     }
-    private_pem = private_key.private_bytes(
+    private_pem = rsa_key.private_bytes(
         encoding=Encoding.PEM,
         format=PrivateFormat.PKCS8,
         encryption_algorithm=NoEncryption(),

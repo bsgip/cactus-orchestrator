@@ -1,10 +1,9 @@
 import logging
 from enum import StrEnum, auto
 from http import HTTPStatus
-from typing import Annotated, Any
+from typing import Annotated
 
 import shortuuid
-from cryptography import x509
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.serialization import pkcs12
 from fastapi import APIRouter, Depends, HTTPException
@@ -12,10 +11,9 @@ from fastapi.responses import Response
 from fastapi_async_sqlalchemy import db
 from pydantic import SecretStr
 
-from cactus_orchestrator.auth import AuthPerm, jwt_validator, UserContext
-from cactus_orchestrator.cache import AsyncCache, ExpiringValue
+from cactus_orchestrator.auth import AuthPerm, UserContext, jwt_validator
 from cactus_orchestrator.crud import insert_user, select_user
-from cactus_orchestrator.k8s.certificate.create import generate_client_p12
+from cactus_orchestrator.k8s.certificate.create import generate_client_p12_ec
 from cactus_orchestrator.k8s.certificate.fetch import fetch_certificate_key_pair, fetch_certificate_only
 from cactus_orchestrator.settings import CactusOrchestratorException, get_current_settings
 
@@ -37,26 +35,18 @@ MEDIA_TYPE_PEM_CRT = "application/x-x509-user-cert"
 MEDIA_TYPE_PEM_KEY = "application/pkcs8"
 
 
-async def update_ca_certificate_cache(_: Any) -> dict[str, ExpiringValue[x509.Certificate]]:
-    cert = await fetch_certificate_only(get_current_settings().tls_ca_certificate_generic_secret_name)
-
-    return {_ca_crt_cachekey: ExpiringValue(expiry=cert.not_valid_after_utc, value=cert)}
-
-
-# NOTE: do not log.
-_ca_crt_cachekey = ""
-_ca_crt_cache = AsyncCache(update_fn=update_ca_certificate_cache, force_update_delay_seconds=60)
-
-
 async def create_client_cert_binary(
     user_context: UserContext, client_cert_passphrase: SecretStr
 ) -> tuple[bytes, bytes]:
-    ca_cert, ca_key = await fetch_certificate_key_pair(get_current_settings().tls_ca_tls_secret_name)
+    settings = get_current_settings()
+    mica_cert, mica_key = await fetch_certificate_key_pair(settings.tls_mica_secret_name)
+    mca_cert = await fetch_certificate_only(settings.cert_mca_secret_name)
 
     # create client certificate
-    client_p12, client_cert = generate_client_p12(
-        ca_cert=ca_cert,
-        ca_key=ca_key,
+    client_p12, client_cert = generate_client_p12_ec(
+        mica_cert=mica_cert,
+        mica_key=mica_key,
+        mca_cert=mca_cert,
         client_common_name=user_context.subject_id,
         p12_password=client_cert_passphrase.get_secret_value(),
     )
@@ -73,14 +63,12 @@ async def fetch_current_certificate_authority_der(
     _: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.user_all}))],
 ) -> Response:
 
-    # fetch ca
-    ca_cert = await _ca_crt_cache.get_value(None, _ca_crt_cachekey)
-
-    if ca_cert is None:
-        raise CactusOrchestratorException("CA certificate not found.")
+    serca_cert = await fetch_certificate_only(get_current_settings().cert_serca_secret_name)
+    if serca_cert is None:
+        raise CactusOrchestratorException("SERCA certificate not found.")
 
     return Response(
-        content=ca_cert.public_bytes(serialization.Encoding.DER),
+        content=serca_cert.public_bytes(serialization.Encoding.DER),
         media_type=MEDIA_TYPE_CA_CRT,
     )
 
