@@ -57,12 +57,14 @@ class CactusOrchestratorSettings(BaseSettings):
     template_statefulset_name_prefix: str = "envoy-set-"  # Will be combined with CSIP-Aus Version identifier  / uuid
 
     # certificates
-    tls_ca_certificate_generic_secret_name: str = (
-        "tls-ca-certificate"  # A Generic type secret. This is CA cert used by ingress.
+    cert_serca_secret_name: str = "cert-serca"  # The raw SERCA root certificate (no key) under ca.crt
+    cert_mca_secret_name: str = (
+        "cert-mca-cactus"  # The Manufacturer CA certificate (no key) under ca.crt (signed by serca)
     )
-    # A TLS type secret. This is the same CA cert along with its key, to be used for signing.
-    tls_ca_tls_secret_name: str = "tls-ca-cert-key-pair"
-    # tls_server_tls_secret_name: str = "tls-server-secret-pair"
+    tls_mica_secret_name: str = (
+        "tls-mica-cactus"  # The Manufacturer Intermediate CA certificate/key (signed by mca) - signs client certs
+    )
+
     test_execution_fqdn: str  # NOTE: we could extract this from the server certs
 
     # teardown

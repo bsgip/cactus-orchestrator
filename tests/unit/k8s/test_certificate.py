@@ -2,67 +2,41 @@ from unittest.mock import patch
 
 import pytest
 from cryptography import x509
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import rsa, ec
+from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.serialization import pkcs12
 
-from cactus_orchestrator.k8s.certificate.create import generate_client_p12
+from cactus_orchestrator.k8s.certificate.create import generate_client_p12_ec
 from cactus_orchestrator.k8s.certificate.fetch import fetch_certificate_key_pair
 
 
-def test_generate_client_p12(ca_cert_key_pair):
+def test_generate_client_p12_ec(mca_cert_key_pair, mica_cert_key_pair):
     # Arrange
-    ca_cert, ca_key = ca_cert_key_pair
+    mca_cert, mca_key = mca_cert_key_pair
+    mica_cert, mica_key = mica_cert_key_pair
     client_common_name = "Test Client"
     p12_password = "testpwd"
 
     # Act
-    pfx_data, cl_cert = generate_client_p12(ca_key, ca_cert, client_common_name, p12_password)
+    pfx_data, cl_cert = generate_client_p12_ec(mica_key, mica_cert, mca_cert, client_common_name, p12_password)
 
     # Assert
     cl_key, cl_cert2, _ = pkcs12.load_key_and_certificates(pfx_data, p12_password.encode())
     assert isinstance(pfx_data, bytes)
     assert len(pfx_data) > 0
-    assert cl_cert.issuer == ca_cert.subject
+    assert cl_cert.issuer == mica_cert.subject
     assert cl_cert2 is not None
-    assert cl_cert2.issuer == ca_cert.subject
-    assert isinstance(cl_key, rsa.RSAPrivateKey)
-
-
-@pytest.mark.parametrize("ec_cert_key_pair", ["ec_ca_cert_key_pair", "ec_mica_cert_key_pair_from_file"], indirect=True)
-def test_generate_client_p12_ec(ec_cert_key_pair: tuple[x509.Certificate, ec.EllipticCurvePrivateKey]) -> None:
-    # Arrange
-    ca_cert, ca_key = ec_cert_key_pair
-    client_common_name = "Test Client"
-    p12_password = "testpwd"
-
-    # Act
-    pfx_data, cl_cert = generate_client_p12(ca_key, ca_cert, client_common_name, p12_password)
-
-    # Uncomment to view generated artifacts
-    # with open("ec_test_gen_certificate.pem", "wb") as f:
-    #    f.write(cl_cert.public_bytes(serialization.Encoding.PEM))
-
-    # with open("ec_test_gen.p12", "wb") as f:
-    #    f.write(pfx_data)
-
-    # Assert
-    cl_key, cl_cert2, _ = pkcs12.load_key_and_certificates(pfx_data, p12_password.encode())
-    assert isinstance(pfx_data, bytes)
-    assert len(pfx_data) > 0
-    assert cl_cert.issuer == ca_cert.subject
-    assert cl_cert2 is not None
-    assert cl_cert2.issuer == ca_cert.subject
+    assert cl_cert2.issuer == mica_cert.subject
     assert isinstance(cl_key, ec.EllipticCurvePrivateKey)
 
 
-def test_generate_client_p12_invalid_password(ca_cert_key_pair):
-    ca_cert, ca_key = ca_cert_key_pair
+def test_generate_client_p12_invalid_password(mca_cert_key_pair, mica_cert_key_pair):
+    mca_cert, mca_key = mca_cert_key_pair
+    mica_cert, mica_key = mica_cert_key_pair
     client_common_name = "Test Client"
     p12_password = ""
 
     with pytest.raises(ValueError):
-        generate_client_p12(ca_key, ca_cert, client_common_name, p12_password)
+        generate_client_p12_ec(mica_key, mica_cert, mca_cert, client_common_name, p12_password)
 
 
 @patch("cactus_orchestrator.k8s.certificate.fetch.v1_core_api")
@@ -75,4 +49,4 @@ async def test_fetch_certificate_key_pair(mock_v1_core_api, mock_k8s_tls_secret,
     cert, key = await fetch_certificate_key_pair("test-secret", "test-namespace")
 
     assert isinstance(cert, x509.Certificate)
-    assert isinstance(key, rsa.RSAPrivateKey)
+    assert isinstance(key, ec.EllipticCurvePrivateKey)

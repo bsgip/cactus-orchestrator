@@ -11,15 +11,16 @@ from assertical.fixtures.environment import environment_snapshot
 from assertical.fixtures.fastapi import start_app_with_client
 from assertical.fixtures.postgres import generate_async_conn_str_from_connection
 from cryptography import x509
-from cryptography.hazmat.primitives import asymmetric, hashes, serialization
 from cryptography.hazmat import backends
+from cryptography.hazmat.primitives import asymmetric, hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.oid import NameOID
 from kubernetes.client import V1Secret
 from psycopg import Connection
 from sqlalchemy import NullPool, create_engine
 
 from cactus_orchestrator.auth import jwt_validator
-from cactus_orchestrator.k8s.certificate.create import generate_client_p12
+from cactus_orchestrator.k8s.certificate.create import generate_client_p12_ec
 from cactus_orchestrator.model import Base
 from cactus_orchestrator.settings import _reset_current_settings, get_current_settings
 
@@ -64,21 +65,69 @@ def pg_empty_config(postgresql, preserved_environment) -> Generator[Connection, 
 
 
 @pytest.fixture(scope="session")
-def ca_cert_key_pair():
-    ca_key = asymmetric.rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Test CA")])
+def serca_cert_key_pair():
+    # This isn't a fully compliant 2030.5 SERCA cert but is close enough for our tests
+    serca_key: ec.EllipticCurvePrivateKey = ec.generate_private_key(ec.SECP256R1())
+    subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Test SERCA")])
     ca_cert = (
         x509.CertificateBuilder()
         .subject_name(subject)
         .issuer_name(subject)
-        .public_key(ca_key.public_key())
+        .public_key(serca_key.public_key())
         .serial_number(x509.random_serial_number())
         .not_valid_before(datetime.now(timezone.utc))
         .not_valid_after(datetime.now(timezone.utc) + timedelta(days=365))
         .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
-        .sign(ca_key, hashes.SHA256())
+        .sign(serca_key, hashes.SHA256())  # Self signed
     )
-    return (ca_cert, ca_key)
+    return (ca_cert, serca_key)
+
+
+@pytest.fixture(scope="session")
+def mca_cert_key_pair(serca_cert_key_pair):
+    # This isn't a fully compliant 2030.5 MCA cert but is close enough for our tests
+    serca_cert, serca_key = serca_cert_key_pair
+
+    mca_key: ec.EllipticCurvePrivateKey = ec.generate_private_key(ec.SECP256R1())
+    subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Test MCA")])
+    ca_cert = (
+        x509.CertificateBuilder()
+        .subject_name(subject)
+        .issuer_name(subject)
+        .public_key(mca_key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(datetime.now(timezone.utc))
+        .not_valid_after(datetime.now(timezone.utc) + timedelta(days=365))
+        .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
+        .sign(serca_key, hashes.SHA256())
+    )
+    return (ca_cert, mca_key)
+
+
+@pytest.fixture(scope="session")
+def mica_cert_key_pair(mca_cert_key_pair):
+    # This isn't a fully compliant 2030.5 MICA cert but is close enough for our tests
+    mca_cert, mca_key = mca_cert_key_pair
+
+    mica_key: ec.EllipticCurvePrivateKey = ec.generate_private_key(ec.SECP256R1())
+    subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Test MICA")])
+    mica_cert = (
+        x509.CertificateBuilder()
+        .subject_name(subject)
+        .issuer_name(subject)
+        .public_key(mica_key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(datetime.now(timezone.utc))
+        .not_valid_after(datetime.now(timezone.utc) + timedelta(days=365))
+        .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
+        .sign(mca_key, hashes.SHA256())
+    )
+    return (mica_cert, mica_key)
+
+
+@pytest.fixture(scope="session")
+def rsa_key():
+    return asymmetric.rsa.generate_private_key(public_exponent=65537, key_size=2048)
 
 
 @pytest.fixture(scope="session")
@@ -138,19 +187,22 @@ def ec_cert_key_pair(request: pytest.FixtureRequest) -> tuple[x509.Certificate, 
 
 
 @pytest.fixture(scope="function")
-def valid_user_p12_and_der(ca_cert_key_pair) -> tuple[bytes, bytes]:
-    ca_cert, ca_key = ca_cert_key_pair
-    cl_p12, cl_x509 = generate_client_p12(ca_key, ca_cert, "test", "abc")
+def valid_user_p12_and_der(mca_cert_key_pair, mica_cert_key_pair) -> tuple[bytes, bytes]:
+    mca_cert, mca_key = mca_cert_key_pair
+    mica_cert, mica_key = mica_cert_key_pair
+    cl_p12, cl_x509 = generate_client_p12_ec(mica_key, mica_cert, mca_cert, "test", "abc")
     cl_der = cl_x509.public_bytes(encoding=serialization.Encoding.DER)
     return cl_p12, cl_der
 
 
 @pytest.fixture(scope="function")
-def expired_user_p12_and_der(ca_cert_key_pair) -> tuple[bytes, bytes]:
-    ca_cert, ca_key = ca_cert_key_pair
-    cl_p12, cl_x509 = generate_client_p12(
-        ca_key,
-        ca_cert,
+def expired_user_p12_and_der(mca_cert_key_pair, mica_cert_key_pair) -> tuple[bytes, bytes]:
+    mca_cert, mca_key = mca_cert_key_pair
+    mica_cert, mica_key = mica_cert_key_pair
+    cl_p12, cl_x509 = generate_client_p12_ec(
+        mica_key,
+        mica_cert,
+        mca_cert,
         "test",
         "abc",
         not_before=datetime.now(timezone.utc) - timedelta(days=3),
@@ -161,11 +213,8 @@ def expired_user_p12_and_der(ca_cert_key_pair) -> tuple[bytes, bytes]:
 
 
 @pytest.fixture(scope="session")
-def kid_and_jwks_stub(ca_cert_key_pair) -> tuple[str, dict[str, list[str, Any]]]:
-    # init for tests
-    _, ca_key = ca_cert_key_pair
-
-    public_key = ca_key.public_key()
+def kid_and_jwks_stub(rsa_key) -> tuple[str, dict[str, list[str, Any]]]:
+    public_key = rsa_key.public_key()
     kid = "test-kid"
     public_numbers = public_key.public_numbers()
     jwks = {
@@ -182,11 +231,11 @@ def kid_and_jwks_stub(ca_cert_key_pair) -> tuple[str, dict[str, list[str, Any]]]
 
 
 @pytest.fixture(scope="session")
-def mock_jwt_validator_jwks_cache(ca_cert_key_pair) -> dict[str, str]:
+def mock_jwt_validator_jwks_cache(mica_cert_key_pair) -> dict[str, str]:
     # init for tests
-    _, ca_key = ca_cert_key_pair
+    _, mica_key = mica_cert_key_pair
 
-    public_key = ca_key.public_key()
+    public_key = mica_key.public_key()
     return {
         "test-kid": public_key.public_bytes(
             encoding=serialization.Encoding.PEM, format=serialization.PublicFormat.SubjectPublicKeyInfo
@@ -231,43 +280,38 @@ def valid_token_for_user(subject: str, ca_key, kid, scope, permissions) -> str:
 
 
 @pytest.fixture(scope="function")
-def valid_jwt_user1(mock_jwt_validator_jwks_cache, ca_cert_key_pair) -> str:
-    _, ca_key = ca_cert_key_pair
+def valid_jwt_user1(mock_jwt_validator_jwks_cache, rsa_key) -> str:
     kid = list(mock_jwt_validator_jwks_cache.keys())[0]
-    return valid_token_for_user("user1", ca_key, kid, "user:all", ["user:all"])
+    return valid_token_for_user("user1", rsa_key, kid, "user:all", ["user:all"])
 
 
 @pytest.fixture(scope="function")
-def valid_jwt_user2(mock_jwt_validator_jwks_cache, ca_cert_key_pair) -> str:
-    _, ca_key = ca_cert_key_pair
+def valid_jwt_user2(mock_jwt_validator_jwks_cache, rsa_key) -> str:
     kid = list(mock_jwt_validator_jwks_cache.keys())[0]
-    return valid_token_for_user("user2", ca_key, kid, "user:all", ["user:all"])
+    return valid_token_for_user("user2", rsa_key, kid, "user:all", ["user:all"])
 
 
 @pytest.fixture(scope="function")
-def valid_jwt_user3(mock_jwt_validator_jwks_cache, ca_cert_key_pair) -> str:
-    _, ca_key = ca_cert_key_pair
+def valid_jwt_user3(mock_jwt_validator_jwks_cache, rsa_key) -> str:
     kid = list(mock_jwt_validator_jwks_cache.keys())[0]
-    return valid_token_for_user("user3", ca_key, kid, "user:all", ["user:all"])
+    return valid_token_for_user("user3", rsa_key, kid, "user:all", ["user:all"])
 
 
 @pytest.fixture(scope="function")
-def valid_jwt_no_user(mock_jwt_validator_jwks_cache, ca_cert_key_pair) -> str:
-    _, ca_key = ca_cert_key_pair
+def valid_jwt_no_user(mock_jwt_validator_jwks_cache, rsa_key) -> str:
     kid = list(mock_jwt_validator_jwks_cache.keys())[0]
-    return valid_token_for_user("user-dne", ca_key, kid, "user:all", ["user:all"])
+    return valid_token_for_user("user-dne", rsa_key, kid, "user:all", ["user:all"])
 
 
 @pytest.fixture(scope="function")
-def valid_jwt_admin1(mock_jwt_validator_jwks_cache, ca_cert_key_pair) -> str:
-    _, ca_key = ca_cert_key_pair
+def valid_jwt_admin1(mock_jwt_validator_jwks_cache, rsa_key) -> str:
     kid = list(mock_jwt_validator_jwks_cache.keys())[0]
-    return valid_token_for_user("admin-user", ca_key, kid, "user:all", ["admin:all", "user:all"])
+    return valid_token_for_user("admin-user", rsa_key, kid, "user:all", ["admin:all", "user:all"])
 
 
 @pytest.fixture
-def mock_k8s_tls_secret(ca_cert_key_pair):
-    cert_pem, cert_key = ca_cert_key_pair
+def mock_k8s_tls_secret(mica_cert_key_pair):
+    cert_pem, cert_key = mica_cert_key_pair
     secret_mock = MagicMock(spec=V1Secret)
     secret_mock.data = {
         "tls.crt": base64.b64encode(
