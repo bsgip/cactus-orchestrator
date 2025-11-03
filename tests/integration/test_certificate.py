@@ -1,5 +1,4 @@
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
 from http import HTTPStatus
 from itertools import product
 from typing import Generator
@@ -9,10 +8,7 @@ import pytest
 from assertical.fixtures.postgres import generate_async_session
 from cryptography import x509
 from cryptography.hazmat.backends import default_backend
-from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.hazmat.primitives.serialization import pkcs12
-from cryptography.x509 import Certificate
 from sqlalchemy import select
 from sqlalchemy.orm import undefer
 
