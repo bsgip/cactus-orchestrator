@@ -5,7 +5,7 @@ from http import HTTPStatus
 from typing import Annotated
 
 from cactus_runner.client import ClientSession, ClientTimeout, RunnerClient, RunnerClientException
-from cactus_runner.models import RunnerStatus
+from cactus_runner.models import RequestData, RequestList, RunnerStatus
 from cactus_test_definitions import CSIPAusVersion
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization
@@ -683,4 +683,92 @@ async def get_run_status(
             raise HTTPException(
                 status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
                 detail=f"Unable to connect to run {run.run_id}'s pod to fetch status.",
+            )
+
+
+@router.get("/run/{run_id}/requests", status_code=HTTPStatus.OK)
+async def get_run_request_list(
+    run_id: int,
+    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.user_all}))],
+) -> RequestList:
+    """Fetches the set of client requests that the underlying runner has collected.
+
+    returns HTTP 200 on success with a RequestList model"""
+
+    user = await select_user_or_raise(db.session, user_context)
+
+    # get the run - make sure it's still "running"
+    try:
+        run = await select_user_run(db.session, user.user_id, run_id)
+    except NoResultFound as exc:
+        logger.debug(exc)
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Run does not exist.")
+    if run.run_status not in ACTIVE_RUN_STATUSES:
+        raise HTTPException(
+            status_code=HTTPStatus.GONE,
+            detail=f"Run {run_id} has terminated. Please download the final artifacts for status information.",
+        )
+
+    # Connect to the pod and talk to the runner's "status" endpoint. Forward the result along
+    run_resource_names = get_resource_names(run.teststack_id)
+    settings = get_current_settings()
+    async with ClientSession(
+        base_url=run_resource_names.runner_base_url,
+        timeout=ClientTimeout(settings.test_execution_comms_timeout_seconds),
+    ) as s:
+        try:
+            return await RunnerClient.list_requests(s)
+        except Exception as exc:
+            logger.error(
+                f"Error fetching runner request list for run {run.run_id} @ {run_resource_names.runner_base_url}.",
+                exc_info=exc,
+            )
+            raise HTTPException(
+                status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
+                detail=f"Unable to connect to run {run.run_id}'s pod to fetch request list.",
+            )
+
+
+@router.get("/run/{run_id}/requests/{request_id}", status_code=HTTPStatus.OK)
+async def get_run_request_data(
+    run_id: int,
+    request_id: int,
+    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.user_all}))],
+) -> RequestData:
+    """Fetches a specific client request that the underlying runner has collected. request_id can be discovered via
+    get_run_request_list endpoint or from a RunnerStatus response.
+
+    returns HTTP 200 on success with a RequestData model"""
+
+    user = await select_user_or_raise(db.session, user_context)
+
+    # get the run - make sure it's still "running"
+    try:
+        run = await select_user_run(db.session, user.user_id, run_id)
+    except NoResultFound as exc:
+        logger.debug(exc)
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Run does not exist.")
+    if run.run_status not in ACTIVE_RUN_STATUSES:
+        raise HTTPException(
+            status_code=HTTPStatus.GONE,
+            detail=f"Run {run_id} has terminated. Please download the final artifacts for status information.",
+        )
+
+    # Connect to the pod and talk to the runner's "status" endpoint. Forward the result along
+    run_resource_names = get_resource_names(run.teststack_id)
+    settings = get_current_settings()
+    async with ClientSession(
+        base_url=run_resource_names.runner_base_url,
+        timeout=ClientTimeout(settings.test_execution_comms_timeout_seconds),
+    ) as s:
+        try:
+            return await RunnerClient.get_request(s, request_id)
+        except Exception as exc:
+            logger.error(
+                f"Error fetching runner req {request_id} for run {run.run_id} @ {run_resource_names.runner_base_url}.",
+                exc_info=exc,
+            )
+            raise HTTPException(
+                status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
+                detail=f"Unable to connect to run {run.run_id}'s pod to fetch request {request_id}.",
             )

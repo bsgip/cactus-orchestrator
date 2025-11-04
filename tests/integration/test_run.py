@@ -10,7 +10,15 @@ from assertical.asserts.time import assert_nowish
 from assertical.fake.generator import generate_class_instance
 from assertical.fixtures.postgres import generate_async_session
 from cactus_runner.client import RunnerClientException
-from cactus_runner.models import CriteriaEntry, InitResponseBody, RequestEntry, RunnerStatus, StepStatus
+from cactus_runner.models import (
+    CriteriaEntry,
+    InitResponseBody,
+    RequestData,
+    RequestEntry,
+    RequestList,
+    RunnerStatus,
+    StepStatus,
+)
 from cactus_test_definitions import CSIPAusVersion
 from cactus_test_definitions.client import TestProcedureId
 from cryptography import x509
@@ -710,8 +718,8 @@ async def test_delete_individual_run(
                 step_status={},
                 criteria=[CriteriaEntry(True, "", ""), CriteriaEntry(True, "", "")],
                 request_history=[
-                    RequestEntry("", "", HTTPMethod.GET, HTTPStatus.BAD_REQUEST, datetime.now(), "", []),
-                    RequestEntry("", "", HTTPMethod.POST, HTTPStatus.OK, datetime.now(), "", None),
+                    RequestEntry("", "", HTTPMethod.GET, HTTPStatus.BAD_REQUEST, datetime.now(), "", [], 0),
+                    RequestEntry("", "", HTTPMethod.POST, HTTPStatus.OK, datetime.now(), "", None, 0),
                 ],
             ),
             True,
@@ -740,8 +748,8 @@ async def test_delete_individual_run(
                 step_status={},
                 criteria=[CriteriaEntry(True, "", ""), CriteriaEntry(True, "", "")],
                 request_history=[
-                    RequestEntry("", "", HTTPMethod.GET, HTTPStatus.BAD_REQUEST, datetime.now(), "", None),
-                    RequestEntry("", "", HTTPMethod.POST, HTTPStatus.OK, datetime.now(), "", ["validation error"]),
+                    RequestEntry("", "", HTTPMethod.GET, HTTPStatus.BAD_REQUEST, datetime.now(), "", None, 0),
+                    RequestEntry("", "", HTTPMethod.POST, HTTPStatus.OK, datetime.now(), "", ["validation error"], 0),
                 ],
             ),
             False,
@@ -752,8 +760,8 @@ async def test_delete_individual_run(
                 step_status={},
                 criteria=[CriteriaEntry(True, "", ""), CriteriaEntry(False, "", "")],
                 request_history=[
-                    RequestEntry("", "", HTTPMethod.GET, HTTPStatus.BAD_REQUEST, datetime.now(), "", None),
-                    RequestEntry("", "", HTTPMethod.POST, HTTPStatus.OK, datetime.now(), "", []),
+                    RequestEntry("", "", HTTPMethod.GET, HTTPStatus.BAD_REQUEST, datetime.now(), "", None, 0),
+                    RequestEntry("", "", HTTPMethod.POST, HTTPStatus.OK, datetime.now(), "", [], 0),
                 ],
             ),
             False,
@@ -773,7 +781,7 @@ def test_is_all_criteria_met(runner_status: RunnerStatus | None, expected: bool 
                 RunnerStatus,
                 step_status={},
                 criteria=[CriteriaEntry(True, "", "")],
-                request_history=[RequestEntry("a", "b", "c", HTTPStatus.OK, datetime(2022, 11, 20), "", [])],
+                request_history=[RequestEntry("a", "b", "c", HTTPStatus.OK, datetime(2022, 11, 20), "", [], 0)],
             ),
             True,
         ),
@@ -791,7 +799,9 @@ def test_is_all_criteria_met(runner_status: RunnerStatus | None, expected: bool 
                 RunnerStatus,
                 step_status={"step1": StepStatus.RESOLVED},
                 criteria=[CriteriaEntry(True, "", "")],
-                request_history=[RequestEntry("a", "b", "c", HTTPStatus.OK, datetime(2022, 11, 20), "", ["an error"])],
+                request_history=[
+                    RequestEntry("a", "b", "c", HTTPStatus.OK, datetime(2022, 11, 20), "", ["an error"], 0)
+                ],
             ),
             False,
         ),
@@ -1196,3 +1206,71 @@ async def test_delete_group(
         k8s_mock.delete_service.assert_not_called()
         k8s_mock.delete_statefulset.assert_not_called()
         k8s_mock.remove_ingress_rule.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "run_id, expected_status",
+    [
+        (1, HTTPStatus.OK),
+        (5, HTTPStatus.OK),
+        (8, HTTPStatus.OK),
+        (2, HTTPStatus.GONE),
+        (6, HTTPStatus.NOT_FOUND),
+        (99, HTTPStatus.NOT_FOUND),
+    ],
+)
+async def test_get_run_request_list(k8s_mock, client, pg_base_config, valid_jwt_user1, run_id, expected_status):
+    """Does fetching the run request list work under common conditions"""
+
+    # Act
+    expected_request_list = generate_class_instance(RequestList)
+    k8s_mock.list_requests.return_value = expected_request_list
+
+    res = await client.get(f"run/{run_id}/requests", headers={"Authorization": f"Bearer {valid_jwt_user1}"})
+
+    # Assert
+    assert res.status_code == expected_status
+    if expected_status == HTTPStatus.OK:
+        actual_list = RequestList.from_dict(res.json())
+        assert actual_list == expected_request_list
+        k8s_mock.list_requests.assert_called_once()
+    else:
+        k8s_mock.list_requests.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "run_id, expected_status",
+    [
+        (1, HTTPStatus.OK),
+        (5, HTTPStatus.OK),
+        (8, HTTPStatus.OK),
+        (2, HTTPStatus.GONE),
+        (6, HTTPStatus.NOT_FOUND),
+        (99, HTTPStatus.NOT_FOUND),
+    ],
+)
+async def test_get_run_request_data(
+    k8s_mock: MockedK8s, client, pg_base_config, valid_jwt_user1, run_id, expected_status
+):
+    """Does fetching the run request list work under common conditions"""
+
+    # Act
+    request_id = 315163161
+    expected_request_data = generate_class_instance(RequestData)
+    k8s_mock.get_request.return_value = expected_request_data
+
+    res = await client.get(
+        f"run/{run_id}/requests/{request_id}", headers={"Authorization": f"Bearer {valid_jwt_user1}"}
+    )
+
+    # Assert
+    assert res.status_code == expected_status
+    if expected_status == HTTPStatus.OK:
+        actual_request = RequestData.from_dict(res.json())
+        assert actual_request == expected_request_data
+        k8s_mock.get_request.assert_called_once()
+        assert (
+            k8s_mock.get_request.call_args_list[0].args[1] == request_id
+        )  # Ensuring request_id is passed to runner client
+    else:
+        k8s_mock.get_request.assert_not_called()
