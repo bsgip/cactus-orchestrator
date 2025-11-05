@@ -2,11 +2,54 @@ from unittest.mock import patch
 
 import pytest
 from cryptography import x509
-from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec, padding
 from cryptography.hazmat.primitives.serialization import pkcs12
 
-from cactus_orchestrator.k8s.certificate.create import generate_client_p12_ec
+from cactus_orchestrator.k8s.certificate.create import (
+    calculate_rfc5280_subject_key_identifier_method_2,
+    generate_client_p12_ec,
+)
 from cactus_orchestrator.k8s.certificate.fetch import fetch_certificate_key_pair
+
+
+@pytest.mark.parametrize(
+    "private_key, expected_ski",
+    [
+        (
+            b"""
+-----BEGIN EC PRIVATE KEY-----
+MHcCAQEEIBN1/lJK6hmijn2voBrkup50oNiLl+z0q9kHb94bvwGaoAoGCCqGSM49
+AwEHoUQDQgAEdN+Y8gW5qN2kOvrcP1DQpabQ9fDQhy5qyCk+fXqVX2jCtyDx7MY9
+6iM/ZxHacJKcImF78IA8aXdybC8vRL+fzA==
+-----END EC PRIVATE KEY-----
+""",
+            bytes([0x41, 0x59, 0x30, 0xDF, 0xA2, 0x97, 0x01, 0x6C]),
+        ),
+        (
+            b"""
+-----BEGIN EC PRIVATE KEY-----
+MHcCAQEEIItAzpM90Q4q6SIQBjWO/lcJ3zke1ZmZ9+OEH7FWJgvaoAoGCCqGSM49
+AwEHoUQDQgAEbXEg6p7zNEIVBUjnAXvzfGqsa2ZNn+UNvbT+zXbw/CfMNwZDWhLd
+ioiRMijNGm8WlVnFzjPU8XqpaKypul+oPQ==
+-----END EC PRIVATE KEY-----
+""",
+            bytes([0x40, 0xDF, 0xCB, 0x43, 0x60, 0x93, 0x13, 0x0E]),
+        ),
+    ],
+)
+def test_calculate_rfc5280_subject_key_identifier_method_2(private_key: bytes, expected_ski: bytes):
+    """The test cases are derived from openssl examples using:
+
+    openssl ec -in "$key_file" -pubout -outform DER -out "$pub_file"
+    local sha1_hash=$(openssl dgst -sha1 -binary "$pub_file" | xxd -p)
+    echo "4${sha1_hash:(-15)}"
+
+    """
+    ec_private_key = serialization.load_pem_private_key(private_key, password=None)
+    actual = calculate_rfc5280_subject_key_identifier_method_2(ec_private_key.public_key())
+    assert isinstance(actual, bytes)
+    assert actual == expected_ski
 
 
 def test_generate_client_p12_ec(mca_cert_key_pair, mica_cert_key_pair):
@@ -30,6 +73,14 @@ def test_generate_client_p12_ec(mca_cert_key_pair, mica_cert_key_pair):
 
     assert cl_cert.not_valid_after_utc < mica_cert.not_valid_after_utc
     assert cl_cert.not_valid_before_utc > mica_cert.not_valid_before_utc
+
+    # Check that the new cert is signed by mica
+    mica_public_key = mica_cert.public_key()
+    mica_public_key.verify(cl_cert.signature, cl_cert.tbs_certificate_bytes, ec.ECDSA(cl_cert.signature_hash_algorithm))
+    assert (
+        cl_cert.extensions.get_extension_for_class(x509.AuthorityKeyIdentifier).value.key_identifier
+        == mica_cert.extensions.get_extension_for_class(x509.SubjectKeyIdentifier).value.key_identifier
+    )
 
 
 def test_generate_client_p12_invalid_password(mca_cert_key_pair, mica_cert_key_pair):

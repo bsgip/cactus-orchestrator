@@ -20,7 +20,10 @@ from psycopg import Connection
 from sqlalchemy import NullPool, create_engine
 
 from cactus_orchestrator.auth import jwt_validator
-from cactus_orchestrator.k8s.certificate.create import generate_client_p12_ec
+from cactus_orchestrator.k8s.certificate.create import (
+    calculate_rfc5280_subject_key_identifier_method_2,
+    generate_client_p12_ec,
+)
 from cactus_orchestrator.model import Base
 from cactus_orchestrator.settings import _reset_current_settings, get_current_settings
 
@@ -69,6 +72,8 @@ def serca_cert_key_pair():
     # This isn't a fully compliant 2030.5 SERCA cert but is close enough for our tests
     serca_key: ec.EllipticCurvePrivateKey = ec.generate_private_key(ec.SECP256R1())
     subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Test SERCA")])
+    ski = x509.SubjectKeyIdentifier(calculate_rfc5280_subject_key_identifier_method_2(serca_key.public_key()))
+
     ca_cert = (
         x509.CertificateBuilder()
         .subject_name(subject)
@@ -78,6 +83,7 @@ def serca_cert_key_pair():
         .not_valid_before(datetime.now(timezone.utc))
         .not_valid_after(datetime.now(timezone.utc) + timedelta(days=365))
         .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
+        .add_extension(ski, critical=False)
         .sign(serca_key, hashes.SHA256())  # Self signed
     )
     return (ca_cert, serca_key)
@@ -90,6 +96,11 @@ def mca_cert_key_pair(serca_cert_key_pair):
 
     mca_key: ec.EllipticCurvePrivateKey = ec.generate_private_key(ec.SECP256R1())
     subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Test MCA")])
+
+    ski = x509.SubjectKeyIdentifier(calculate_rfc5280_subject_key_identifier_method_2(mca_key.public_key()))
+    issuer_ski = serca_cert.extensions.get_extension_for_class(x509.SubjectKeyIdentifier)
+    aki = x509.AuthorityKeyIdentifier.from_issuer_subject_key_identifier(issuer_ski.value)
+
     ca_cert = (
         x509.CertificateBuilder()
         .subject_name(subject)
@@ -99,6 +110,8 @@ def mca_cert_key_pair(serca_cert_key_pair):
         .not_valid_before(datetime.now(timezone.utc))
         .not_valid_after(datetime.now(timezone.utc) + timedelta(days=365))
         .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
+        .add_extension(ski, critical=False)
+        .add_extension(aki, critical=False)
         .sign(serca_key, hashes.SHA256())
     )
     return (ca_cert, mca_key)
@@ -111,6 +124,11 @@ def mica_cert_key_pair(mca_cert_key_pair):
 
     mica_key: ec.EllipticCurvePrivateKey = ec.generate_private_key(ec.SECP256R1())
     subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Test MICA")])
+
+    ski = x509.SubjectKeyIdentifier(calculate_rfc5280_subject_key_identifier_method_2(mica_key.public_key()))
+    issuer_ski = mca_cert.extensions.get_extension_for_class(x509.SubjectKeyIdentifier)
+    aki = x509.AuthorityKeyIdentifier.from_issuer_subject_key_identifier(issuer_ski.value)
+
     mica_cert = (
         x509.CertificateBuilder()
         .subject_name(subject)
@@ -120,6 +138,8 @@ def mica_cert_key_pair(mca_cert_key_pair):
         .not_valid_before(datetime.now(timezone.utc))
         .not_valid_after(datetime.now(timezone.utc) + timedelta(days=365))
         .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
+        .add_extension(ski, critical=False)
+        .add_extension(aki, critical=False)
         .sign(mca_key, hashes.SHA256())
     )
     return (mica_cert, mica_key)
