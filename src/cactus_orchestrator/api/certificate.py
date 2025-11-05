@@ -15,6 +15,7 @@ from cactus_orchestrator.auth import AuthPerm, UserContext, jwt_validator
 from cactus_orchestrator.crud import insert_user, select_user
 from cactus_orchestrator.k8s.certificate.create import generate_client_p12_ec
 from cactus_orchestrator.k8s.certificate.fetch import fetch_certificate_key_pair, fetch_certificate_only
+from cactus_orchestrator.model import User
 from cactus_orchestrator.settings import CactusOrchestratorException, get_current_settings
 
 logger = logging.getLogger(__name__)
@@ -36,7 +37,7 @@ MEDIA_TYPE_PEM_KEY = "application/pkcs8"
 
 
 async def create_client_cert_binary(
-    user_context: UserContext, client_cert_passphrase: SecretStr
+    user: User, client_cert_passphrase: SecretStr, cert_type: str
 ) -> tuple[bytes, bytes]:
     settings = get_current_settings()
     mica_cert, mica_key = await fetch_certificate_key_pair(settings.tls_mica_secret_name)
@@ -47,7 +48,7 @@ async def create_client_cert_binary(
         mica_cert=mica_cert,
         mica_key=mica_key,
         mca_cert=mca_cert,
-        client_common_name=user_context.subject_id,
+        client_common_name=f"{cert_type} user {user.user_id}",
         p12_password=client_cert_passphrase.get_secret_value(),
     )
     return client_p12, client_cert.public_bytes(encoding=serialization.Encoding.DER)
@@ -237,7 +238,7 @@ async def generate_client_certificate(
 
     # generate client passphrase
     pass_phrase = SecretStr(shortuuid.random(length=20))
-    client_p12, client_x509_der = await create_client_cert_binary(user_context, pass_phrase)
+    client_p12, client_x509_der = await create_client_cert_binary(user, pass_phrase, cert_type)
     pem_key, pem_cert, _ = pkcs12.load_key_and_certificates(client_p12, pass_phrase.get_secret_value().encode())
     pem_cert_bytes = pem_cert.public_bytes(encoding=serialization.Encoding.PEM) if pem_cert else None
     pem_key_bytes = (

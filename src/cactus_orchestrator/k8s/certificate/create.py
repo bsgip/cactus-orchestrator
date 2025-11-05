@@ -1,3 +1,4 @@
+import hashlib
 from datetime import datetime, timedelta
 
 from cryptography import x509
@@ -19,6 +20,28 @@ class ServiceProviderIdentifier(univ.Sequence):
         namedtype.NamedType("oid", univ.ObjectIdentifier()),
         namedtype.NamedType("value", univ.OctetString()),
     )
+
+
+def calculate_rfc5280_subject_key_identifier_method_2(public_key: ec.EllipticCurvePublicKey) -> bytes:
+    """Implements RFC 5280 4.2.1.2 Subject Key Identifier Method 2"""
+
+    # The keyIdentifier is composed of a four-bit type field with
+    # the value 0100 followed by the least significant 60 bits of
+    # the SHA-1 hash of the value of the BIT STRING
+    # subjectPublicKey (excluding the tag, length, and number of
+    # unused bits).
+
+    # The method should match the following openssl snippets
+    # openssl ec -in "$key_file" -pubout -outform DER -out "$pub_file"
+    # local sha1_hash=$(openssl dgst -sha1 -binary "$pub_file" | xxd -p)
+    # echo "4${sha1_hash:(-15)}"
+
+    der_bytes = public_key.public_bytes(serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)
+    sha1_hash = hashlib.sha1(der_bytes, usedforsecurity=False).digest()
+
+    # Need the least significant 60 bits - we do this by grabbing 7 bytes (56 bits) and then manipulating the 8th byte
+    most_significant_byte = 0x40 | (sha1_hash[-8] & 0x0F)  # Take the bottom 4 bits and then write 0100 for the top 4
+    return bytes([most_significant_byte]) + sha1_hash[-7:]
 
 
 def generate_client_p12_ec(
@@ -49,10 +72,11 @@ def generate_client_p12_ec(
         not_after = mica_cert.not_valid_after_utc - timedelta(seconds=1)
 
     # Subject key identifier
-    ski = x509.SubjectKeyIdentifier.from_public_key(client_key.public_key())
+    ski = x509.SubjectKeyIdentifier(calculate_rfc5280_subject_key_identifier_method_2(client_key.public_key()))
 
     # Authority key identifier
-    aki = x509.AuthorityKeyIdentifier.from_issuer_public_key(mica_key.public_key())
+    issuer_ski = mica_cert.extensions.get_extension_for_class(x509.SubjectKeyIdentifier)
+    aki = x509.AuthorityKeyIdentifier.from_issuer_subject_key_identifier(issuer_ski.value)
 
     # Certificate policies
     policies = x509.CertificatePolicies(
