@@ -28,6 +28,9 @@ def test_generate_client_p12_ec(mca_cert_key_pair, mica_cert_key_pair):
     assert cl_cert2.issuer == mica_cert.subject
     assert isinstance(cl_key, ec.EllipticCurvePrivateKey)
 
+    assert cl_cert.not_valid_after_utc < mica_cert.not_valid_after_utc
+    assert cl_cert.not_valid_before_utc > mica_cert.not_valid_before_utc
+
 
 def test_generate_client_p12_invalid_password(mca_cert_key_pair, mica_cert_key_pair):
     mca_cert, mca_key = mca_cert_key_pair
