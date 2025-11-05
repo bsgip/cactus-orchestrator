@@ -69,7 +69,7 @@ async def fetch_current_certificate_authority_der(
         raise CactusOrchestratorException("SERCA certificate not found.")
 
     return Response(
-        content=serca_cert.public_bytes(serialization.Encoding.DER),
+        content=serca_cert.public_bytes(serialization.Encoding.PEM),
         media_type=MEDIA_TYPE_CA_CRT,
     )
 
@@ -142,7 +142,7 @@ async def fetch_client_pem(
     cert_type=aggregator Returns the aggregator certificate
 
     Query Parameter
-    key=False Returns pem .crt
+    key=False Returns pem .crt (Will include signing chain with MICA/MCA)
     key=True Return pem .key
     """
 
