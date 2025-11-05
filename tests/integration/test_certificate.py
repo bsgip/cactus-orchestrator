@@ -318,12 +318,12 @@ async def test_fetch_current_certificate_authority_der(
     response_1 = await client.get("/certificate/authority", headers={"Authorization": f"Bearer {valid_jwt_user1}"})
     assert response_1.status_code == HTTPStatus.OK
     assert response_1.headers["content-type"] == "application/x-x509-ca-cert"
-    assert x509.load_der_x509_certificate(response_1.content, default_backend()) == serca_cert_key_pair[0]
+    assert x509.load_pem_x509_certificate(response_1.content, default_backend()) == serca_cert_key_pair[0]
 
     response_2 = await client.get("/certificate/authority", headers={"Authorization": f"Bearer {valid_jwt_user1}"})
     assert response_2.status_code == HTTPStatus.OK
     assert response_2.headers["content-type"] == "application/x-x509-ca-cert"
-    assert x509.load_der_x509_certificate(response_2.content, default_backend()) == serca_cert_key_pair[0]
+    assert x509.load_pem_x509_certificate(response_2.content, default_backend()) == serca_cert_key_pair[0]
 
     # Assert
     k8s_mock_secrets_only.fetch_certificate_only.call_count == 2
