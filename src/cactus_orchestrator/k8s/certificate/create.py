@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta
 
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
@@ -44,9 +44,9 @@ def generate_client_p12_ec(
     )
 
     if not_before is None:
-        not_before = datetime.now(timezone.utc)
+        not_before = mica_cert.not_valid_before_utc + timedelta(seconds=1)
     if not_after is None:
-        not_after = datetime(9999, 12, 31, 23, 59, 59, tzinfo=timezone.utc)
+        not_after = mica_cert.not_valid_after_utc - timedelta(seconds=1)
 
     # Subject key identifier
     ski = x509.SubjectKeyIdentifier.from_public_key(client_key.public_key())
