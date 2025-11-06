@@ -49,43 +49,11 @@ async def insert_user(session: AsyncSession, user_context: UserContext) -> User:
     return new_user
 
 
-async def select_user(
-    session: AsyncSession,
-    user_context: UserContext,
-    with_aggregator_der: bool = False,
-    with_aggregator_p12: bool = False,
-    with_aggregator_pem_cert: bool = False,
-    with_aggregator_pem_key: bool = False,
-    with_device_der: bool = False,
-    with_device_p12: bool = False,
-    with_device_pem_cert: bool = False,
-    with_device_pem_key: bool = False,
-) -> User | None:
+async def select_user(session: AsyncSession, user_context: UserContext) -> User | None:
 
     stmt = select(User).where(
         and_(User.subject_id == user_context.subject_id, User.issuer_id == user_context.issuer_id)
     )
-
-    options_list = []
-    if with_aggregator_p12:
-        options_list.append(undefer(User.aggregator_certificate_p12_bundle))
-    if with_aggregator_der:
-        options_list.append(undefer(User.aggregator_certificate_x509_der))
-    if with_aggregator_pem_cert:
-        options_list.append(undefer(User.aggregator_certificate_pem))
-    if with_aggregator_pem_key:
-        options_list.append(undefer(User.aggregator_certificate_pem_key))
-    if with_device_p12:
-        options_list.append(undefer(User.device_certificate_p12_bundle))
-    if with_device_der:
-        options_list.append(undefer(User.device_certificate_x509_der))
-    if with_device_pem_cert:
-        options_list.append(undefer(User.device_certificate_pem))
-    if with_device_pem_key:
-        options_list.append(undefer(User.device_certificate_pem_key))
-
-    if options_list:
-        stmt = stmt.options(*options_list)
 
     res = await session.execute(stmt)
     return res.scalar_one_or_none()
@@ -222,10 +190,14 @@ async def select_run_group_counts_for_user(session: AsyncSession, run_group_ids:
     return dict(resp.tuples().all())
 
 
-async def select_run_group_for_user(session: AsyncSession, user_id: int, run_group_id: int) -> RunGroup | None:
-    resp = await session.execute(
-        select(RunGroup).where(((RunGroup.user_id == user_id) & (RunGroup.run_group_id == run_group_id))).limit(1)
-    )
+async def select_run_group_for_user(
+    session: AsyncSession, user_id: int, run_group_id: int, with_cert_key_values: bool
+) -> RunGroup | None:
+    stmt = select(RunGroup).where(((RunGroup.user_id == user_id) & (RunGroup.run_group_id == run_group_id))).limit(1)
+    if with_cert_key_values:
+        stmt.options(undefer(RunGroup.certificate_pem), undefer(RunGroup.key_pem))
+
+    resp = await session.execute(stmt)
     return resp.scalar_one_or_none()
 
 

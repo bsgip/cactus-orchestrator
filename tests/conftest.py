@@ -206,32 +206,6 @@ def ec_cert_key_pair(request: pytest.FixtureRequest) -> tuple[x509.Certificate, 
         raise ValueError(f"Unknown fixture name: {request.param}")
 
 
-@pytest.fixture(scope="function")
-def valid_user_p12_and_der(mca_cert_key_pair, mica_cert_key_pair) -> tuple[bytes, bytes]:
-    mca_cert, mca_key = mca_cert_key_pair
-    mica_cert, mica_key = mica_cert_key_pair
-    cl_p12, cl_x509 = generate_client_p12_ec(mica_key, mica_cert, mca_cert, "test", "abc")
-    cl_der = cl_x509.public_bytes(encoding=serialization.Encoding.DER)
-    return cl_p12, cl_der
-
-
-@pytest.fixture(scope="function")
-def expired_user_p12_and_der(mca_cert_key_pair, mica_cert_key_pair) -> tuple[bytes, bytes]:
-    mca_cert, mca_key = mca_cert_key_pair
-    mica_cert, mica_key = mica_cert_key_pair
-    cl_p12, cl_x509 = generate_client_p12_ec(
-        mica_key,
-        mica_cert,
-        mca_cert,
-        "test",
-        "abc",
-        not_before=datetime.now(timezone.utc) - timedelta(days=3),
-        not_after=datetime.now(timezone.utc) - timedelta(minutes=1),
-    )
-    cl_der = cl_x509.public_bytes(encoding=serialization.Encoding.DER)
-    return cl_p12, cl_der
-
-
 @pytest.fixture(scope="session")
 def kid_and_jwks_stub(rsa_key) -> tuple[str, dict[str, list[str, Any]]]:
     public_key = rsa_key.public_key()

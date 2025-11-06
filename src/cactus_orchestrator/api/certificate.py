@@ -1,57 +1,44 @@
 import logging
+from datetime import datetime, timezone
 from enum import StrEnum, auto
 from http import HTTPStatus
-from typing import Annotated
+from typing import Annotated, cast
 
-import shortuuid
+from cryptography import x509
 from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.serialization import pkcs12
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
 from fastapi_async_sqlalchemy import db
-from pydantic import SecretStr
 
+from cactus_orchestrator.api.common import select_user_run_group_or_raise
 from cactus_orchestrator.auth import AuthPerm, UserContext, jwt_validator
-from cactus_orchestrator.crud import insert_user, select_user
 from cactus_orchestrator.k8s.certificate.create import generate_client_p12_ec
 from cactus_orchestrator.k8s.certificate.fetch import fetch_certificate_key_pair, fetch_certificate_only
-from cactus_orchestrator.model import User
 from cactus_orchestrator.settings import CactusOrchestratorException, get_current_settings
 
 logger = logging.getLogger(__name__)
 
 
-class CertificateRouteType(StrEnum):
+class CertificateComponent(StrEnum):
+    certificate = auto()  # PEM encoded certificate (contains MCA/MICA)
+    key = auto()  # PEM encoded private key (no password / encryption)
+    p12 = auto()  # pkcs12 (p12) encoded certificate (with MCA/MICA) + key (no password / encryption)
+
+
+class CertificateType(StrEnum):
     aggregator = auto()
     device = auto()
 
 
 router = APIRouter()
 
-
 MEDIA_TYPE_P12 = "application/x-pkcs12"
 MEDIA_TYPE_CA_CRT = "application/x-x509-ca-cert"
 # The following media types taken from https://pki-tutorial.readthedocs.io/en/latest/mime.html
 MEDIA_TYPE_PEM_CRT = "application/x-x509-user-cert"
 MEDIA_TYPE_PEM_KEY = "application/pkcs8"
-
-
-async def create_client_cert_binary(
-    user: User, client_cert_passphrase: SecretStr, cert_type: str
-) -> tuple[bytes, bytes]:
-    settings = get_current_settings()
-    mica_cert, mica_key = await fetch_certificate_key_pair(settings.tls_mica_secret_name)
-    mca_cert = await fetch_certificate_only(settings.cert_mca_secret_name)
-
-    # create client certificate
-    client_p12, client_cert = generate_client_p12_ec(
-        mica_cert=mica_cert,
-        mica_key=mica_key,
-        mca_cert=mca_cert,
-        client_common_name=f"{cert_type} user {user.user_id}",
-        p12_password=client_cert_passphrase.get_secret_value(),
-    )
-    return client_p12, client_cert.public_bytes(encoding=serialization.Encoding.DER)
 
 
 @router.get(
@@ -63,7 +50,7 @@ async def create_client_cert_binary(
 async def fetch_current_certificate_authority_der(
     _: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.user_all}))],
 ) -> Response:
-
+    """Fetches a PEM encoded SERCA certificate (trust anchor for the signing chain)"""
     serca_cert = await fetch_certificate_only(get_current_settings().cert_serca_secret_name)
     if serca_cert is None:
         raise CactusOrchestratorException("SERCA certificate not found.")
@@ -74,205 +61,109 @@ async def fetch_current_certificate_authority_der(
     )
 
 
-@router.get(
-    "/certificate/{cert_type}",
-    response_class=Response,
-    responses={HTTPStatus.OK: {"content": {MEDIA_TYPE_P12: {}}}},
-)
-async def fetch_client_certificate(
+@router.get("/run_group/{run_group_id}/certificate/{cert_component}", response_class=Response)
+async def fetch_client_certificate_component(
     user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.user_all}))],
-    cert_type: str,
+    run_group_id: int,
+    cert_component: CertificateComponent,
 ) -> Response:
-    """Fetches the certificate as a p12/pfx encoded stream of bytes
-
-    cert_type=device Returns the device certificate
-    cert_type=aggregator Returns the aggregator certificate"""
-
-    if cert_type == CertificateRouteType.aggregator:
-        with_aggregator_p12 = True
-        with_device_p12 = False
-    elif cert_type == CertificateRouteType.device:
-        with_aggregator_p12 = False
-        with_device_p12 = True
-    else:
-        raise HTTPException(
-            status_code=HTTPStatus.NOT_FOUND,
-            detail=f"cert_type '{cert_type}' is not valid. Please use 'aggregator' or 'device'",
-        )
-
-    # get user with the appropriate p12 selected
-    user = await select_user(
-        db.session, user_context, with_aggregator_p12=with_aggregator_p12, with_device_p12=with_device_p12
+    """Fetches a specific part of the run group's certificate as a raw binary response. See CertComponent for the
+    various things that can be downloaded."""
+    user, run_group = await select_user_run_group_or_raise(
+        db.session, user_context, run_group_id, with_cert_key_values=True
     )
-    if user is None:
-        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="No certificate exists, please register.")
 
-    # Extract the appropriate stream of bytes
-    if cert_type == CertificateRouteType.aggregator:
+    if run_group.certificate_pem is None or run_group.key_pem is None:
+        logger.info(f"user {user.user_id} run_group {run_group_id} does NOT have a certificate yet.")
         return Response(
-            content=user.aggregator_certificate_p12_bundle,
-            media_type=MEDIA_TYPE_P12,
+            status_code=HTTPStatus.BAD_REQUEST,
+            content=f"No certificate stored for run group {run_group_id}. Generate a certificate first.",
+            media_type="text/plain",
         )
-    elif cert_type == CertificateRouteType.device:
+
+    # Key downloads are easy - just send it straight from the DB
+    if cert_component == CertificateComponent.key:
+        return Response(status_code=HTTPStatus.OK, content=run_group.key_pem, media_type=MEDIA_TYPE_PEM_KEY)
+
+    # cert / p12 downloads will require the MICA / MCA signing chain
+    settings = get_current_settings()
+    mica_cert, _ = await fetch_certificate_key_pair(settings.tls_mica_secret_name)
+    mca_cert = await fetch_certificate_only(settings.cert_mca_secret_name)
+    client_cert = x509.load_pem_x509_certificate(run_group.certificate_pem)
+
+    if cert_component == CertificateComponent.p12:
+        # We just generate the pfx from the various certs
+        client_key = cast(
+            ec.EllipticCurvePrivateKey, serialization.load_pem_private_key(run_group.key_pem, password=None)
+        )
+        pfx_data: bytes = pkcs12.serialize_key_and_certificates(
+            name=f"({run_group_id}) {run_group.name}".encode(),
+            key=client_key,
+            cert=client_cert,
+            cas=[mica_cert, mca_cert],
+            encryption_algorithm=serialization.NoEncryption(),
+        )
+        return Response(status_code=HTTPStatus.OK, content=pfx_data, media_type=MEDIA_TYPE_P12)
+    elif cert_component == CertificateComponent.certificate:
+        # We just concatenate our PEM encodings together
         return Response(
-            content=user.device_certificate_p12_bundle,
-            media_type=MEDIA_TYPE_P12,
+            status_code=HTTPStatus.OK,
+            content=client_cert.public_bytes(serialization.Encoding.PEM)
+            + mica_cert.public_bytes(serialization.Encoding.PEM)
+            + mca_cert.public_bytes(serialization.Encoding.PEM),
+            media_type=MEDIA_TYPE_PEM_CRT,
         )
     else:
-        raise HTTPException(
-            status_code=HTTPStatus.NOT_FOUND,
-            detail=f"cert_type '{cert_type}' is not valid. Please use 'aggregator' or 'device'",
-        )
-
-
-@router.get(
-    "/certificate/pem/{cert_type}",
-    response_class=Response,
-    responses={HTTPStatus.OK: {"content": {MEDIA_TYPE_PEM_CRT: {}}}},
-)
-async def fetch_client_pem(
-    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.user_all}))],
-    cert_type: str,
-    key: bool = False,
-) -> Response:
-    """Fetches pem encoded stream of bytes, by default returning .crt
-
-    Path Variable
-    cert_type=device Returns the device certificate
-    cert_type=aggregator Returns the aggregator certificate
-
-    Query Parameter
-    key=False Returns pem .crt (Will include signing chain with MICA/MCA)
-    key=True Return pem .key
-    """
-
-    if cert_type == CertificateRouteType.aggregator:
-        with_aggregator_pem = True
-        with_aggregator_pem_key = True
-        with_device_pem = False
-        with_device_pem_key = False
-    elif cert_type == CertificateRouteType.device:
-        with_aggregator_pem = False
-        with_aggregator_pem_key = False
-        with_device_pem = True
-        with_device_pem_key = True
-    else:
-        raise HTTPException(
-            status_code=HTTPStatus.NOT_FOUND,
-            detail=f"cert_type '{cert_type}' is not valid. Please use 'aggregator' or 'device'",
-        )
-
-    # get user with the appropriate p12 selected
-    user = await select_user(
-        db.session,
-        user_context,
-        with_aggregator_pem_cert=with_aggregator_pem,
-        with_aggregator_pem_key=with_aggregator_pem_key,
-        with_device_pem_cert=with_device_pem,
-        with_device_pem_key=with_device_pem_key,
-    )
-    if user is None:
-        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="No certificate exists, please register.")
-
-    # Extract the appropriate stream of bytes
-    if cert_type == CertificateRouteType.aggregator:
-        if key:
-            return Response(
-                content=user.aggregator_certificate_pem_key,
-                media_type=MEDIA_TYPE_PEM_KEY,
-            )
-        else:
-            return Response(
-                content=user.aggregator_certificate_pem,
-                media_type=MEDIA_TYPE_PEM_CRT,
-            )
-    elif cert_type == CertificateRouteType.device:
-        if key:
-            return Response(
-                content=user.device_certificate_pem_key,
-                media_type=MEDIA_TYPE_PEM_KEY,
-            )
-        else:
-            return Response(
-                content=user.device_certificate_pem,
-                media_type=MEDIA_TYPE_PEM_CRT,
-            )
-    else:
-        raise HTTPException(
-            status_code=HTTPStatus.NOT_FOUND,
-            detail=f"cert_type '{cert_type}' is not valid. Please use 'aggregator' or 'device'",
+        logger.info(f"user {user.user_id} run_group {run_group_id} requested bad cert_component '{cert_component}'.")
+        return Response(
+            status_code=HTTPStatus.BAD_REQUEST,
+            content=f"Unsupported cert_component '{cert_component}'",
+            media_type="text/plain",
         )
 
 
 @router.put(
-    "/certificate/{cert_type}",
+    "/run_group/{run_group_id}/certificate",
     status_code=HTTPStatus.OK,
     response_class=Response,
-    responses={
-        HTTPStatus.OK: {
-            "headers": {"X-Certificate-Password": {"description": "Password for .p12 certificate bundle."}},
-            "content": {MEDIA_TYPE_P12: {}},
-        }
-    },
 )
 async def generate_client_certificate(
     user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.user_all}))],
-    cert_type: str,
+    run_group_id: int,
+    cert_type: str | None = None,  # Query parameter
 ) -> Response:
     """Generates a user's certificate of cert_type. Replacing any existing certificate details
 
-    cert_type=device Returns the device certificate
-    cert_type=aggregator Returns the aggregator certificate"""
+    ?cert_type=device Generates a device certificate
+    ?cert_type=aggregator Generates a aggregator certificate"""
 
-    if cert_type not in CertificateRouteType:
+    if cert_type is None or cert_type not in CertificateType:
         raise HTTPException(
-            status_code=HTTPStatus.NOT_FOUND,
-            detail=f"cert_type '{cert_type}' is not valid. Please use 'aggregator' or 'device'",
+            status_code=HTTPStatus.BAD_REQUEST,
+            detail=f"Query param cert_type '{cert_type}' is not valid. Please use 'aggregator' or 'device'",
         )
 
-    # Get (or create) the user
-    user = await select_user(db.session, user_context)
-    if user is None:
-        user = await insert_user(db.session, user_context)
-        logger.info(f"Created new user {user.user_id} for user context {user_context}")
-
-    # generate client passphrase
-    pass_phrase = SecretStr(shortuuid.random(length=20))
-    client_p12, client_x509_der = await create_client_cert_binary(user, pass_phrase, cert_type)
-    pem_key, pem_cert, _ = pkcs12.load_key_and_certificates(client_p12, pass_phrase.get_secret_value().encode())
-    pem_cert_bytes = pem_cert.public_bytes(encoding=serialization.Encoding.PEM) if pem_cert else None
-    pem_key_bytes = (
-        pem_key.private_bytes(
-            encoding=serialization.Encoding.PEM,
-            format=serialization.PrivateFormat.PKCS8,
-            encryption_algorithm=serialization.NoEncryption(),
-        )
-        if pem_key
-        else None
+    # Get the user / run_group
+    _, run_group = await select_user_run_group_or_raise(
+        db.session, user_context, run_group_id, with_cert_key_values=True
     )
 
-    # update the certificate details on the user
-    if cert_type == CertificateRouteType.aggregator:
-        user.aggregator_certificate_p12_bundle = client_p12
-        user.aggregator_certificate_x509_der = client_x509_der
-        user.aggregator_certificate_pem = pem_cert_bytes
-        user.aggregator_certificate_pem_key = pem_key_bytes
-    elif cert_type == CertificateRouteType.device:
-        user.device_certificate_p12_bundle = client_p12
-        user.device_certificate_x509_der = client_x509_der
-        user.device_certificate_pem = pem_cert_bytes
-        user.device_certificate_pem_key = pem_key_bytes
-    else:
-        # Check above should've prevented this from happening
-        raise HTTPException(
-            status_code=HTTPStatus.NOT_FOUND,
-            detail=f"cert_type '{cert_type}' is not valid. Please use 'aggregator' or 'device'",
-        )
+    now = datetime.now(timezone.utc)
 
+    # Generate the cert
+    common_name = f"{cert_type} {run_group.name} {run_group.csip_aus_version}"
+    identifier = f"rg-{run_group_id}-ts-{now.timestamp()}"
+    settings = get_current_settings()
+    mica_cert, mica_key = await fetch_certificate_key_pair(settings.tls_mica_secret_name)
+    client_key, client_cert = generate_client_p12_ec(mica_key, mica_cert, common_name, identifier)
+
+    # update the certificate details on the run group
+    run_group.certificate_generated_at = now
+    run_group.is_device_cert = cert_type == CertificateType.device
+    run_group.certificate_pem = client_cert.public_bytes(serialization.Encoding.PEM)
+    run_group.key_pem = client_key.private_bytes(
+        serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()
+    )
     await db.session.commit()
 
-    return Response(
-        content=client_p12,
-        media_type=MEDIA_TYPE_P12,
-        headers={"X-Certificate-Password": pass_phrase.get_secret_value()},
-    )
+    return Response(status_code=HTTPStatus.CREATED)

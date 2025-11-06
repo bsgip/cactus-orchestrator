@@ -13,7 +13,7 @@ UserUniqueConstraintName = "subject_id_issuer_id_key"
 
 
 class User(Base):
-    """Store for users and their issued mTLS client certificates"""
+    """Store for users and their global configuration options"""
 
     __tablename__ = "user_"
     __table_args__ = (
@@ -29,41 +29,12 @@ class User(Base):
     issuer_id: Mapped[str] = mapped_column(String, nullable=False)  # JWT iss
     user_name: Mapped[str] = mapped_column(String, nullable=True)
 
-    # NOTE: We assume these are unique, too big to enforce
-    aggregator_certificate_p12_bundle: Mapped[bytes | None] = mapped_column(
-        LargeBinary, nullable=True, unique=False, deferred=True
-    )  # p12 - Aggregator certificate + key
-    aggregator_certificate_x509_der: Mapped[bytes | None] = mapped_column(
-        LargeBinary, nullable=True, unique=False, deferred=True
-    )  # x509 DER-encoded - Aggregator certificate
-    aggregator_certificate_pem: Mapped[bytes | None] = mapped_column(
-        LargeBinary, nullable=True, unique=False, deferred=True
-    )  # pem - Aggregator certificate (the certificate bundled in the aggregator_certificate_p12_bundle)
-    aggregator_certificate_pem_key: Mapped[bytes | None] = mapped_column(
-        LargeBinary, nullable=True, unique=False, deferred=True
-    )  # pem - Aggregator private key (the key bundled in the aggregator_certificate_p12_bundle)
-    device_certificate_p12_bundle: Mapped[bytes | None] = mapped_column(
-        LargeBinary, nullable=True, unique=False, deferred=True
-    )  # p12 - Device certificate + key
-    device_certificate_x509_der: Mapped[bytes | None] = mapped_column(
-        LargeBinary, nullable=True, unique=False, deferred=True
-    )  # x509 DER-encoded - Device certificate
-    device_certificate_pem: Mapped[bytes | None] = mapped_column(
-        LargeBinary, nullable=True, unique=False, deferred=True
-    )  # pem - Device certificate (the certificate bundled in the aggregator_certificate_p12_bundle)
-    device_certificate_pem_key: Mapped[bytes | None] = mapped_column(
-        LargeBinary, nullable=True, unique=False, deferred=True
-    )  # pem - Device private key (the key bundled in the aggregator_certificate_p12_bundle)
-
     subscription_domain: Mapped[str | None] = mapped_column(
         String, nullable=True
     )  # What FQDN is allowed to be subscribed
     is_static_uri: Mapped[bool] = mapped_column(
         BOOLEAN, server_default="0"
     )  # If True - always use the same URI for all spawned instances (this will limit them to a single run at a time)
-    is_device_cert: Mapped[bool] = mapped_column(
-        BOOLEAN, server_default="0"
-    )  # If True - init test runs using device certificate. Otherwise init using aggregator certificate
     pen: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0
     )  # 0 is the only reserved PEN so can be used as the NULL value.
@@ -72,8 +43,9 @@ class User(Base):
 
 
 class RunGroup(Base):
-    """A RunGroup is so users can organise their runs under the label of a specific device/client. Contains some
-    settings that are unique to all runs in this group"""
+    """A RunGroup is so users can organise their runs under the label of a specific device/client. Contains the TLS
+    certs that will be utilised by runs under this group. Contains some settings that are unique to all runs in this
+    group."""
 
     __tablename__ = "run_group"
     __table_args__ = (
@@ -92,6 +64,17 @@ class RunGroup(Base):
         String, nullable=False
     )  # What test cases are used in this group - should be treated as immutable
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    is_device_cert: Mapped[bool] = mapped_column(
+        BOOLEAN, server_default="0"
+    )  # If True - certificate_pem/key_pem represents a device certificate. Otherwise it's a aggregator certificate
+    certificate_pem: Mapped[bytes | None] = mapped_column(
+        LargeBinary, nullable=True, unique=False, deferred=True
+    )  # PEM encoded - Aggregator certificate (the certificate bundled in the aggregator_certificate_p12_bundle)
+    key_pem: Mapped[bytes | None] = mapped_column(
+        LargeBinary, nullable=True, unique=False, deferred=True
+    )  # PEM encoded - Aggregator private key (the key bundled in the aggregator_certificate_p12_bundle)
+    certificate_generated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     runs: Mapped[list["Run"]] = relationship(lazy="raise", back_populates="run_group")
     user: Mapped["User"] = relationship(lazy="raise")
