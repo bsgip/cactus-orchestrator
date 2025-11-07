@@ -39,6 +39,10 @@ class RunGroupRequest(BaseModel):
     csip_aus_version: str
 
 
+class GenerateClientCertificateRequest(BaseModel):
+    is_device_cert: bool
+
+
 class RunGroupUpdateRequest(BaseModel):
     """NOTE - this is explicitly NOT allowing updates on csip-aus version - it has too many weird considerations and
     realistically, a user should just create a new group if they want to test against a new version (there is no
@@ -52,6 +56,11 @@ class RunGroupResponse(BaseModel):
     name: str
     csip_aus_version: str
     created_at: datetime
+
+    is_device_cert: bool | None
+    certificate_id: int | None
+    certificate_created_at: datetime | None
+
     total_runs: int  # How many runs live underneath this group
 
 
@@ -92,7 +101,6 @@ class UserConfigurationRequest(BaseModel):
     is_static_uri: (
         bool | None
     )  # If true - all test instances will share the same URI (limit to 1 test at a time). If None - no update
-    is_device_cert: bool | None  # whether test instances will init using the device certificate. Otherwise use agg cert
     pen: int | None
 
 
@@ -103,8 +111,5 @@ class UserUpdateRequest(BaseModel):
 class UserConfigurationResponse(BaseModel):
     subscription_domain: str  # What domain will outgoing notifications be scoped to? Empty string = no value configured
     is_static_uri: bool  # If true - all test instances will share the same URI (limit to 1 test at a time).
-    is_device_cert: bool  # if true - all test instances will spawn using the device certificate. Otherwise use agg cert
     pen: int
     static_uri: str | None  # What the static URI will be for this user (readonly and only set if is_static_uri is True)
-    aggregator_certificate_expiry: datetime | None  # When the current user aggregator cert expires. None = expired
-    device_certificate_expiry: datetime | None  # When the current user device cert expires. None = expired

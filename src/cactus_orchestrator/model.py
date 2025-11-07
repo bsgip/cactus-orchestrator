@@ -65,16 +65,16 @@ class RunGroup(Base):
     )  # What test cases are used in this group - should be treated as immutable
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
-    is_device_cert: Mapped[bool] = mapped_column(
-        BOOLEAN, server_default="0"
+    is_device_cert: Mapped[bool | None] = mapped_column(
+        BOOLEAN, nullable=True
     )  # If True - certificate_pem/key_pem represents a device certificate. Otherwise it's a aggregator certificate
     certificate_pem: Mapped[bytes | None] = mapped_column(
         LargeBinary, nullable=True, unique=False, deferred=True
     )  # PEM encoded - Aggregator certificate (the certificate bundled in the aggregator_certificate_p12_bundle)
-    key_pem: Mapped[bytes | None] = mapped_column(
-        LargeBinary, nullable=True, unique=False, deferred=True
-    )  # PEM encoded - Aggregator private key (the key bundled in the aggregator_certificate_p12_bundle)
     certificate_generated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    certificate_id: Mapped[int] = mapped_column(
+        Integer, server_default="0"
+    )  # This is a "best effort" counter - can be subject to race conditions
 
     runs: Mapped[list["Run"]] = relationship(lazy="raise", back_populates="run_group")
     user: Mapped["User"] = relationship(lazy="raise")

@@ -1,14 +1,14 @@
+import io
 import logging
+import zipfile
 from datetime import datetime, timezone
-from enum import StrEnum, auto
 from http import HTTPStatus
-from typing import Annotated, cast
+from typing import Annotated
 
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.serialization import pkcs12
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 from fastapi.responses import Response
 from fastapi_async_sqlalchemy import db
 
@@ -16,21 +16,10 @@ from cactus_orchestrator.api.common import select_user_run_group_or_raise
 from cactus_orchestrator.auth import AuthPerm, UserContext, jwt_validator
 from cactus_orchestrator.k8s.certificate.create import generate_client_p12_ec
 from cactus_orchestrator.k8s.certificate.fetch import fetch_certificate_key_pair, fetch_certificate_only
+from cactus_orchestrator.schema import GenerateClientCertificateRequest
 from cactus_orchestrator.settings import CactusOrchestratorException, get_current_settings
 
 logger = logging.getLogger(__name__)
-
-
-class CertificateComponent(StrEnum):
-    certificate = auto()  # PEM encoded certificate (contains MCA/MICA)
-    key = auto()  # PEM encoded private key (no password / encryption)
-    p12 = auto()  # pkcs12 (p12) encoded certificate (with MCA/MICA) + key (no password / encryption)
-
-
-class CertificateType(StrEnum):
-    aggregator = auto()
-    device = auto()
-
 
 router = APIRouter()
 
@@ -61,19 +50,21 @@ async def fetch_current_certificate_authority_der(
     )
 
 
-@router.get("/run_group/{run_group_id}/certificate/{cert_component}", response_class=Response)
-async def fetch_client_certificate_component(
+@router.get(
+    "/run_group/{run_group_id}/certificate",
+    status_code=HTTPStatus.OK,
+    response_class=Response,
+    responses={HTTPStatus.OK: {"content": {MEDIA_TYPE_PEM_CRT: {}}}},
+)
+async def fetch_client_certificate(
     user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.user_all}))],
     run_group_id: int,
-    cert_component: CertificateComponent,
 ) -> Response:
-    """Fetches a specific part of the run group's certificate as a raw binary response. See CertComponent for the
-    various things that can be downloaded."""
-    user, run_group = await select_user_run_group_or_raise(
-        db.session, user_context, run_group_id, with_cert_key_values=True
-    )
+    """Fetches the most recent run group's certificate as a raw binary response. This will also contain the MICA/MCA
+    as a full signing chain. Certificate will be PEM encoded."""
+    user, run_group = await select_user_run_group_or_raise(db.session, user_context, run_group_id, with_cert=True)
 
-    if run_group.certificate_pem is None or run_group.key_pem is None:
+    if run_group.certificate_pem is None:
         logger.info(f"user {user.user_id} run_group {run_group_id} does NOT have a certificate yet.")
         return Response(
             status_code=HTTPStatus.BAD_REQUEST,
@@ -81,45 +72,22 @@ async def fetch_client_certificate_component(
             media_type="text/plain",
         )
 
-    # Key downloads are easy - just send it straight from the DB
-    if cert_component == CertificateComponent.key:
-        return Response(status_code=HTTPStatus.OK, content=run_group.key_pem, media_type=MEDIA_TYPE_PEM_KEY)
-
     # cert / p12 downloads will require the MICA / MCA signing chain
     settings = get_current_settings()
     mica_cert, _ = await fetch_certificate_key_pair(settings.tls_mica_secret_name)
     mca_cert = await fetch_certificate_only(settings.cert_mca_secret_name)
     client_cert = x509.load_pem_x509_certificate(run_group.certificate_pem)
 
-    if cert_component == CertificateComponent.p12:
-        # We just generate the pfx from the various certs
-        client_key = cast(
-            ec.EllipticCurvePrivateKey, serialization.load_pem_private_key(run_group.key_pem, password=None)
-        )
-        pfx_data: bytes = pkcs12.serialize_key_and_certificates(
-            name=f"({run_group_id}) {run_group.name}".encode(),
-            key=client_key,
-            cert=client_cert,
-            cas=[mica_cert, mca_cert],
-            encryption_algorithm=serialization.NoEncryption(),
-        )
-        return Response(status_code=HTTPStatus.OK, content=pfx_data, media_type=MEDIA_TYPE_P12)
-    elif cert_component == CertificateComponent.certificate:
-        # We just concatenate our PEM encodings together
-        return Response(
-            status_code=HTTPStatus.OK,
-            content=client_cert.public_bytes(serialization.Encoding.PEM)
-            + mica_cert.public_bytes(serialization.Encoding.PEM)
-            + mca_cert.public_bytes(serialization.Encoding.PEM),
-            media_type=MEDIA_TYPE_PEM_CRT,
-        )
-    else:
-        logger.info(f"user {user.user_id} run_group {run_group_id} requested bad cert_component '{cert_component}'.")
-        return Response(
-            status_code=HTTPStatus.BAD_REQUEST,
-            content=f"Unsupported cert_component '{cert_component}'",
-            media_type="text/plain",
-        )
+    # We just concatenate our PEM encodings together
+    filename = f"{run_group.name}-fullchain-{run_group.certificate_id}.zip"
+    return Response(
+        status_code=HTTPStatus.OK,
+        content=client_cert.public_bytes(serialization.Encoding.PEM)
+        + mica_cert.public_bytes(serialization.Encoding.PEM)
+        + mca_cert.public_bytes(serialization.Encoding.PEM),
+        media_type=MEDIA_TYPE_PEM_CRT,
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
 
 
 @router.put(
@@ -130,40 +98,70 @@ async def fetch_client_certificate_component(
 async def generate_client_certificate(
     user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.user_all}))],
     run_group_id: int,
-    cert_type: str | None = None,  # Query parameter
+    body: GenerateClientCertificateRequest,
 ) -> Response:
-    """Generates a user's certificate of cert_type. Replacing any existing certificate details
+    """Generates a user's certificate based on GenerateClientCertificateRequest. Replacing any existing certificate
+    details.
 
-    ?cert_type=device Generates a device certificate
-    ?cert_type=aggregator Generates a aggregator certificate"""
+    Will return a ZIP stream of bytes with the following files:
 
-    if cert_type is None or cert_type not in CertificateType:
-        raise HTTPException(
-            status_code=HTTPStatus.BAD_REQUEST,
-            detail=f"Query param cert_type '{cert_type}' is not valid. Please use 'aggregator' or 'device'",
-        )
+        certificate.pem         # PEM encoded certificate
+        fullchain.pem           # PEM encoded certificate + MICA/MCA certificate bundle chain
+        key.pem                 # PEM encoded private key (unencrypted)
+        certificate.pfx              # PKCS12 encoded certificate + MICA/MCA chain / private key (unencrypted)
+    """
+
+    cert_label = "Device" if body.is_device_cert else "Aggregator"
 
     # Get the user / run_group
-    _, run_group = await select_user_run_group_or_raise(
-        db.session, user_context, run_group_id, with_cert_key_values=True
-    )
+    _, run_group = await select_user_run_group_or_raise(db.session, user_context, run_group_id, with_cert=True)
 
     now = datetime.now(timezone.utc)
 
     # Generate the cert
-    common_name = f"{cert_type} {run_group.name} {run_group.csip_aus_version}"
-    identifier = f"rg-{run_group_id}-ts-{now.timestamp()}"
+    cert_counter = run_group.certificate_id + 1
+    common_name = f"({cert_counter}) {cert_label} {run_group.name} {run_group.csip_aus_version}"
+    identifier = f"rg-{run_group_id}-id-{cert_counter}"
     settings = get_current_settings()
+    mca_cert = await fetch_certificate_only(settings.cert_mca_secret_name)
     mica_cert, mica_key = await fetch_certificate_key_pair(settings.tls_mica_secret_name)
     client_key, client_cert = generate_client_p12_ec(mica_key, mica_cert, common_name, identifier)
 
-    # update the certificate details on the run group
-    run_group.certificate_generated_at = now
-    run_group.is_device_cert = cert_type == CertificateType.device
-    run_group.certificate_pem = client_cert.public_bytes(serialization.Encoding.PEM)
-    run_group.key_pem = client_key.private_bytes(
+    # Generate the raw file data
+    client_cert_bytes = client_cert.public_bytes(serialization.Encoding.PEM)
+    mica_cert_bytes = mica_cert.public_bytes(serialization.Encoding.PEM)
+    mca_cert_bytes = mca_cert.public_bytes(serialization.Encoding.PEM)
+    client_key_bytes = client_key.private_bytes(
         serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()
     )
+    pfx_bytes = pkcs12.serialize_key_and_certificates(
+        name=common_name.encode(),
+        key=client_key,
+        cert=client_cert,
+        cas=[mica_cert, mca_cert],
+        encryption_algorithm=serialization.NoEncryption(),
+    )
+
+    # update the certificate details on the run group
+    run_group.certificate_generated_at = now
+    run_group.is_device_cert = body.is_device_cert
+    run_group.certificate_pem = client_cert_bytes
+    run_group.certificate_id = cert_counter  # This is only a best effort counter - can cause race conditions
     await db.session.commit()
 
-    return Response(status_code=HTTPStatus.CREATED)
+    # generate output ZipFile
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, "a", zipfile.ZIP_DEFLATED, False) as zip_file:
+        zip_file.writestr("certificate.pem", client_cert_bytes)
+        zip_file.writestr("fullchain.pem", client_cert_bytes + mica_cert_bytes + mca_cert_bytes)
+        zip_file.writestr("key.pem", client_key_bytes)
+        zip_file.writestr("certificate.pfx", pfx_bytes)
+
+    return Response(
+        status_code=HTTPStatus.OK,
+        content=zip_buffer.getvalue(),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f"attachment; filename={run_group.name}-{cert_label}-certificates-{cert_counter}.zip"
+        },
+    )

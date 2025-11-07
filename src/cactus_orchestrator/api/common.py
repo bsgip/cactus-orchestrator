@@ -36,20 +36,18 @@ async def select_user_or_raise(
 
 
 async def select_user_run_group_or_raise(
-    session: AsyncSession, user_context: UserContext, run_group_id: int, with_cert_key_values: bool = False
+    session: AsyncSession, user_context: UserContext, run_group_id: int, with_cert: bool = False
 ) -> tuple[User, RunGroup]:
     """Selects a user for the specific user context AND their associated run_group_id or raises a HTTPException if none
     can be found.
 
-    Can optionally include deferred certificate/key values on the RunGroup"""
+    Can optionally include deferred certificate values on the RunGroup"""
     user = await select_user_or_raise(
         session,
         user_context,
     )
 
-    run_group = await select_run_group_for_user(
-        session, user.user_id, run_group_id, with_cert_key_values=with_cert_key_values
-    )
+    run_group = await select_run_group_for_user(session, user.user_id, run_group_id, with_cert=with_cert)
     if run_group is None:
         logger.error(f"Cannot find run_group {run_group_id} for user {user.user_id}")
         raise HTTPException(

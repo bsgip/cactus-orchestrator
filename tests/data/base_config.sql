@@ -1,16 +1,19 @@
 
 -- Users
-INSERT INTO user_ (subject_id, issuer_id, aggregator_certificate_p12_bundle, aggregator_certificate_x509_der, aggregator_certificate_pem, aggregator_certificate_pem_key, device_certificate_p12_bundle, device_certificate_x509_der, device_certificate_pem, device_certificate_pem_key, pen)
-VALUES ('user1', 'https://test-cactus-issuer.example.com', E'\\x01', E'\\x02', E'\\x03', E'\\x04', E'\\x05', E'\\x06', E'\\x07', E'\\x08', 64);
-INSERT INTO user_ (subject_id, issuer_id, aggregator_certificate_p12_bundle, aggregator_certificate_x509_der, aggregator_certificate_pem, aggregator_certificate_pem_key, device_certificate_p12_bundle, device_certificate_x509_der, device_certificate_pem, device_certificate_pem_key, pen)
-VALUES ('user2', 'https://test-cactus-issuer.example.com', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 64);
-INSERT INTO user_ (subject_id, issuer_id, aggregator_certificate_p12_bundle, aggregator_certificate_x509_der, aggregator_certificate_pem, aggregator_certificate_pem_key, device_certificate_p12_bundle, device_certificate_x509_der, device_certificate_pem, device_certificate_pem_key, pen)
-VALUES ('user3', 'https://test-cactus-issuer.example.com', E'\\x', E'\\x', E'\\x', E'\\x', E'\\x', E'\\x', E'\\x', E'\\x', 64);
+INSERT INTO user_ (subject_id, issuer_id, pen)
+VALUES ('user1', 'https://test-cactus-issuer.example.com', 64);
+INSERT INTO user_ (subject_id, issuer_id, pen)
+VALUES ('user2', 'https://test-cactus-issuer.example.com', 64);
+INSERT INTO user_ (subject_id, issuer_id, pen)
+VALUES ('user3', 'https://test-cactus-issuer.example.com', 64);
 
--- 
-INSERT INTO run_group (user_id, name, csip_aus_version) VALUES (1, 'name-1', 'v1.2');
-INSERT INTO run_group (user_id, name, csip_aus_version) VALUES (1, 'name-2', 'v1.3-beta/storage');
-INSERT INTO run_group (user_id, name, csip_aus_version) VALUES (2, 'name-3', 'v1.2');
+-- Run Groups
+INSERT INTO run_group (user_id, name, csip_aus_version, is_device_cert, certificate_pem, certificate_generated_at, certificate_id)
+VALUES (1, 'name-1', 'v1.2', TRUE, E'\\x01', '2023-01-01T00:01:00Z', 11);
+INSERT INTO run_group (user_id, name, csip_aus_version, is_device_cert, certificate_pem, certificate_generated_at, certificate_id)
+VALUES (1, 'name-2', 'v1.3-beta/storage', NULL, NULL, NULL, 0);
+INSERT INTO run_group (user_id, name, csip_aus_version, is_device_cert, certificate_pem, certificate_generated_at, certificate_id)
+VALUES (2, 'name-3', 'v1.2', FALSE, E'\\x03', '2023-01-01T00:03:00Z', 33);
 
 
 INSERT INTO run_artifact (compression, file_data) VALUES ('gzip', E'\\x0001');

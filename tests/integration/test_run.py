@@ -55,22 +55,13 @@ async def test_spawn_teststack_and_init_run_dynamic_uris(
     client,
     k8s_mock: MockedK8s,
     pg_base_config,
-    valid_user_p12_and_der,
-    expired_user_p12_and_der,
+    client_cert_pem_bytes,
     valid_jwt_user1,
     is_device_cert: bool,
     run_group_id: int,
     expected_version: str,
 ):
     """Just a simple test of starting a run with all k8s functions stubbed under various circumstances"""
-
-    # The cert we WONT be using will be expired to ensure it doesn't block us
-    if is_device_cert:
-        agg_cert_bytes = expired_user_p12_and_der[1]
-        device_cert_bytes = valid_user_p12_and_der[1]
-    else:
-        agg_cert_bytes = valid_user_p12_and_der[1]
-        device_cert_bytes = expired_user_p12_and_der[1]
 
     subscription_domain = "abc.def"
 
@@ -79,11 +70,12 @@ async def test_spawn_teststack_and_init_run_dynamic_uris(
 
     async with generate_async_session(pg_base_config) as session:
         user = (await session.execute(select(User).where(User.user_id == 1))).scalar_one()
-        user.aggregator_certificate_x509_der = agg_cert_bytes
-        user.device_certificate_x509_der = device_cert_bytes
         user.subscription_domain = subscription_domain
-        user.is_device_cert = is_device_cert
         user.is_static_uri = False
+
+        run_group = (await session.execute(select(RunGroup).where(RunGroup.run_group_id == run_group_id))).scalar_one()
+        run_group.certificate_pem = client_cert_pem_bytes
+        run_group.is_device_cert = is_device_cert
 
         expected_static_uri = generate_static_test_stack_id(user)
 
@@ -112,13 +104,9 @@ async def test_spawn_teststack_and_init_run_dynamic_uris(
     assert k8s_mock.init.call_args_list[0].kwargs["test_id"] == TestProcedureId.ALL_01
     if is_device_cert:
         assert k8s_mock.init.call_args_list[0].kwargs["aggregator_certificate"] is None
-        assert k8s_mock.init.call_args_list[0].kwargs["device_certificate"] == x509.load_der_x509_certificate(
-            device_cert_bytes
-        ).public_bytes(serialization.Encoding.PEM).decode("utf-8")
+        assert k8s_mock.init.call_args_list[0].kwargs["device_certificate"] == client_cert_pem_bytes.decode()
     else:
-        assert k8s_mock.init.call_args_list[0].kwargs["aggregator_certificate"] == x509.load_der_x509_certificate(
-            agg_cert_bytes
-        ).public_bytes(serialization.Encoding.PEM).decode("utf-8")
+        assert k8s_mock.init.call_args_list[0].kwargs["aggregator_certificate"] == client_cert_pem_bytes.decode()
         assert k8s_mock.init.call_args_list[0].kwargs["device_certificate"] is None
     assert k8s_mock.init.call_args_list[0].kwargs["subscription_domain"] == subscription_domain
     assert k8s_mock.init.call_args_list[0].kwargs["run_id"] == str(response_model.run_id)
@@ -141,8 +129,7 @@ async def test_spawn_teststack_and_init_run_static_uri(
     client,
     k8s_mock: MockedK8s,
     pg_base_config,
-    valid_user_p12_and_der,
-    expired_user_p12_and_der,
+    client_cert_pem_bytes,
     valid_jwt_user1,
     is_device_cert: bool,
     is_started_response: bool,
@@ -150,12 +137,6 @@ async def test_spawn_teststack_and_init_run_static_uri(
     """Just a simple test of starting a run with all k8s functions stubbed when URIs are requested to be static"""
 
     # The cert we WONT be using will be expired to ensure it doesn't block us
-    if is_device_cert:
-        agg_cert_bytes = expired_user_p12_and_der[1]
-        device_cert_bytes = valid_user_p12_and_der[1]
-    else:
-        agg_cert_bytes = valid_user_p12_and_der[1]
-        device_cert_bytes = expired_user_p12_and_der[1]
 
     subscription_domain = "abc.def"
     run_group_id = 1
@@ -169,12 +150,13 @@ async def test_spawn_teststack_and_init_run_static_uri(
         await session.execute(update(Run).values(run_status=RunStatus.terminated).where(Run.run_group_id.in_([1, 2])))
 
         user = (await session.execute(select(User).where(User.user_id == 1))).scalar_one()
-        user.aggregator_certificate_x509_der = agg_cert_bytes
-        user.device_certificate_x509_der = device_cert_bytes
         user.subscription_domain = subscription_domain
-        user.is_device_cert = is_device_cert
         user.is_static_uri = True
         expected_static_uri = generate_static_test_stack_id(user)
+
+        run_group = (await session.execute(select(RunGroup).where(RunGroup.run_group_id == run_group_id))).scalar_one()
+        run_group.certificate_pem = client_cert_pem_bytes
+        run_group.is_device_cert = is_device_cert
 
         await session.commit()
 
@@ -201,13 +183,9 @@ async def test_spawn_teststack_and_init_run_static_uri(
     assert k8s_mock.init.call_args_list[0].kwargs["test_id"] == TestProcedureId.ALL_01
     if is_device_cert:
         assert k8s_mock.init.call_args_list[0].kwargs["aggregator_certificate"] is None
-        assert k8s_mock.init.call_args_list[0].kwargs["device_certificate"] == x509.load_der_x509_certificate(
-            device_cert_bytes
-        ).public_bytes(serialization.Encoding.PEM).decode("utf-8")
+        assert k8s_mock.init.call_args_list[0].kwargs["device_certificate"] == client_cert_pem_bytes.decode()
     else:
-        assert k8s_mock.init.call_args_list[0].kwargs["aggregator_certificate"] == x509.load_der_x509_certificate(
-            agg_cert_bytes
-        ).public_bytes(serialization.Encoding.PEM).decode("utf-8")
+        assert k8s_mock.init.call_args_list[0].kwargs["aggregator_certificate"] == client_cert_pem_bytes.decode()
         assert k8s_mock.init.call_args_list[0].kwargs["device_certificate"] is None
     assert k8s_mock.init.call_args_list[0].kwargs["subscription_domain"] == subscription_domain
     assert k8s_mock.init.call_args_list[0].kwargs["run_id"] == str(response_model.run_id)
@@ -233,14 +211,13 @@ async def test_spawn_teststack_and_init_tolerant_to_status_errors(
     client,
     k8s_mock: MockedK8s,
     pg_base_config,
-    valid_user_p12_and_der,
+    client_cert_pem_bytes,
     valid_jwt_user1,
 ):
     """The status will return failure a couple of times (as seen in real world testing) - the server should tolerate
     a small number of failures if the status eventually becomes good"""
 
     # The cert we WONT be using will be expired to ensure it doesn't block us
-    agg_cert_bytes = valid_user_p12_and_der[1]
     subscription_domain = "abc.def"
     run_group_id = 1
 
@@ -249,10 +226,12 @@ async def test_spawn_teststack_and_init_tolerant_to_status_errors(
 
     async with generate_async_session(pg_base_config) as session:
         user = (await session.execute(select(User).where(User.user_id == 1))).scalar_one()
-        user.aggregator_certificate_x509_der = agg_cert_bytes
         user.subscription_domain = subscription_domain
-        user.is_device_cert = False
         user.is_static_uri = False
+
+        run_group = (await session.execute(select(RunGroup).where(RunGroup.run_group_id == run_group_id))).scalar_one()
+        run_group.certificate_pem = client_cert_pem_bytes
+
         await session.commit()
 
     # Act
@@ -290,14 +269,13 @@ async def test_spawn_teststack_and_init_too_many_status_errors(
     client,
     k8s_mock: MockedK8s,
     pg_base_config,
-    valid_user_p12_and_der,
+    client_cert_pem_bytes,
     valid_jwt_user1,
 ):
     """If the status check during init is constantly failing - ensure that the init is aborted and the test stack
     is torn down"""
 
     # The cert we WONT be using will be expired to ensure it doesn't block us
-    agg_cert_bytes = valid_user_p12_and_der[1]
     subscription_domain = "abc.def"
     run_group_id = 1
 
@@ -306,10 +284,12 @@ async def test_spawn_teststack_and_init_too_many_status_errors(
 
     async with generate_async_session(pg_base_config) as session:
         user = (await session.execute(select(User).where(User.user_id == 1))).scalar_one()
-        user.aggregator_certificate_x509_der = agg_cert_bytes
         user.subscription_domain = subscription_domain
-        user.is_device_cert = False
         user.is_static_uri = False
+
+        run_group = (await session.execute(select(RunGroup).where(RunGroup.run_group_id == run_group_id))).scalar_one()
+        run_group.certificate_pem = client_cert_pem_bytes
+
         await session.commit()
 
     # Act
@@ -347,20 +327,11 @@ async def test_spawn_teststack_and_init_run_static_uri_collision(
     client,
     k8s_mock: MockedK8s,
     pg_base_config,
-    valid_user_p12_and_der,
-    expired_user_p12_and_der,
+    client_cert_pem_bytes,
     valid_jwt_user1,
     is_device_cert: bool,
 ):
     """Starting a static URI run should fail if there is an existing run for the user"""
-
-    # The cert we WONT be using will be expired to ensure it doesn't block us
-    if is_device_cert:
-        agg_cert_bytes = expired_user_p12_and_der[1]
-        device_cert_bytes = valid_user_p12_and_der[1]
-    else:
-        agg_cert_bytes = valid_user_p12_and_der[1]
-        device_cert_bytes = expired_user_p12_and_der[1]
 
     subscription_domain = "abc.def"
     run_group_id = 1
@@ -370,11 +341,12 @@ async def test_spawn_teststack_and_init_run_static_uri_collision(
 
     async with generate_async_session(pg_base_config) as session:
         user = (await session.execute(select(User).where(User.user_id == 1))).scalar_one()
-        user.aggregator_certificate_x509_der = agg_cert_bytes
-        user.device_certificate_x509_der = device_cert_bytes
         user.subscription_domain = subscription_domain
-        user.is_device_cert = is_device_cert
         user.is_static_uri = True
+
+        run_group = (await session.execute(select(RunGroup).where(RunGroup.run_group_id == run_group_id))).scalar_one()
+        run_group.certificate_pem = client_cert_pem_bytes
+        run_group.is_device_cert = is_device_cert
 
         await session.commit()
 
@@ -399,27 +371,10 @@ async def test_spawn_teststack_and_init_run_static_uri_collision(
 async def test_spawn_teststack_and_init_run_bad_run_group_id(
     client,
     k8s_mock: MockedK8s,
-    pg_base_config,
-    valid_user_p12_and_der,
-    expired_user_p12_and_der,
     valid_jwt_user1,
     run_group_id: int,
 ):
     """Can't start a run for a run group outside user's scope"""
-
-    agg_cert_bytes = valid_user_p12_and_der[1]
-    device_cert_bytes = expired_user_p12_and_der[1]
-    subscription_domain = "abc.def"
-
-    # Arrange
-    async with generate_async_session(pg_base_config) as session:
-        user = (await session.execute(select(User).where(User.user_id == 1))).scalar_one()
-        user.aggregator_certificate_x509_der = agg_cert_bytes
-        user.device_certificate_x509_der = device_cert_bytes
-        user.subscription_domain = subscription_domain
-        user.is_device_cert = False
-        user.is_static_uri = False
-        await session.commit()
 
     # Act
     req = InitRunRequest(test_procedure_id=TestProcedureId.ALL_01.value)
@@ -446,32 +401,19 @@ async def test_spawn_teststack_and_init_run_expired_certs(
     client,
     k8s_mock: MockedK8s,
     pg_base_config,
-    valid_user_p12_and_der,
-    expired_user_p12_and_der,
+    client_cert_expired_pem_bytes,
     valid_jwt_user1,
     is_device_cert: bool,
 ):
     """Can't start a run for a run group outside user's scope"""
 
-    # Ensure the cert we should be using is expired
-    if is_device_cert:
-        agg_cert_bytes = valid_user_p12_and_der[1]
-        device_cert_bytes = expired_user_p12_and_der[1]
-    else:
-        agg_cert_bytes = expired_user_p12_and_der[1]
-        device_cert_bytes = valid_user_p12_and_der[1]
-
-    subscription_domain = "abc.def"
     run_group_id = 1
 
     # Arrange
     async with generate_async_session(pg_base_config) as session:
-        user = (await session.execute(select(User).where(User.user_id == 1))).scalar_one()
-        user.aggregator_certificate_x509_der = agg_cert_bytes
-        user.device_certificate_x509_der = device_cert_bytes
-        user.subscription_domain = subscription_domain
-        user.is_device_cert = is_device_cert
-        user.is_static_uri = False
+        run_group = (await session.execute(select(RunGroup).where(RunGroup.run_group_id == run_group_id))).scalar_one()
+        run_group.certificate_pem = client_cert_expired_pem_bytes
+        run_group.is_device_cert = is_device_cert
         await session.commit()
 
     # Act
@@ -499,32 +441,20 @@ async def test_spawn_teststack_and_init_run_teardown_on_init_failure(
     client,
     k8s_mock: MockedK8s,
     pg_base_config,
-    valid_user_p12_and_der,
-    expired_user_p12_and_der,
+    client_cert_pem_bytes,
     valid_jwt_user1,
     is_device_cert: bool,
 ):
     """k8s resources should be deallocated if a failure happens during init"""
 
     # The cert we WONT be using will be expired to ensure it doesn't block us
-    if is_device_cert:
-        agg_cert_bytes = expired_user_p12_and_der[1]
-        device_cert_bytes = valid_user_p12_and_der[1]
-    else:
-        agg_cert_bytes = valid_user_p12_and_der[1]
-        device_cert_bytes = expired_user_p12_and_der[1]
-
-    subscription_domain = "abc.def"
     run_group_id = 1
 
     # Arrange
     async with generate_async_session(pg_base_config) as session:
-        user = (await session.execute(select(User).where(User.user_id == 1))).scalar_one()
-        user.aggregator_certificate_x509_der = agg_cert_bytes
-        user.device_certificate_x509_der = device_cert_bytes
-        user.subscription_domain = subscription_domain
-        user.is_device_cert = is_device_cert
-        user.is_static_uri = False
+        run_group = (await session.execute(select(RunGroup).where(RunGroup.run_group_id == run_group_id))).scalar_one()
+        run_group.certificate_pem = client_cert_pem_bytes
+        run_group.is_device_cert = is_device_cert
 
         await session.commit()
 
@@ -1029,183 +959,6 @@ async def test_get_run_status(k8s_mock, client, pg_base_config, valid_jwt_user1,
         k8s_mock.status.assert_called_once()
     else:
         k8s_mock.status.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_get_groups_paginated(client, pg_base_config, valid_jwt_user1):
-    """Can run groups be fetched for a specific user"""
-
-    # Act
-    res = await client.get("/run_group", headers={"Authorization": f"Bearer {valid_jwt_user1}"})
-
-    # Assert
-    assert res.status_code == HTTPStatus.OK
-    data = res.json()
-    assert isinstance(data, dict)
-    assert "items" in data
-    items = [RunGroupResponse.model_validate(i) for i in data["items"]]
-
-    assert [1, 2] == [i.run_group_id for i in items]
-    assert items[0].csip_aus_version == "v1.2"
-    assert items[1].csip_aus_version == "v1.3-beta/storage"
-    assert items[0].name == "name-1"
-    assert items[1].name == "name-2"
-    assert items[0].total_runs == 6
-    assert items[1].total_runs == 1
-
-
-@pytest.mark.parametrize(
-    "run_group_id, name, expected_status, expected_name",
-    [
-        (1, "The updated name", HTTPStatus.OK, "The updated name"),
-        (1, None, HTTPStatus.OK, "name-1"),
-        (1, "", HTTPStatus.OK, "name-1"),
-        (2, "New-Name#?%$}{[]}", HTTPStatus.OK, "New-Name#?%$}{[]}"),
-        (3, "Wrong User", HTTPStatus.FORBIDDEN, "name-3"),
-    ],
-)
-@pytest.mark.asyncio
-async def test_update_group(
-    client, pg_base_config, valid_jwt_user1, run_group_id, name, expected_status, expected_name
-):
-    """Can groups be updated for a specific user"""
-
-    # Act
-    body = RunGroupUpdateRequest(name=name)
-    response = await client.put(
-        f"/run_group/{run_group_id}",
-        headers={"Authorization": f"Bearer {valid_jwt_user1}"},
-        content=body.model_dump_json(),
-    )
-
-    # Assert
-    assert response.status_code == expected_status
-    async with generate_async_session(pg_base_config) as session:
-        run_group = (await session.execute(select(RunGroup).where(RunGroup.run_group_id == run_group_id))).scalar_one()
-        assert run_group.name == expected_name
-
-    if expected_status == HTTPStatus.OK:
-        response_data = RunGroupResponse.model_validate_json(response.text)
-        assert response_data.run_group_id == run_group_id
-        assert response_data.name == expected_name
-
-
-@pytest.mark.parametrize(
-    "version, expected_status",
-    [
-        (CSIPAusVersion.RELEASE_1_2.value, HTTPStatus.CREATED),
-        (CSIPAusVersion.BETA_1_3_STORAGE.value, HTTPStatus.CREATED),
-        ("v99.88", HTTPStatus.BAD_REQUEST),
-    ],
-)
-@pytest.mark.asyncio
-async def test_create_group(client, pg_base_config, valid_jwt_user1, version, expected_status):
-    """Can run groups be created for a specific user"""
-
-    # Act
-
-    body = RunGroupRequest(csip_aus_version=version)
-
-    response = await client.post(
-        "/run_group", headers={"Authorization": f"Bearer {valid_jwt_user1}"}, content=body.model_dump_json()
-    )
-
-    # Assert
-    assert response.status_code == expected_status
-    if expected_status == HTTPStatus.CREATED:
-        result = RunGroupResponse.model_validate_json(response.text)
-        assert result.name, "Should be set to something"
-        assert result.run_group_id > 0
-        assert result.csip_aus_version == version
-        assert_nowish(result.created_at)
-
-        async with generate_async_session(pg_base_config) as session:
-            run_group = (
-                await session.execute(select(RunGroup).where(RunGroup.run_group_id == result.run_group_id))
-            ).scalar_one()
-
-            assert run_group.name == result.name
-            assert run_group.csip_aus_version == result.csip_aus_version
-            assert run_group.created_at == result.created_at
-    else:
-        async with generate_async_session(pg_base_config) as session:
-            run_group_count = (await session.execute(select(func.count()).select_from(RunGroup))).scalar_one()
-            assert run_group_count == 3, "Nothing should be created"
-
-
-@pytest.mark.parametrize(
-    "run_group_id, expected_status, expected_run_ids, expected_teardown_run_ids, expected_run_artifact_ids",
-    [
-        (1, HTTPStatus.NO_CONTENT, [1, 2, 3, 4, 7, 8], [1, 8], [1, 2]),
-        (2, HTTPStatus.NO_CONTENT, [5], [5], [3]),
-        (3, HTTPStatus.FORBIDDEN, [], [], []),
-        (99, HTTPStatus.FORBIDDEN, [], [], []),
-    ],
-)
-@pytest.mark.asyncio
-async def test_delete_group(
-    client,
-    pg_base_config,
-    valid_jwt_user1,
-    k8s_mock: MockedK8s,
-    run_group_id: int,
-    expected_status: HTTPStatus,
-    expected_run_ids: list[int],
-    expected_teardown_run_ids: list[int],
-    expected_run_artifact_ids: list[int],
-):
-    """Can run groups be deleted for a specific user"""
-
-    # Act
-    async with generate_async_session(pg_base_config) as session:
-        before_run_group_count = (await session.execute(select(func.count()).select_from(RunGroup))).scalar_one()
-        before_run_count = (await session.execute(select(func.count()).select_from(Run))).scalar_one()
-        before_artifact_count = (await session.execute(select(func.count()).select_from(RunArtifact))).scalar_one()
-
-    response = await client.delete(f"/run_group/{run_group_id}", headers={"Authorization": f"Bearer {valid_jwt_user1}"})
-
-    # Assert
-    assert response.status_code == expected_status
-    async with generate_async_session(pg_base_config) as session:
-        after_run_group_count = (await session.execute(select(func.count()).select_from(RunGroup))).scalar_one()
-        after_run_count = (await session.execute(select(func.count()).select_from(Run))).scalar_one()
-        after_artifact_count = (await session.execute(select(func.count()).select_from(RunArtifact))).scalar_one()
-        remaining_run_ids = (
-            (await session.execute(select(Run.run_id).where(Run.run_id.in_(expected_run_ids)))).scalars().all()
-        )
-        remaining_artifact_ids = (
-            (
-                await session.execute(
-                    select(RunArtifact.run_artifact_id).where(
-                        RunArtifact.run_artifact_id.in_(expected_run_artifact_ids)
-                    )
-                )
-            )
-            .scalars()
-            .all()
-        )
-
-    if expected_status >= 200 and expected_status < 300:
-        assert after_run_count == before_run_count - len(expected_run_ids)
-        assert after_run_group_count == before_run_group_count - 1
-        assert after_artifact_count == before_artifact_count - len(expected_run_artifact_ids)
-        assert remaining_run_ids == []
-        assert remaining_artifact_ids == []
-
-        # Ensure any active runs are properly deallocated
-        assert k8s_mock.delete_service.call_count == len(expected_teardown_run_ids)
-        assert k8s_mock.delete_statefulset.call_count == len(expected_teardown_run_ids)
-        assert k8s_mock.remove_ingress_rule.call_count == len(expected_teardown_run_ids)
-
-    else:
-        assert after_run_count == before_run_count
-        assert after_run_group_count == after_run_group_count
-        assert remaining_run_ids == expected_run_ids
-        assert remaining_artifact_ids == expected_run_artifact_ids
-
-        k8s_mock.delete_service.assert_not_called()
-        k8s_mock.delete_statefulset.assert_not_called()
-        k8s_mock.remove_ingress_rule.assert_not_called()
 
 
 @pytest.mark.parametrize(
