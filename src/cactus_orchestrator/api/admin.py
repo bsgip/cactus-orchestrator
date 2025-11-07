@@ -15,20 +15,20 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from cactus_orchestrator.api.procedure import test_procedure_definitions
 from cactus_orchestrator.api.run import (
-    map_group_to_group_response,
     map_run_to_run_response,
-    select_run_group_counts_for_user,
-    select_run_groups_for_user,
     select_user_or_raise,
     select_user_run_group_or_raise,
     select_user_run_with_artifact,
 )
+from cactus_orchestrator.api.run_group import map_group_to_group_response
 from cactus_orchestrator.auth import AuthPerm, UserContext, jwt_validator
 from cactus_orchestrator.crud import (
     ACTIVE_RUN_STATUSES,
     select_group_runs_aggregated_by_procedure,
     select_group_runs_for_procedure,
+    select_run_group_counts_for_user,
     select_run_groups_by_user,
+    select_run_groups_for_user,
     select_runs_for_group,
     select_user_from_run,
     select_user_from_run_group,
@@ -54,28 +54,9 @@ router = APIRouter()
 async def select_user_with_run_group_or_raise(
     session: AsyncSession,
     run_group_id: int,
-    with_aggregator_der: bool = False,
-    with_aggregator_p12: bool = False,
-    with_aggregator_pem_cert: bool = False,
-    with_aggregator_pem_key: bool = False,
-    with_device_der: bool = False,
-    with_device_p12: bool = False,
-    with_device_pem_cert: bool = False,
-    with_device_pem_key: bool = False,
 ) -> User:
 
-    user = await select_user_from_run_group(
-        session=session,
-        run_group_id=run_group_id,
-        with_aggregator_der=with_aggregator_der,
-        with_aggregator_p12=with_aggregator_p12,
-        with_aggregator_pem_cert=with_aggregator_pem_cert,
-        with_aggregator_pem_key=with_aggregator_pem_key,
-        with_device_der=with_device_der,
-        with_device_p12=with_device_p12,
-        with_device_pem_cert=with_device_pem_cert,
-        with_device_pem_key=with_device_pem_key,
-    )
+    user = await select_user_from_run_group(session=session, run_group_id=run_group_id)
 
     if user is None:
         logger.error(f"Cannot find user associated with run group {run_group_id}")
@@ -86,28 +67,9 @@ async def select_user_with_run_group_or_raise(
 async def select_user_with_run_or_raise(
     session: AsyncSession,
     run_id: int,
-    with_aggregator_der: bool = False,
-    with_aggregator_p12: bool = False,
-    with_aggregator_pem_cert: bool = False,
-    with_aggregator_pem_key: bool = False,
-    with_device_der: bool = False,
-    with_device_p12: bool = False,
-    with_device_pem_cert: bool = False,
-    with_device_pem_key: bool = False,
 ) -> User:
 
-    user = await select_user_from_run(
-        session=session,
-        run_id=run_id,
-        with_aggregator_der=with_aggregator_der,
-        with_aggregator_p12=with_aggregator_p12,
-        with_aggregator_pem_cert=with_aggregator_pem_cert,
-        with_aggregator_pem_key=with_aggregator_pem_key,
-        with_device_der=with_device_der,
-        with_device_p12=with_device_p12,
-        with_device_pem_cert=with_device_pem_cert,
-        with_device_pem_key=with_device_pem_key,
-    )
+    user = await select_user_from_run(session=session, run_id=run_id)
 
     if user is None:
         logger.error(f"Cannot find user associated with run {run_id}")

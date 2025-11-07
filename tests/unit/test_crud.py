@@ -9,6 +9,7 @@ from cactus_test_definitions.client import TestProcedureId
 from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError, NoResultFound
 
+from cactus_orchestrator.auth import UserContext
 from cactus_orchestrator.crud import (
     ProcedureRunAggregated,
     insert_run_for_run_group,
@@ -18,9 +19,9 @@ from cactus_orchestrator.crud import (
     select_group_runs_aggregated_by_procedure,
     select_group_runs_for_procedure,
     select_nonfinalised_runs,
-    select_run_groups_by_user,
     select_run_group_counts_for_user,
     select_run_group_for_user,
+    select_run_groups_by_user,
     select_run_groups_for_user,
     select_runs_for_group,
     select_user,
@@ -33,7 +34,6 @@ from cactus_orchestrator.crud import (
     update_user_name,
 )
 from cactus_orchestrator.model import Run, RunArtifact, RunGroup, RunStatus, User
-from cactus_orchestrator.auth import UserContext
 
 
 @pytest.mark.asyncio
@@ -48,14 +48,6 @@ async def test_insert_user(pg_empty_config):
         user1 = await insert_user(s, uc1)
 
         assert user1.user_id == 1
-        assert user1.aggregator_certificate_p12_bundle is None
-        assert user1.aggregator_certificate_x509_der is None
-        assert user1.aggregator_certificate_pem is None
-        assert user1.aggregator_certificate_pem_key is None
-        assert user1.device_certificate_p12_bundle is None
-        assert user1.device_certificate_x509_der is None
-        assert user1.device_certificate_pem is None
-        assert user1.device_certificate_pem_key is None
         assert user1.subscription_domain is None
         assert isinstance(user1.is_static_uri, bool)
         assert user1.subject_id == uc1.subject_id
@@ -68,14 +60,6 @@ async def test_insert_user(pg_empty_config):
         user2 = await insert_user(s, uc2)
 
         assert user2.user_id == 2
-        assert user2.aggregator_certificate_p12_bundle is None
-        assert user2.aggregator_certificate_x509_der is None
-        assert user2.aggregator_certificate_pem is None
-        assert user2.aggregator_certificate_pem_key is None
-        assert user2.device_certificate_p12_bundle is None
-        assert user2.device_certificate_x509_der is None
-        assert user2.device_certificate_pem is None
-        assert user2.device_certificate_pem_key is None
         assert user2.subscription_domain is None
         assert isinstance(user2.is_static_uri, bool)
         assert user2.subject_id == uc2.subject_id
@@ -92,14 +76,6 @@ async def test_insert_user(pg_empty_config):
         user3 = await insert_user(s, uc2)
 
         assert user3.user_id == 4, "The sequence would have been incremented for the above two insert attempts"
-        assert user3.aggregator_certificate_p12_bundle is None
-        assert user3.aggregator_certificate_x509_der is None
-        assert user3.aggregator_certificate_pem is None
-        assert user3.aggregator_certificate_pem_key is None
-        assert user3.device_certificate_p12_bundle is None
-        assert user3.device_certificate_x509_der is None
-        assert user3.device_certificate_pem is None
-        assert user3.device_certificate_pem_key is None
         assert user3.subscription_domain is None
         assert isinstance(user3.is_static_uri, bool)
         assert user3.subject_id == uc2.subject_id
@@ -249,24 +225,42 @@ async def test_select_active_runs_for_user(pg_base_config):
         assert_list_type(Run, user_dne_runs, 0)
 
 
+@pytest.mark.parametrize("with_cert", [True, False])
 @pytest.mark.asyncio
-async def test_select_run_group_user(pg_base_config):
+async def test_select_run_group_user(pg_base_config, with_cert: bool):
     """Test fetching a single run group for a user"""
 
     async with generate_async_session(pg_base_config) as session:
-        assert (await select_run_group_for_user(session, 1, 3)) is None, "Wrong user"
-        assert (await select_run_group_for_user(session, 2, 1)) is None, "Wrong user"
-        assert (await select_run_group_for_user(session, 1, 99)) is None, "Bad ID"
+        assert (await select_run_group_for_user(session, 1, 3, with_cert)) is None, "Wrong user"
+        assert (await select_run_group_for_user(session, 2, 1, with_cert)) is None, "Wrong user"
+        assert (await select_run_group_for_user(session, 1, 99, with_cert)) is None, "Bad ID"
 
-        run_group_1 = await select_run_group_for_user(session, 1, 1)
+        run_group_1 = await select_run_group_for_user(session, 1, 1, with_cert)
         assert isinstance(run_group_1, RunGroup)
         assert run_group_1.run_group_id == 1
-        run_group_2 = await select_run_group_for_user(session, 1, 2)
+        assert run_group_1.is_device_cert is True
+        assert run_group_1.certificate_id == 11
+        run_group_2 = await select_run_group_for_user(session, 1, 2, with_cert)
         assert isinstance(run_group_2, RunGroup)
         assert run_group_2.run_group_id == 2
-        run_group_3 = await select_run_group_for_user(session, 2, 3)
+        assert run_group_2.is_device_cert is None
+        run_group_3 = await select_run_group_for_user(session, 2, 3, with_cert)
         assert isinstance(run_group_3, RunGroup)
         assert run_group_3.run_group_id == 3
+        assert run_group_3.is_device_cert is False
+        assert run_group_3.certificate_id == 33
+
+        if with_cert:
+            assert run_group_1.certificate_pem == bytes([1])
+            assert run_group_2.certificate_pem is None
+            assert run_group_3.certificate_pem == bytes([3])
+        else:
+            with pytest.raises(Exception):
+                run_group_1.certificate_pem
+            with pytest.raises(Exception):
+                run_group_2.certificate_pem
+            with pytest.raises(Exception):
+                run_group_3.certificate_pem
 
 
 @pytest.mark.asyncio
@@ -454,135 +448,20 @@ async def test_select_user_run_with_artifact(pg_base_config):
         assert run.run_artifact.file_data == run_artifact_bytes
 
 
-@pytest.mark.parametrize(
-    "with_aggregator_der, with_aggregator_p12, with_aggregator_pem_cert, with_aggregator_pem_key, with_device_der, with_device_p12, with_device_pem_cert, with_device_pem_key",
-    [
-        (True, True, True, True, True, True, True, True),
-        (False, False, False, False, False, False, False, False),
-        (True, False, False, False, True, False, False, False),
-        (False, True, False, False, False, True, False, False),
-        (False, False, True, False, False, False, True, False),
-        (False, False, False, True, False, False, False, True),
-    ],
-)
 @pytest.mark.asyncio
-async def test_select_user(
-    pg_base_config,
-    with_aggregator_der: bool,
-    with_aggregator_p12: bool,
-    with_aggregator_pem_cert: bool,
-    with_aggregator_pem_key: bool,
-    with_device_der: bool,
-    with_device_p12: bool,
-    with_device_pem_cert: bool,
-    with_device_pem_key: bool,
-):
+async def test_select_user(pg_base_config):
     # Arrange
     uc1 = UserContext(subject_id="user1", issuer_id="https://test-cactus-issuer.example.com")
     uc2 = UserContext(subject_id="user2", issuer_id="https://test-cactus-issuer.example.com")
 
     # Act
     async with generate_async_session(pg_base_config) as session:
-        user1 = await select_user(
-            session,
-            uc1,
-            with_aggregator_der,
-            with_aggregator_p12,
-            with_aggregator_pem_cert,
-            with_aggregator_pem_key,
-            with_device_der,
-            with_device_p12,
-            with_device_pem_cert,
-            with_device_pem_key,
-        )
-
-        user2 = await select_user(
-            session,
-            uc2,
-            with_aggregator_der,
-            with_aggregator_p12,
-            with_aggregator_pem_cert,
-            with_aggregator_pem_key,
-            with_device_der,
-            with_device_p12,
-            with_device_pem_cert,
-            with_device_pem_key,
-        )
+        user1 = await select_user(session, uc1)
+        user2 = await select_user(session, uc2)
 
         # Assert
         assert user1 is not None
         assert user2 is not None
-        if with_aggregator_p12:
-            assert user1.aggregator_certificate_p12_bundle == bytes([1])
-            assert user2.aggregator_certificate_p12_bundle is None
-        else:
-            with pytest.raises(Exception):
-                user1.aggregator_certificate_p12_bundle
-            with pytest.raises(Exception):
-                user2.aggregator_certificate_p12_bundle
-
-        if with_aggregator_der:
-            assert user1.aggregator_certificate_x509_der == bytes([2])
-            assert user2.aggregator_certificate_x509_der is None
-        else:
-            with pytest.raises(Exception):
-                user1.aggregator_certificate_x509_der
-            with pytest.raises(Exception):
-                user2.aggregator_certificate_x509_der
-
-        if with_aggregator_pem_cert:
-            assert user1.aggregator_certificate_pem == bytes([3])
-            assert user2.aggregator_certificate_pem is None
-        else:
-            with pytest.raises(Exception):
-                user1.aggregator_certificate_pem
-            with pytest.raises(Exception):
-                user2.aggregator_certificate_pem
-
-        if with_aggregator_pem_key:
-            assert user1.aggregator_certificate_pem_key == bytes([4])
-            assert user2.aggregator_certificate_pem_key is None
-        else:
-            with pytest.raises(Exception):
-                user1.aggregator_certificate_pem_key
-            with pytest.raises(Exception):
-                user2.aggregator_certificate_pem_key
-
-        if with_device_p12:
-            assert user1.device_certificate_p12_bundle == bytes([5])
-            assert user2.device_certificate_p12_bundle is None
-        else:
-            with pytest.raises(Exception):
-                user1.device_certificate_p12_bundle
-            with pytest.raises(Exception):
-                user2.device_certificate_p12_bundle
-
-        if with_device_der:
-            assert user1.device_certificate_x509_der == bytes([6])
-            assert user2.device_certificate_x509_der is None
-        else:
-            with pytest.raises(Exception):
-                user1.device_certificate_x509_der
-            with pytest.raises(Exception):
-                user2.device_certificate_x509_der
-
-        if with_device_pem_cert:
-            assert user1.device_certificate_pem == bytes([7])
-            assert user2.device_certificate_pem is None
-        else:
-            with pytest.raises(Exception):
-                user1.device_certificate_pem
-            with pytest.raises(Exception):
-                user2.device_certificate_pem
-
-        if with_device_pem_key:
-            assert user1.device_certificate_pem_key == bytes([8])
-            assert user2.device_certificate_pem_key is None
-        else:
-            with pytest.raises(Exception):
-                user1.device_certificate_pem_key
-            with pytest.raises(Exception):
-                user2.device_certificate_pem_key
 
 
 @pytest.mark.asyncio

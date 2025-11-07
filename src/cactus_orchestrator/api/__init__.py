@@ -1,8 +1,9 @@
+from cactus_orchestrator.api.admin import router as admin_router  # noqa: F401
 from cactus_orchestrator.api.certificate import router as certificate_router  # noqa: F401
 from cactus_orchestrator.api.config import router as config_router  # noqa: F401
 from cactus_orchestrator.api.procedure import router as procedure_router  # noqa: F401
 from cactus_orchestrator.api.run import router as run_router  # noqa: F401
-from cactus_orchestrator.api.admin import router as admin_router  # noqa: F401
+from cactus_orchestrator.api.run_group import router as run_group_router  # noqa: F401
 from cactus_orchestrator.api.user import router as user_router  # noqa: F401
 
 # TODO: rip out controller layer from route handlers into separate modules

@@ -1,16 +1,13 @@
 import logging
-from datetime import datetime
 from http import HTTPStatus
 from typing import Annotated
 from urllib.parse import urlparse
 
-from cryptography import x509
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi_async_sqlalchemy import db
-from sqlalchemy.ext.asyncio import AsyncSession
 
-from cactus_orchestrator.auth import AuthPerm, jwt_validator, UserContext
-from cactus_orchestrator.crud import insert_user, select_user
+from cactus_orchestrator.api.common import select_user_or_create
+from cactus_orchestrator.auth import AuthPerm, UserContext, jwt_validator
 from cactus_orchestrator.k8s.resource import generate_envoy_dcap_uri, generate_static_test_stack_id, get_resource_names
 from cactus_orchestrator.model import User
 from cactus_orchestrator.schema import UserConfigurationRequest, UserConfigurationResponse
@@ -35,42 +32,12 @@ def user_to_config(user: User) -> UserConfigurationResponse:
     if user.is_static_uri:
         static_uri = generate_envoy_dcap_uri(get_resource_names(generate_static_test_stack_id(user)))
 
-    aggregator_certificate_expiry: datetime | None = None
-    if user.aggregator_certificate_x509_der:
-        try:
-            agg_cert = x509.load_der_x509_certificate(user.aggregator_certificate_x509_der)
-            aggregator_certificate_expiry = agg_cert.not_valid_after_utc
-        except Exception as exc:
-            logger.error(f"Error interpreting aggregator client certificate for user {user.user_id}", exc_info=exc)
-
-    device_certificate_expiry: datetime | None = None
-    if user.device_certificate_x509_der:
-        try:
-            device_cert = x509.load_der_x509_certificate(user.device_certificate_x509_der)
-            device_certificate_expiry = device_cert.not_valid_after_utc
-        except Exception as exc:
-            logger.error(f"Error interpreting device client certificate for user {user.user_id}", exc_info=exc)
-
     return UserConfigurationResponse(
         subscription_domain="" if user.subscription_domain is None else user.subscription_domain,
         is_static_uri=user.is_static_uri,
         static_uri=static_uri,
-        is_device_cert=user.is_device_cert,
-        aggregator_certificate_expiry=aggregator_certificate_expiry,
-        device_certificate_expiry=device_certificate_expiry,
         pen=0 if user.pen is None else user.pen,
     )
-
-
-async def select_user_or_create(session: AsyncSession, user_context: UserContext) -> User:
-    """Fetches the user associated with user_context - creating one as required. Will include client certs"""
-    user = await select_user(session, user_context, with_aggregator_der=True, with_device_der=True)
-    if user is not None:
-        return user
-
-    user = await insert_user(session, user_context)
-    logger.info(f"Created new user {user.user_id} for user context {user_context}")
-    return user
 
 
 @router.get("/config")
@@ -103,9 +70,6 @@ async def update_config(
 
     if body.is_static_uri is not None:
         user.is_static_uri = body.is_static_uri
-
-    if body.is_device_cert is not None:
-        user.is_device_cert = body.is_device_cert
 
     if body.pen is not None:
         user.pen = body.pen

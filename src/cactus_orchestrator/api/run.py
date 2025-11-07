@@ -8,26 +8,21 @@ from cactus_runner.client import ClientSession, ClientTimeout, RunnerClient, Run
 from cactus_runner.models import RequestData, RequestList, RunnerStatus
 from cactus_test_definitions import CSIPAusVersion
 from cryptography import x509
-from cryptography.hazmat.primitives import serialization
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi_async_sqlalchemy import db
 from fastapi_pagination import Page, paginate
 from sqlalchemy.exc import NoResultFound
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from cactus_orchestrator.api.common import select_user_or_raise, select_user_run_group_or_raise
 from cactus_orchestrator.auth import AuthPerm, UserContext, jwt_validator
 from cactus_orchestrator.crud import (
     ACTIVE_RUN_STATUSES,
     create_runartifact,
     delete_runs,
     insert_run_for_run_group,
-    insert_run_group,
     select_active_runs_for_user,
-    select_run_group_counts_for_user,
-    select_run_group_for_user,
-    select_run_groups_for_user,
     select_runs_for_group,
-    select_user,
     select_user_run,
     select_user_run_with_artifact,
     update_run_run_status,
@@ -43,33 +38,14 @@ from cactus_orchestrator.k8s.resource import (
 )
 from cactus_orchestrator.k8s.resource.create import add_ingress_rule, clone_service, clone_statefulset, wait_for_pod
 from cactus_orchestrator.k8s.resource.delete import delete_service, delete_statefulset, remove_ingress_rule
-from cactus_orchestrator.model import Run, RunArtifact, RunGroup, RunStatus, User
-from cactus_orchestrator.schema import (
-    InitRunRequest,
-    InitRunResponse,
-    RunGroupRequest,
-    RunGroupResponse,
-    RunGroupUpdateRequest,
-    RunResponse,
-    RunStatusResponse,
-    StartRunResponse,
-)
+from cactus_orchestrator.model import Run, RunArtifact, RunStatus
+from cactus_orchestrator.schema import InitRunRequest, InitRunResponse, RunResponse, RunStatusResponse, StartRunResponse
 from cactus_orchestrator.settings import CactusOrchestratorException, get_current_settings
 
 logger = logging.getLogger(__name__)
 
 
 router = APIRouter()
-
-
-def map_group_to_group_response(group: RunGroup, total_runs: int) -> RunGroupResponse:
-    return RunGroupResponse(
-        run_group_id=group.run_group_id,
-        name=group.name,
-        csip_aus_version=group.csip_aus_version,
-        created_at=group.created_at,
-        total_runs=total_runs,
-    )
 
 
 def map_run_to_run_response(run: Run) -> RunResponse:
@@ -91,89 +67,6 @@ def map_run_to_run_response(run: Run) -> RunResponse:
         finalised_at=run.finalised_at,
         is_device_cert=run.is_device_cert,
     )
-
-
-async def select_user_or_raise(
-    session: AsyncSession,
-    user_context: UserContext,
-    with_aggregator_der: bool = False,
-    with_aggregator_p12: bool = False,
-    with_aggregator_pem_cert: bool = False,
-    with_aggregator_pem_key: bool = False,
-    with_device_der: bool = False,
-    with_device_p12: bool = False,
-    with_device_pem_cert: bool = False,
-    with_device_pem_key: bool = False,
-) -> User:
-    user = await select_user(
-        session,
-        user_context,
-        with_aggregator_der=with_aggregator_der,
-        with_aggregator_p12=with_aggregator_p12,
-        with_aggregator_pem_cert=with_aggregator_pem_cert,
-        with_aggregator_pem_key=with_aggregator_pem_key,
-        with_device_der=with_device_der,
-        with_device_p12=with_device_p12,
-        with_device_pem_cert=with_device_pem_cert,
-        with_device_pem_key=with_device_pem_key,
-    )
-
-    if user is None:
-        logger.error(f"Cannot find user for user context {user_context}")
-        raise HTTPException(status_code=HTTPStatus.FORBIDDEN, detail="Certificate has not been registered.")
-    return user
-
-
-async def select_user_run_group_or_raise(
-    session: AsyncSession,
-    user_context: UserContext,
-    run_group_id: int,
-    with_aggregator_der: bool = False,
-    with_aggregator_p12: bool = False,
-    with_aggregator_pem_cert: bool = False,
-    with_aggregator_pem_key: bool = False,
-    with_device_der: bool = False,
-    with_device_p12: bool = False,
-    with_device_pem_cert: bool = False,
-    with_device_pem_key: bool = False,
-) -> tuple[User, RunGroup]:
-    user = await select_user_or_raise(
-        session,
-        user_context,
-        with_aggregator_der=with_aggregator_der,
-        with_aggregator_p12=with_aggregator_p12,
-        with_aggregator_pem_cert=with_aggregator_pem_cert,
-        with_aggregator_pem_key=with_aggregator_pem_key,
-        with_device_der=with_device_der,
-        with_device_p12=with_device_p12,
-        with_device_pem_cert=with_device_pem_cert,
-        with_device_pem_key=with_device_pem_key,
-    )
-
-    run_group = await select_run_group_for_user(session, user.user_id, run_group_id)
-    if run_group is None:
-        logger.error(f"Cannot find run_group {run_group_id} for user {user.user_id}")
-        raise HTTPException(
-            status_code=HTTPStatus.FORBIDDEN, detail=f"Cannot find run_group {run_group_id} for user {user.user_id}"
-        )
-
-    return (user, run_group)
-
-
-def ensure_certificate_valid(cert_type: str, der_data: bytes | None) -> x509.Certificate:
-    if der_data is None:
-        raise HTTPException(
-            HTTPStatus.EXPECTATION_FAILED,
-            detail=f"Your {cert_type} certificate needs to be generated before starting a test run.",
-        )
-
-    client_cert = x509.load_der_x509_certificate(der_data)
-    if client_cert.not_valid_after_utc < datetime.now(timezone.utc):
-        raise HTTPException(
-            HTTPStatus.EXPECTATION_FAILED,
-            detail=f"Your {cert_type} certificate has expired. Please regenerate your certificate and try again.",
-        )
-    return client_cert
 
 
 async def prepare_run_for_delete(run: Run) -> None:
@@ -206,89 +99,6 @@ async def wait_for_runner_health(s: ClientSession) -> None:
     raise CactusOrchestratorException(
         f"Unable to fetch health from RunnerClient after {attempt+1} attempts. Will be treated as a failed start."
     )
-
-
-@router.get("/run_group", status_code=HTTPStatus.OK)
-async def get_groups_paginated(
-    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.user_all}))],
-) -> Page[RunGroupResponse]:
-    # get user
-    user = await select_user_or_raise(db.session, user_context)
-
-    # get runs
-    run_groups = await select_run_groups_for_user(db.session, user.user_id)
-    run_group_counts = await select_run_group_counts_for_user(db.session, [r.run_group_id for r in run_groups])
-
-    if run_groups:
-        resp = [
-            map_group_to_group_response(group, run_group_counts.get(group.run_group_id, 0))
-            for group in run_groups
-            if group
-        ]
-    else:
-        resp = []
-    return paginate(resp)
-
-
-@router.post("/run_group", status_code=HTTPStatus.CREATED)
-async def create_group(
-    group_request: RunGroupRequest,
-    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.user_all}))],
-) -> RunGroupResponse:
-
-    # get user
-    user = await select_user_or_raise(db.session, user_context)
-
-    try:
-        csip_aus_version = CSIPAusVersion(group_request.csip_aus_version)
-    except Exception:
-        raise HTTPException(
-            HTTPStatus.BAD_REQUEST, detail=f"'{group_request.csip_aus_version}' doesn't map to a known CSIPAusVersion"
-        )
-
-    # get runs
-    run_group = await insert_run_group(db.session, user.user_id, csip_aus_version.value)
-    await db.session.commit()
-    return map_group_to_group_response(run_group, 0)
-
-
-@router.put("/run_group/{run_group_id}", status_code=HTTPStatus.OK)
-async def update_group(
-    run_group_id: int,
-    group_request: RunGroupUpdateRequest,
-    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.user_all}))],
-) -> RunGroupResponse:
-
-    # get user
-    _, run_group = await select_user_run_group_or_raise(db.session, user_context, run_group_id)
-
-    if group_request.name:
-        run_group.name = group_request.name
-
-    # get runs
-    await db.session.commit()
-    return map_group_to_group_response(run_group, 0)
-
-
-@router.delete("/run_group/{run_group_id}", status_code=HTTPStatus.NO_CONTENT)
-async def delete_group(
-    run_group_id: int,
-    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.user_all}))],
-) -> None:
-
-    # get group
-    _, run_group = await select_user_run_group_or_raise(db.session, user_context, run_group_id)
-
-    # Close out any existing k8s resources for runs before deletion
-    all_runs = await select_runs_for_group(db.session, run_group_id, finalised=None, created_at_gte=None)
-    for run in all_runs:
-        await prepare_run_for_delete(run)
-
-    # Delete the runs + groups
-    await delete_runs(db.session, all_runs)
-    await db.session.delete(run_group)
-
-    await db.session.commit()
 
 
 @router.get("/run_group/{run_group_id}/run", status_code=HTTPStatus.OK)
@@ -328,13 +138,18 @@ async def spawn_teststack_and_init_run(
         (3) Update the ingress with a path to the envoy environment.
     """
     # get user and the preferred certificate
-    user, run_group = await select_user_run_group_or_raise(
-        db.session, user_context, run_group_id, with_aggregator_der=True, with_device_der=True
-    )
-    if user.is_device_cert:
-        client_cert = ensure_certificate_valid("Device", user.device_certificate_x509_der)
-    else:
-        client_cert = ensure_certificate_valid("Aggregator", user.aggregator_certificate_x509_der)
+    user, run_group = await select_user_run_group_or_raise(db.session, user_context, run_group_id, with_cert=True)
+    if run_group.certificate_pem is None or run_group.is_device_cert is None:
+        raise HTTPException(
+            HTTPStatus.EXPECTATION_FAILED,
+            detail=f"Your certificate for {run_group_id} {run_group.name} must be generated before making a test run.",
+        )
+    client_cert = x509.load_pem_x509_certificate(run_group.certificate_pem)
+    if client_cert.not_valid_after_utc < datetime.now(timezone.utc):
+        raise HTTPException(
+            HTTPStatus.EXPECTATION_FAILED,
+            detail="Your certificate has expired. Please regenerate your certificate and try again.",
+        )
 
     # Discover the test stack ID - check for potential conflicts
     teststack_id: str | None = None
@@ -360,7 +175,7 @@ async def spawn_teststack_and_init_run(
 
     # Create the run in a "provisioning" state so we can access the run_id
     run_id = await insert_run_for_run_group(
-        db.session, run_group_id, teststack_id, test.test_procedure_id, RunStatus.provisioning, user.is_device_cert
+        db.session, run_group_id, teststack_id, test.test_procedure_id, RunStatus.provisioning, run_group.is_device_cert
     )
 
     settings = get_current_settings()
@@ -374,7 +189,6 @@ async def spawn_teststack_and_init_run(
         await wait_for_pod(run_resource_names)
 
         # inject initial state with either the device or aggregator cert data
-        pem_encoded_cert = client_cert.public_bytes(serialization.Encoding.PEM).decode("utf-8")
         async with ClientSession(
             base_url=run_resource_names.runner_base_url,
             timeout=ClientTimeout(settings.test_execution_comms_timeout_seconds),
@@ -386,8 +200,8 @@ async def spawn_teststack_and_init_run(
                 session=s,
                 test_id=test.test_procedure_id,
                 csip_aus_version=CSIPAusVersion(run_group.csip_aus_version),
-                aggregator_certificate=None if user.is_device_cert else pem_encoded_cert,
-                device_certificate=pem_encoded_cert if user.is_device_cert else None,
+                aggregator_certificate=None if run_group.is_device_cert else run_group.certificate_pem.decode(),
+                device_certificate=run_group.certificate_pem.decode() if run_group.is_device_cert else None,
                 subscription_domain=user.subscription_domain,
                 run_id=str(run_id),
                 pen=user.pen,

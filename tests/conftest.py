@@ -68,7 +68,7 @@ def pg_empty_config(postgresql, preserved_environment) -> Generator[Connection, 
 
 
 @pytest.fixture(scope="session")
-def serca_cert_key_pair():
+def serca_cert_key_pair() -> tuple[x509.Certificate, ec.EllipticCurvePrivateKey]:
     # This isn't a fully compliant 2030.5 SERCA cert but is close enough for our tests
     serca_key: ec.EllipticCurvePrivateKey = ec.generate_private_key(ec.SECP256R1())
     subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Test SERCA")])
@@ -90,7 +90,7 @@ def serca_cert_key_pair():
 
 
 @pytest.fixture(scope="session")
-def mca_cert_key_pair(serca_cert_key_pair):
+def mca_cert_key_pair(serca_cert_key_pair) -> tuple[x509.Certificate, ec.EllipticCurvePrivateKey]:
     # This isn't a fully compliant 2030.5 MCA cert but is close enough for our tests
     serca_cert, serca_key = serca_cert_key_pair
 
@@ -118,7 +118,7 @@ def mca_cert_key_pair(serca_cert_key_pair):
 
 
 @pytest.fixture(scope="session")
-def mica_cert_key_pair(mca_cert_key_pair):
+def mica_cert_key_pair(mca_cert_key_pair) -> tuple[x509.Certificate, ec.EllipticCurvePrivateKey]:
     # This isn't a fully compliant 2030.5 MICA cert but is close enough for our tests
     mca_cert, mca_key = mca_cert_key_pair
 
@@ -146,90 +146,43 @@ def mica_cert_key_pair(mca_cert_key_pair):
 
 
 @pytest.fixture(scope="session")
-def rsa_key():
-    return asymmetric.rsa.generate_private_key(public_exponent=65537, key_size=2048)
+def client_cert_key_pair(mica_cert_key_pair) -> tuple[x509.Certificate, ec.EllipticCurvePrivateKey]:
+    # This isn't a fully compliant 2030.5 client cert but is close enough for our tests
+    mica_cert, mica_key = mica_cert_key_pair
+
+    client_key, client_cert = generate_client_p12_ec(mica_key, mica_cert, "Test Cert", "ID 123")
+    return (client_cert, client_key)
 
 
 @pytest.fixture(scope="session")
-def ec_ca_cert_key_pair() -> tuple[x509.Certificate, asymmetric.ec.EllipticCurvePrivateKey]:
-    # Generate EC private key using secp256r1 (aka prime256v1)
-    ca_key = asymmetric.ec.generate_private_key(asymmetric.ec.SECP256R1())
-
-    # CA subject
-    subject = x509.Name(
-        [
-            x509.NameAttribute(NameOID.COMMON_NAME, "IEEE 2030.5 Root"),
-            x509.NameAttribute(NameOID.ORGANIZATION_NAME, "CACTUS"),
-        ]
-    )
-
-    # Build self-signed certificate with ECDSA
-    ca_cert = (
-        x509.CertificateBuilder()
-        .subject_name(subject)
-        .issuer_name(subject)
-        .public_key(ca_key.public_key())
-        .serial_number(x509.random_serial_number())
-        .not_valid_before(datetime.now(timezone.utc))
-        .not_valid_after(datetime.now(timezone.utc) + timedelta(days=365))
-        .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
-        .sign(ca_key, hashes.SHA256())  # ECDSA signature with SHA-256
-    )
-
-    return (ca_cert, ca_key)
+def client_cert_pem_bytes(client_cert_key_pair) -> bytes:
+    return client_cert_key_pair[0].public_bytes(serialization.Encoding.PEM)
 
 
 @pytest.fixture(scope="session")
-def ec_mica_cert_key_pair_from_file() -> tuple[x509.Certificate, asymmetric.ec.EllipticCurvePrivateKey]:
-    """Get cert and key from files."""
-    with open("tests/data/mica.crt", "rb") as cert_file:
-        cert_data = cert_file.read()
-
-    with open("tests/data/mica.key", "rb") as key_file:
-        key_data = key_file.read()
-
-    mica_cert = x509.load_pem_x509_certificate(cert_data, backends.default_backend())
-    mica_key = serialization.load_pem_private_key(key_data, password=None, backend=backends.default_backend())
-    assert isinstance(mica_key, asymmetric.ec.EllipticCurvePrivateKey)
-
-    return (mica_cert, mica_key)
-
-
-@pytest.fixture
-def ec_cert_key_pair(request: pytest.FixtureRequest) -> tuple[x509.Certificate, asymmetric.ec.EllipticCurvePrivateKey]:
-    """Indirect proxying of related fixtures for parametrization."""
-    if request.param == "ec_ca_cert_key_pair":
-        return request.getfixturevalue("ec_ca_cert_key_pair")
-    elif request.param == "ec_mica_cert_key_pair_from_file":
-        return request.getfixturevalue("ec_mica_cert_key_pair_from_file")
-    else:
-        raise ValueError(f"Unknown fixture name: {request.param}")
-
-
-@pytest.fixture(scope="function")
-def valid_user_p12_and_der(mca_cert_key_pair, mica_cert_key_pair) -> tuple[bytes, bytes]:
-    mca_cert, mca_key = mca_cert_key_pair
+def client_cert_key_pair_expired(mica_cert_key_pair) -> tuple[x509.Certificate, ec.EllipticCurvePrivateKey]:
+    # This isn't a fully compliant 2030.5 client cert but is close enough for our tests
     mica_cert, mica_key = mica_cert_key_pair
-    cl_p12, cl_x509 = generate_client_p12_ec(mica_key, mica_cert, mca_cert, "test", "abc")
-    cl_der = cl_x509.public_bytes(encoding=serialization.Encoding.DER)
-    return cl_p12, cl_der
 
-
-@pytest.fixture(scope="function")
-def expired_user_p12_and_der(mca_cert_key_pair, mica_cert_key_pair) -> tuple[bytes, bytes]:
-    mca_cert, mca_key = mca_cert_key_pair
-    mica_cert, mica_key = mica_cert_key_pair
-    cl_p12, cl_x509 = generate_client_p12_ec(
+    client_key, client_cert = generate_client_p12_ec(
         mica_key,
         mica_cert,
-        mca_cert,
-        "test",
-        "abc",
-        not_before=datetime.now(timezone.utc) - timedelta(days=3),
-        not_after=datetime.now(timezone.utc) - timedelta(minutes=1),
+        "Expired Test Cert",
+        "ID 456",
+        datetime.now(timezone.utc) - timedelta(days=100),
+        datetime.now(timezone.utc),
     )
-    cl_der = cl_x509.public_bytes(encoding=serialization.Encoding.DER)
-    return cl_p12, cl_der
+    return (client_cert, client_key)
+
+
+@pytest.fixture(scope="session")
+def client_cert_expired_pem_bytes(client_cert_key_pair_expired) -> bytes:
+    return client_cert_key_pair_expired[0].public_bytes(serialization.Encoding.PEM)
+
+
+@pytest.fixture(scope="session")
+def rsa_key():
+    return asymmetric.rsa.generate_private_key(public_exponent=65537, key_size=2048)
 
 
 @pytest.fixture(scope="session")

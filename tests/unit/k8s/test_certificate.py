@@ -52,25 +52,20 @@ def test_calculate_rfc5280_subject_key_identifier_method_2(private_key: bytes, e
     assert actual == expected_ski
 
 
-def test_generate_client_p12_ec(mca_cert_key_pair, mica_cert_key_pair):
+def test_generate_client_p12_ec(mica_cert_key_pair):
     # Arrange
-    mca_cert, mca_key = mca_cert_key_pair
     mica_cert, mica_key = mica_cert_key_pair
     client_common_name = "Test Client"
-    p12_password = "testpwd"
+    client_identifier = "my id 123"
 
     # Act
-    pfx_data, cl_cert = generate_client_p12_ec(mica_key, mica_cert, mca_cert, client_common_name, p12_password)
+    cl_key, cl_cert = generate_client_p12_ec(mica_key, mica_cert, client_common_name, client_identifier)
 
     # Assert
-    cl_key, cl_cert2, _ = pkcs12.load_key_and_certificates(pfx_data, p12_password.encode())
-    assert isinstance(pfx_data, bytes)
-    assert len(pfx_data) > 0
-    assert cl_cert.issuer == mica_cert.subject
-    assert cl_cert2 is not None
-    assert cl_cert2.issuer == mica_cert.subject
     assert isinstance(cl_key, ec.EllipticCurvePrivateKey)
+    assert isinstance(cl_cert, x509.Certificate)
 
+    assert cl_cert.issuer == mica_cert.subject
     assert cl_cert.not_valid_after_utc < mica_cert.not_valid_after_utc
     assert cl_cert.not_valid_before_utc > mica_cert.not_valid_before_utc
 
@@ -82,15 +77,8 @@ def test_generate_client_p12_ec(mca_cert_key_pair, mica_cert_key_pair):
         == mica_cert.extensions.get_extension_for_class(x509.SubjectKeyIdentifier).value.key_identifier
     )
 
-
-def test_generate_client_p12_invalid_password(mca_cert_key_pair, mica_cert_key_pair):
-    mca_cert, mca_key = mca_cert_key_pair
-    mica_cert, mica_key = mica_cert_key_pair
-    client_common_name = "Test Client"
-    p12_password = ""
-
-    with pytest.raises(ValueError):
-        generate_client_p12_ec(mica_key, mica_cert, mca_cert, client_common_name, p12_password)
+    # Check cert metadata
+    assert client_common_name in cl_cert.subject.rfc4514_string()
 
 
 @patch("cactus_orchestrator.k8s.certificate.fetch.v1_core_api")
