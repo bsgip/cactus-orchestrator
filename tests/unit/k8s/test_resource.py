@@ -106,6 +106,18 @@ async def test_wait_for_pod_retries(mock_is_pod_ready):
 
 
 @pytest.mark.asyncio
+@patch("cactus_orchestrator.k8s.resource.create.is_pod_ready", side_effect=Exception("mock exception"))
+async def test_wait_for_pod_retries_exception(mock_is_pod_ready):
+    """Test waiting for a pod to be ready - even if exceptions happen."""
+    run_resource_names = generate_class_instance(RunResourceNames, seed=202)
+
+    with pytest.raises(CactusOrchestratorException):
+        await wait_for_pod(run_resource_names, 2, wait_interval=1)
+
+    assert mock_is_pod_ready.call_count == 2
+
+
+@pytest.mark.asyncio
 @patch("cactus_orchestrator.k8s.resource.create.v1_net_api")
 async def test_add_ingress_rule(mock_v1_net_api, mock_thread_cls):
     """Test adding an ingress rule to Kubernetes."""

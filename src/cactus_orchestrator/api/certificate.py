@@ -79,7 +79,7 @@ async def fetch_client_certificate(
     client_cert = x509.load_pem_x509_certificate(run_group.certificate_pem)
 
     # We just concatenate our PEM encodings together
-    filename = f"{run_group.name}-fullchain-{run_group.certificate_id}.zip"
+    filename = f"{run_group.name}-fullchain-{run_group.certificate_id}.pem"
     return Response(
         status_code=HTTPStatus.OK,
         content=client_cert.public_bytes(serialization.Encoding.PEM)
