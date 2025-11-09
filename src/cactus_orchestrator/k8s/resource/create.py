@@ -128,10 +128,14 @@ async def is_pod_ready(run_names: RunResourceNames) -> bool:
 async def wait_for_pod(run_names: RunResourceNames, max_retries: int = 20, wait_interval: int = 5) -> None:
     """Polls pod to check for readiness"""
     for attempt in range(max_retries):
-        if await is_pod_ready(run_names):
-            logger.debug(f"pod ({run_names.pod}) is ready.")
-            return
-        logger.debug(f"pod ({run_names.pod}) is not ready. retry..")
+        try:
+            if await is_pod_ready(run_names):
+                logger.debug(f"attempt #{attempt}: pod ({run_names.pod}) is ready.")
+                return
+            logger.debug(f"attempt #{attempt}:pod ({run_names.pod}) is not ready. retry..")
+        except Exception as exc:
+            logger.error(f"attempt #{attempt}:Exception while checking is_pod_ready", exc_info=exc)
+
         await asyncio.sleep(wait_interval)
 
     raise CactusOrchestratorException(f"{run_names.pod} failed to start.")
