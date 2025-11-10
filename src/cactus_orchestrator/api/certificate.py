@@ -114,18 +114,18 @@ async def generate_client_certificate(
     cert_label = "Device" if body.is_device_cert else "Aggregator"
 
     # Get the user / run_group
-    _, run_group = await select_user_run_group_or_raise(db.session, user_context, run_group_id, with_cert=True)
+    user, run_group = await select_user_run_group_or_raise(db.session, user_context, run_group_id, with_cert=True)
 
     now = datetime.now(timezone.utc)
 
     # Generate the cert
     cert_counter = run_group.certificate_id + 1
     common_name = f"({cert_counter}) {cert_label} {run_group.name} {run_group.csip_aus_version}"
-    identifier = f"rg-{run_group_id}-id-{cert_counter}"
+    identifier = f"rg-{run_group_id}-{cert_label}-{cert_counter}"
     settings = get_current_settings()
     mca_cert = await fetch_certificate_only(settings.cert_mca_secret_name)
     mica_cert, mica_key = await fetch_certificate_key_pair(settings.tls_mica_secret_name)
-    client_key, client_cert = generate_client_p12_ec(mica_key, mica_cert, common_name, identifier)
+    client_key, client_cert = generate_client_p12_ec(mica_key, mica_cert, user.pen, identifier)
 
     # Generate the raw file data
     client_cert_bytes = client_cert.public_bytes(serialization.Encoding.PEM)

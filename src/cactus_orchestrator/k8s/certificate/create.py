@@ -9,7 +9,8 @@ from cryptography.x509.oid import NameOID, ObjectIdentifier
 from pyasn1.codec.der import encoder
 from pyasn1.type import namedtype, univ
 
-VALIDITY_DAYS = 365
+OID_DEV_POST_MANUFACTURE = "1.3.6.1.4.1.40732.1.3"  # Defined in 2030.5:2018 - Section 6.11.7
+OID_POLICY_TEST = "1.3.6.1.4.1.40732.2.1"  # Defined in 2030.5:2018 - Section 6.11.7
 
 
 class ServiceProviderIdentifier(univ.Sequence):
@@ -46,7 +47,7 @@ def calculate_rfc5280_subject_key_identifier_method_2(public_key: ec.EllipticCur
 def generate_client_p12_ec(
     mica_key: CertificateIssuerPrivateKeyTypes,
     mica_cert: x509.Certificate,
-    cert_common_name: str,
+    user_pen: int,
     cert_identifier: str,
     not_before: datetime | None = None,
     not_after: datetime | None = None,
@@ -61,7 +62,7 @@ def generate_client_p12_ec(
     # Create CSR using ECC key
     csr: x509.CertificateSigningRequest = (
         x509.CertificateSigningRequestBuilder()
-        .subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, cert_common_name)]))
+        .subject_name(x509.Name([]))  # Blank subject as per 2030.5 requirements
         .sign(client_key, hashes.SHA256())
     )
 
@@ -80,14 +81,14 @@ def generate_client_p12_ec(
     # Certificate policies
     policies = x509.CertificatePolicies(
         [
-            x509.PolicyInformation(ObjectIdentifier("1.3.6.1.4.1.40732.1.1"), []),
-            x509.PolicyInformation(ObjectIdentifier("1.3.6.1.4.1.28457.1.1"), []),
+            x509.PolicyInformation(ObjectIdentifier(OID_DEV_POST_MANUFACTURE), []),
+            x509.PolicyInformation(ObjectIdentifier(OID_POLICY_TEST), []),
         ]
     )
 
     # Create DER encoded value
     spi = ServiceProviderIdentifier()
-    spi.setComponentByName("oid", univ.ObjectIdentifier("1.3.6.1.4.1.40732.3.1.1"))
+    spi.setComponentByName("oid", univ.ObjectIdentifier(f"1.3.6.1.4.1.{user_pen}.13.1.1"))  # see sep2: Section 6.11.7
     spi.setComponentByName("value", univ.OctetString(cert_identifier.encode()))
     der_value = encoder.encode(spi)
 

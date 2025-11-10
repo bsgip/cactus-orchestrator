@@ -150,7 +150,7 @@ def client_cert_key_pair(mica_cert_key_pair) -> tuple[x509.Certificate, ec.Ellip
     # This isn't a fully compliant 2030.5 client cert but is close enough for our tests
     mica_cert, mica_key = mica_cert_key_pair
 
-    client_key, client_cert = generate_client_p12_ec(mica_key, mica_cert, "Test Cert", "ID 123")
+    client_key, client_cert = generate_client_p12_ec(mica_key, mica_cert, 123, "ID 123")
     return (client_cert, client_key)
 
 
@@ -167,8 +167,8 @@ def client_cert_key_pair_expired(mica_cert_key_pair) -> tuple[x509.Certificate, 
     client_key, client_cert = generate_client_p12_ec(
         mica_key,
         mica_cert,
-        "Expired Test Cert",
-        "ID 456",
+        456,
+        "Expired ID 456",
         datetime.now(timezone.utc) - timedelta(days=100),
         datetime.now(timezone.utc),
     )

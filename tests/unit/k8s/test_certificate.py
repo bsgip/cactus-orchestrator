@@ -2,11 +2,12 @@ from unittest.mock import patch
 
 import pytest
 from cryptography import x509
-from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import ec, padding
-from cryptography.hazmat.primitives.serialization import pkcs12
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import ec
 
 from cactus_orchestrator.k8s.certificate.create import (
+    OID_DEV_POST_MANUFACTURE,
+    OID_POLICY_TEST,
     calculate_rfc5280_subject_key_identifier_method_2,
     generate_client_p12_ec,
 )
@@ -55,11 +56,11 @@ def test_calculate_rfc5280_subject_key_identifier_method_2(private_key: bytes, e
 def test_generate_client_p12_ec(mica_cert_key_pair):
     # Arrange
     mica_cert, mica_key = mica_cert_key_pair
-    client_common_name = "Test Client"
+    client_pen = 532849
     client_identifier = "my id 123"
 
     # Act
-    cl_key, cl_cert = generate_client_p12_ec(mica_key, mica_cert, client_common_name, client_identifier)
+    cl_key, cl_cert = generate_client_p12_ec(mica_key, mica_cert, client_pen, client_identifier)
 
     # Assert
     assert isinstance(cl_key, ec.EllipticCurvePrivateKey)
@@ -78,7 +79,12 @@ def test_generate_client_p12_ec(mica_cert_key_pair):
     )
 
     # Check cert metadata
-    assert client_common_name in cl_cert.subject.rfc4514_string()
+    assert cl_cert.subject.rfc4514_string() == "", "SEP2 requires all device certs to have a blank subject"
+    policies: x509.CertificatePolicies = cl_cert.extensions.get_extension_for_class(x509.CertificatePolicies).value
+    policy_oids = [p.policy_identifier.dotted_string for p in policies]
+    assert len(policy_oids) == 2
+    assert OID_DEV_POST_MANUFACTURE in policy_oids
+    assert OID_POLICY_TEST in policy_oids
 
 
 @patch("cactus_orchestrator.k8s.certificate.fetch.v1_core_api")
