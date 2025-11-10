@@ -5,7 +5,6 @@ from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.asymmetric.types import CertificateIssuerPrivateKeyTypes
-from cryptography.hazmat.primitives.serialization import pkcs12
 from cryptography.x509.oid import NameOID, ObjectIdentifier
 from pyasn1.codec.der import encoder
 from pyasn1.type import namedtype, univ
@@ -47,14 +46,14 @@ def calculate_rfc5280_subject_key_identifier_method_2(public_key: ec.EllipticCur
 def generate_client_p12_ec(
     mica_key: CertificateIssuerPrivateKeyTypes,
     mica_cert: x509.Certificate,
-    mca_cert: x509.Certificate,
-    client_common_name: str,
-    p12_password: str,
+    cert_common_name: str,
+    cert_identifier: str,
     not_before: datetime | None = None,
     not_after: datetime | None = None,
-) -> tuple[bytes, x509.Certificate]:
-    """Generate an ECDSA-based signed cert for client in base64 encoded PKCS#12 format.
-    Returns a tuple of (p12 bytes, x509.Certificate).
+) -> tuple[ec.EllipticCurvePrivateKey, x509.Certificate]:
+    """Generate an ECDSA-based signed cert for a client that is signed by mica_key/mica_cert
+
+    Returns a tuple of (private_key, signed_cert).
     """
     # Use ECC key compatible with TLS_ECDHE_ECDSA_WITH_AES_256_CCM_8
     client_key: ec.EllipticCurvePrivateKey = ec.generate_private_key(ec.SECP256R1())
@@ -62,7 +61,7 @@ def generate_client_p12_ec(
     # Create CSR using ECC key
     csr: x509.CertificateSigningRequest = (
         x509.CertificateSigningRequestBuilder()
-        .subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, client_common_name)]))
+        .subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, cert_common_name)]))
         .sign(client_key, hashes.SHA256())
     )
 
@@ -89,7 +88,7 @@ def generate_client_p12_ec(
     # Create DER encoded value
     spi = ServiceProviderIdentifier()
     spi.setComponentByName("oid", univ.ObjectIdentifier("1.3.6.1.4.1.40732.3.1.1"))
-    spi.setComponentByName("value", univ.OctetString(b"cactus-device-00001"))
+    spi.setComponentByName("value", univ.OctetString(cert_identifier.encode()))
     der_value = encoder.encode(spi)
 
     # Subject Alternative Name — placeholder for `otherName` ASN.1 value
@@ -125,13 +124,4 @@ def generate_client_p12_ec(
         .sign(mica_key, hashes.SHA256())
     )
 
-    # Bundle private key and certificate in PKCS#12 (PFX)
-    pfx_data: bytes = pkcs12.serialize_key_and_certificates(
-        name=client_common_name.encode(),
-        key=client_key,
-        cert=client_cert,
-        cas=[mica_cert, mca_cert],
-        encryption_algorithm=serialization.BestAvailableEncryption(p12_password.encode()),
-    )
-
-    return pfx_data, client_cert
+    return client_key, client_cert

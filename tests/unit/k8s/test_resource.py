@@ -106,6 +106,18 @@ async def test_wait_for_pod_retries(mock_is_pod_ready):
 
 
 @pytest.mark.asyncio
+@patch("cactus_orchestrator.k8s.resource.create.is_pod_ready", side_effect=Exception("mock exception"))
+async def test_wait_for_pod_retries_exception(mock_is_pod_ready):
+    """Test waiting for a pod to be ready - even if exceptions happen."""
+    run_resource_names = generate_class_instance(RunResourceNames, seed=202)
+
+    with pytest.raises(CactusOrchestratorException):
+        await wait_for_pod(run_resource_names, 2, wait_interval=1)
+
+    assert mock_is_pod_ready.call_count == 2
+
+
+@pytest.mark.asyncio
 @patch("cactus_orchestrator.k8s.resource.create.v1_net_api")
 async def test_add_ingress_rule(mock_v1_net_api, mock_thread_cls):
     """Test adding an ingress rule to Kubernetes."""
@@ -198,32 +210,8 @@ def assert_uri_friendly(s: str):
 
 
 def test_generate_static_test_stack_id():
-    u1 = generate_class_instance(
-        User,
-        user_id=1,
-        is_static_uri=True,
-        aggregator_certificate_p12_bundle=[],
-        aggregator_certificate_x509_der=[],
-        aggregator_certificate_pem=[],
-        aggregator_certificate_pem_key=[],
-        device_certificate_p12_bundle=[],
-        device_certificate_x509_der=[],
-        device_certificate_pem=[],
-        device_certificate_pem_key=[],
-    )
-    u2 = generate_class_instance(
-        User,
-        user_id=2,
-        is_static_uri=True,
-        aggregator_certificate_p12_bundle=[],
-        aggregator_certificate_x509_der=[],
-        aggregator_certificate_pem=[],
-        aggregator_certificate_pem_key=[],
-        device_certificate_p12_bundle=[],
-        device_certificate_x509_der=[],
-        device_certificate_pem=[],
-        device_certificate_pem_key=[],
-    )
+    u1 = generate_class_instance(User, user_id=1, is_static_uri=True)
+    u2 = generate_class_instance(User, user_id=2, is_static_uri=True)
 
     u1_id = generate_static_test_stack_id(u1)
     assert_uri_friendly(u1_id)
