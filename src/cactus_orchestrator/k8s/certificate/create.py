@@ -5,7 +5,7 @@ from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.asymmetric.types import CertificateIssuerPrivateKeyTypes
-from cryptography.x509.oid import NameOID, ObjectIdentifier
+from cryptography.x509.oid import ObjectIdentifier
 from pyasn1.codec.der import encoder
 from pyasn1.type import namedtype, univ
 
