@@ -5,8 +5,11 @@ from http import HTTPStatus
 from typing import Annotated
 
 from cactus_runner.client import ClientSession, ClientTimeout, RunnerClient, RunnerClientException
-from cactus_runner.models import RequestData, RequestList, RunnerStatus
+from cactus_runner.models import RequestData, RequestList
+from cactus_runner.models import RunGroup as RunRequestRunGroup
+from cactus_runner.models import RunnerStatus, RunRequest, TestCertificates, TestConfig, TestDefinition, TestUser
 from cactus_test_definitions import CSIPAusVersion
+from cactus_test_definitions.client import TestProcedure
 from cryptography import x509
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi_async_sqlalchemy import db
@@ -192,20 +195,31 @@ async def spawn_teststack_and_init_run(
         async with ClientSession(
             base_url=run_resource_names.runner_base_url,
             timeout=ClientTimeout(settings.test_execution_comms_timeout_seconds),
-        ) as s:
+        ) as session:
 
-            await wait_for_runner_health(s)
+            await wait_for_runner_health(session)
 
-            init_result = await RunnerClient.init(
-                session=s,
-                test_id=test.test_procedure_id,
-                csip_aus_version=CSIPAusVersion(run_group.csip_aus_version),
-                aggregator_certificate=None if run_group.is_device_cert else run_group.certificate_pem.decode(),
-                device_certificate=run_group.certificate_pem.decode() if run_group.is_device_cert else None,
-                subscription_domain=user.subscription_domain,
+            yaml_definition = TestProcedure.get_yaml(test.test_procedure_id)
+            run_request = RunRequest(
                 run_id=str(run_id),
-                pen=user.pen,
+                test_definition=TestDefinition(
+                    test_procedure_id=test.test_procedure_id, yaml_definition=yaml_definition
+                ),
+                run_group=RunRequestRunGroup(
+                    run_group_id="1",
+                    name="group 1",
+                    csip_aus_version=CSIPAusVersion(run_group.csip_aus_version),
+                    test_certificates=TestCertificates(
+                        aggregator=None if run_group.is_device_cert else run_group.certificate_pem.decode(),
+                        device=run_group.certificate_pem.decode() if run_group.is_device_cert else None,
+                    ),
+                ),
+                test_config=TestConfig(
+                    pen=user.pen, subscription_domain=user.subscription_domain, is_static_url=user.is_static_uri
+                ),
+                test_user=TestUser(user_id=str(user.user_id), name="user1"),
             )
+            init_result = await RunnerClient.new_init(session=session, run_request=run_request)
 
         # finally, include new service in ingress rule
         await add_ingress_rule(run_resource_names)

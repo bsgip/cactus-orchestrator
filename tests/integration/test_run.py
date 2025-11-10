@@ -17,6 +17,7 @@ from cactus_runner.models import (
     RequestEntry,
     RequestList,
     RunnerStatus,
+    RunRequest,
     StepStatus,
 )
 from cactus_test_definitions import CSIPAusVersion
@@ -66,6 +67,7 @@ async def test_spawn_teststack_and_init_run_dynamic_uris(
     subscription_domain = "abc.def"
 
     k8s_mock.health.return_value = True
+
     k8s_mock.init.return_value = generate_class_instance(InitResponseBody, is_started=False)
 
     async with generate_async_session(pg_base_config) as session:
@@ -101,16 +103,26 @@ async def test_spawn_teststack_and_init_run_dynamic_uris(
 
     # Check init was called the correct params
     k8s_mock.init.assert_awaited_once()
-    assert k8s_mock.init.call_args_list[0].kwargs["test_id"] == TestProcedureId.ALL_01
+    assert isinstance(k8s_mock.init.call_args_list[0].kwargs["run_request"], RunRequest)
+    assert (
+        k8s_mock.init.call_args_list[0].kwargs["run_request"].test_definition.test_procedure_id
+        == TestProcedureId.ALL_01
+    )
     if is_device_cert:
-        assert k8s_mock.init.call_args_list[0].kwargs["aggregator_certificate"] is None
-        assert k8s_mock.init.call_args_list[0].kwargs["device_certificate"] == client_cert_pem_bytes.decode()
+        assert k8s_mock.init.call_args_list[0].kwargs["run_request"].run_group.test_certificates.aggregator is None
+        assert (
+            k8s_mock.init.call_args_list[0].kwargs["run_request"].run_group.test_certificates.device
+            == client_cert_pem_bytes.decode()
+        )
     else:
-        assert k8s_mock.init.call_args_list[0].kwargs["aggregator_certificate"] == client_cert_pem_bytes.decode()
-        assert k8s_mock.init.call_args_list[0].kwargs["device_certificate"] is None
-    assert k8s_mock.init.call_args_list[0].kwargs["subscription_domain"] == subscription_domain
-    assert k8s_mock.init.call_args_list[0].kwargs["run_id"] == str(response_model.run_id)
-    assert k8s_mock.init.call_args_list[0].kwargs["csip_aus_version"] == expected_version
+        assert k8s_mock.init.call_args_list[0].kwargs["run_request"].run_group.test_certificates.device is None
+        assert (
+            k8s_mock.init.call_args_list[0].kwargs["run_request"].run_group.test_certificates.aggregator
+            == client_cert_pem_bytes.decode()
+        )
+    assert k8s_mock.init.call_args_list[0].kwargs["run_request"].test_config.subscription_domain == subscription_domain
+    assert k8s_mock.init.call_args_list[0].kwargs["run_request"].run_id == str(response_model.run_id)
+    assert k8s_mock.init.call_args_list[0].kwargs["run_request"].run_group.csip_aus_version == expected_version
 
     # Check the DB
     async with generate_async_session(pg_base_config) as session:
@@ -143,6 +155,7 @@ async def test_spawn_teststack_and_init_run_static_uri(
     expected_version = "v1.2"
 
     k8s_mock.health.return_value = True
+
     k8s_mock.init.return_value = generate_class_instance(InitResponseBody, is_started=is_started_response)
 
     async with generate_async_session(pg_base_config) as session:
@@ -180,16 +193,26 @@ async def test_spawn_teststack_and_init_run_static_uri(
 
     # Check init was called the correct params
     k8s_mock.init.assert_awaited_once()
-    assert k8s_mock.init.call_args_list[0].kwargs["test_id"] == TestProcedureId.ALL_01
+    assert isinstance(k8s_mock.init.call_args_list[0].kwargs["run_request"], RunRequest)
+    assert (
+        k8s_mock.init.call_args_list[0].kwargs["run_request"].test_definition.test_procedure_id
+        == TestProcedureId.ALL_01
+    )
     if is_device_cert:
-        assert k8s_mock.init.call_args_list[0].kwargs["aggregator_certificate"] is None
-        assert k8s_mock.init.call_args_list[0].kwargs["device_certificate"] == client_cert_pem_bytes.decode()
+        assert k8s_mock.init.call_args_list[0].kwargs["run_request"].run_group.test_certificates.aggregator is None
+        assert (
+            k8s_mock.init.call_args_list[0].kwargs["run_request"].run_group.test_certificates.device
+            == client_cert_pem_bytes.decode()
+        )
     else:
-        assert k8s_mock.init.call_args_list[0].kwargs["aggregator_certificate"] == client_cert_pem_bytes.decode()
-        assert k8s_mock.init.call_args_list[0].kwargs["device_certificate"] is None
-    assert k8s_mock.init.call_args_list[0].kwargs["subscription_domain"] == subscription_domain
-    assert k8s_mock.init.call_args_list[0].kwargs["run_id"] == str(response_model.run_id)
-    assert k8s_mock.init.call_args_list[0].kwargs["csip_aus_version"] == expected_version
+        assert k8s_mock.init.call_args_list[0].kwargs["run_request"].run_group.test_certificates.device is None
+        assert (
+            k8s_mock.init.call_args_list[0].kwargs["run_request"].run_group.test_certificates.aggregator
+            == client_cert_pem_bytes.decode()
+        )
+    assert k8s_mock.init.call_args_list[0].kwargs["run_request"].test_config.subscription_domain == subscription_domain
+    assert k8s_mock.init.call_args_list[0].kwargs["run_request"].run_id == str(response_model.run_id)
+    assert k8s_mock.init.call_args_list[0].kwargs["run_request"].run_group.csip_aus_version == expected_version
 
     # Check the DB
     async with generate_async_session(pg_base_config) as session:
@@ -222,6 +245,7 @@ async def test_spawn_teststack_and_init_tolerant_to_status_errors(
     run_group_id = 1
 
     k8s_mock.health.side_effect = [ClientConnectorDNSError("mock 1", Mock()), False, True]
+
     k8s_mock.init.return_value = generate_class_instance(InitResponseBody, is_started=False)
 
     async with generate_async_session(pg_base_config) as session:
