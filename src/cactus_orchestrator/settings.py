@@ -70,7 +70,7 @@ class CactusOrchestratorSettings(BaseSettings):
     # teardown
     idleteardowntask_enable: bool = True
     idleteardowntask_max_lifetime_seconds: int = 3600 * 24 * 4  # 4 days
-    idleteardowntask_idle_timeout_seconds: int = 3600  # 1 hour
+    idleteardowntask_idle_timeout_seconds: int = 7200  # 2 hour (we have some tests with a 1 hour poll/post rate)
     idleteardowntask_repeat_every_seconds: int = 120
 
     # readiness
