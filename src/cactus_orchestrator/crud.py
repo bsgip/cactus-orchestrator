@@ -273,6 +273,8 @@ class ProcedureRunAggregated:
     test_procedure_id: TestProcedureId
     count: int  # Count of runs for this test procedure
     latest_all_criteria_met: bool | None  # Value for all_criteria_met of the most recent Run
+    latest_run_status: int | None
+    latest_run_id: int | None
 
 
 async def select_group_runs_aggregated_by_procedure(
@@ -294,19 +296,21 @@ async def select_group_runs_aggregated_by_procedure(
 
     # Do the "distinct on" query for the latest runs by type
     stmt = (
-        select(Run.testprocedure_id, Run.all_criteria_met)
+        select(Run.testprocedure_id, Run.all_criteria_met, Run.run_status, Run.run_id)
         .distinct(Run.testprocedure_id)
         .order_by(Run.testprocedure_id, Run.run_id.desc())
         .where(Run.run_group_id == run_group_id)
     )
     distinct_resp = await session.execute(stmt)
-    raw_criteria = dict((r.tuple() for r in distinct_resp.all()))
+    raw_criteria = {r.tuple()[0]: r.tuple() for r in distinct_resp.all()}
 
     return [
         ProcedureRunAggregated(
             test_procedure_id=tp,
             count=raw_counts.get(tp.value, 0),
-            latest_all_criteria_met=raw_criteria.get(tp.value, None),
+            latest_all_criteria_met=raw_criteria[tp.value][1] if tp.value in raw_criteria else None,
+            latest_run_status=raw_criteria[tp.value][2] if tp.value in raw_criteria else None,
+            latest_run_id=raw_criteria[tp.value][3] if tp.value in raw_criteria else None,
         )
         for tp in TestProcedureId
     ]

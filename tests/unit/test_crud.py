@@ -480,20 +480,48 @@ async def test_select_group_runs_aggregated_by_procedure(pg_base_config):
         await session.execute(delete(Run))
 
         runs = [
-            Run(run_group_id=1, teststack_id="", testprocedure_id="NOT-A-TEST", run_status=1, all_criteria_met=True),
-            Run(run_group_id=1, teststack_id="", testprocedure_id="ALL-01", run_status=1, all_criteria_met=True),
-            Run(run_group_id=1, teststack_id="", testprocedure_id="ALL-01", run_status=1, all_criteria_met=False),
-            Run(run_group_id=1, teststack_id="", testprocedure_id="ALL-02", run_status=1, all_criteria_met=None),
-            Run(run_group_id=1, teststack_id="", testprocedure_id="ALL-03", run_status=1, all_criteria_met=True),
-            Run(run_group_id=1, teststack_id="", testprocedure_id="ALL-04", run_status=1, all_criteria_met=None),
-            Run(run_group_id=1, teststack_id="", testprocedure_id="ALL-04", run_status=1, all_criteria_met=True),
-            Run(run_group_id=1, teststack_id="", testprocedure_id="ALL-05", run_status=1, all_criteria_met=True),
-            Run(run_group_id=1, teststack_id="", testprocedure_id="ALL-05", run_status=1, all_criteria_met=True),
-            Run(run_group_id=1, teststack_id="", testprocedure_id="ALL-06", run_status=1, all_criteria_met=True),
-            Run(run_group_id=1, teststack_id="", testprocedure_id="ALL-06", run_status=1, all_criteria_met=None),
-            Run(run_group_id=2, teststack_id="", testprocedure_id="ALL-01", run_status=1, all_criteria_met=False),
-            Run(run_group_id=2, teststack_id="", testprocedure_id="ALL-01", run_status=1, all_criteria_met=None),
-            Run(run_group_id=2, teststack_id="", testprocedure_id="ALL-01", run_status=1, all_criteria_met=True),
+            Run(
+                run_group_id=1, teststack_id="", testprocedure_id="NOT-A-TEST", run_status=1, all_criteria_met=True
+            ),  # run 9 (8 runs comes from the pg_base_config)
+            Run(
+                run_group_id=1, teststack_id="", testprocedure_id="ALL-01", run_status=1, all_criteria_met=True
+            ),  # run 10
+            Run(
+                run_group_id=1, teststack_id="", testprocedure_id="ALL-01", run_status=1, all_criteria_met=False
+            ),  # run 11
+            Run(
+                run_group_id=1, teststack_id="", testprocedure_id="ALL-02", run_status=1, all_criteria_met=None
+            ),  # run 12
+            Run(
+                run_group_id=1, teststack_id="", testprocedure_id="ALL-03", run_status=1, all_criteria_met=True
+            ),  # run 13
+            Run(
+                run_group_id=1, teststack_id="", testprocedure_id="ALL-04", run_status=1, all_criteria_met=None
+            ),  # run 14
+            Run(
+                run_group_id=1, teststack_id="", testprocedure_id="ALL-04", run_status=1, all_criteria_met=True
+            ),  # run 15
+            Run(
+                run_group_id=1, teststack_id="", testprocedure_id="ALL-05", run_status=1, all_criteria_met=True
+            ),  # run 16
+            Run(
+                run_group_id=1, teststack_id="", testprocedure_id="ALL-05", run_status=1, all_criteria_met=True
+            ),  # run 17
+            Run(
+                run_group_id=1, teststack_id="", testprocedure_id="ALL-06", run_status=1, all_criteria_met=True
+            ),  # run 18
+            Run(
+                run_group_id=1, teststack_id="", testprocedure_id="ALL-06", run_status=1, all_criteria_met=None
+            ),  # run 19
+            Run(
+                run_group_id=2, teststack_id="", testprocedure_id="ALL-01", run_status=1, all_criteria_met=False
+            ),  # run 20
+            Run(
+                run_group_id=2, teststack_id="", testprocedure_id="ALL-01", run_status=1, all_criteria_met=None
+            ),  # run 21
+            Run(
+                run_group_id=2, teststack_id="", testprocedure_id="ALL-01", run_status=1, all_criteria_met=True
+            ),  # run 22
         ]
         session.add_all(runs)
         await session.commit()
@@ -502,22 +530,22 @@ async def test_select_group_runs_aggregated_by_procedure(pg_base_config):
     async with generate_async_session(pg_base_config) as session:
         group_1_result = await select_group_runs_aggregated_by_procedure(session, 1)
         assert_list_type(ProcedureRunAggregated, group_1_result, len(TestProcedureId))
-        assert ProcedureRunAggregated(TestProcedureId.ALL_01, 2, False) in group_1_result
-        assert ProcedureRunAggregated(TestProcedureId.ALL_02, 1, None) in group_1_result
-        assert ProcedureRunAggregated(TestProcedureId.ALL_03, 1, True) in group_1_result
-        assert ProcedureRunAggregated(TestProcedureId.ALL_04, 2, True) in group_1_result
-        assert ProcedureRunAggregated(TestProcedureId.ALL_05, 2, True) in group_1_result
-        assert ProcedureRunAggregated(TestProcedureId.ALL_06, 2, None) in group_1_result
-        assert ProcedureRunAggregated(TestProcedureId.GEN_01, 0, None) in group_1_result
+        assert ProcedureRunAggregated(TestProcedureId.ALL_01, 2, False, 1, 11) in group_1_result
+        assert ProcedureRunAggregated(TestProcedureId.ALL_02, 1, None, 1, 12) in group_1_result
+        assert ProcedureRunAggregated(TestProcedureId.ALL_03, 1, True, 1, 13) in group_1_result
+        assert ProcedureRunAggregated(TestProcedureId.ALL_04, 2, True, 1, 15) in group_1_result
+        assert ProcedureRunAggregated(TestProcedureId.ALL_05, 2, True, 1, 17) in group_1_result
+        assert ProcedureRunAggregated(TestProcedureId.ALL_06, 2, None, 1, 19) in group_1_result
+        assert ProcedureRunAggregated(TestProcedureId.GEN_01, 0, None, None, None) in group_1_result
 
         group_2_result = await select_group_runs_aggregated_by_procedure(session, 2)
         assert_list_type(ProcedureRunAggregated, group_2_result, len(TestProcedureId))
-        assert ProcedureRunAggregated(TestProcedureId.ALL_01, 3, True) in group_2_result
-        assert ProcedureRunAggregated(TestProcedureId.ALL_02, 0, None) in group_2_result
+        assert ProcedureRunAggregated(TestProcedureId.ALL_01, 3, True, 1, 22) in group_2_result
+        assert ProcedureRunAggregated(TestProcedureId.ALL_02, 0, None, None, None) in group_2_result
 
         group_3_result = await select_group_runs_aggregated_by_procedure(session, 3)
         assert_list_type(ProcedureRunAggregated, group_3_result, len(TestProcedureId))
-        assert ProcedureRunAggregated(TestProcedureId.ALL_01, 0, None) in group_3_result
+        assert ProcedureRunAggregated(TestProcedureId.ALL_01, 0, None, None, None) in group_3_result
 
 
 @pytest.mark.parametrize(

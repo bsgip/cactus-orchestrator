@@ -94,6 +94,8 @@ class TestProcedureRunSummaryResponse(BaseModel):
     classes: list[str] | None
     run_count: int  # Count of runs for this test procedure
     latest_all_criteria_met: bool | None  # Value for all_criteria_met of the most recent Run
+    latest_run_status: int | None  # RunStatus of the most recent Run
+    latest_run_id: int | None  # run_id of the most recent Run
 
 
 class UserConfigurationRequest(BaseModel):

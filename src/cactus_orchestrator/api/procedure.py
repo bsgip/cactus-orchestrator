@@ -118,6 +118,8 @@ async def get_procedure_run_summaries_for_group(
                     classes=definition.classes,
                     run_count=agg.count,
                     latest_all_criteria_met=agg.latest_all_criteria_met,
+                    latest_run_status=agg.latest_run_status,
+                    latest_run_id=agg.latest_run_id,
                 )
             )
 
