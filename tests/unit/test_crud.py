@@ -150,8 +150,11 @@ async def test_select_run_group_counts_for_user(pg_base_config, run_group_ids, e
 async def test_select_run_groups_by_user(pg_base_config):
     async with generate_async_session(pg_base_config) as session:
         run_groups = await select_run_groups_by_user(session)
-        assert run_groups[1] == [1, 2]  # user_id=1
-        assert run_groups[2] == [3]  # user_id=2
+        assert len(run_groups[1]) == 2  # user_id=1
+        assert len(run_groups[2]) == 1  # user_id=2
+        assert run_groups[1][0].name == "name-1"
+        assert run_groups[1][1].name == "name-2"
+        assert run_groups[2][0].name == "name-3"
 
 
 @pytest.mark.asyncio

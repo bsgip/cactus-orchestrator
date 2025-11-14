@@ -155,8 +155,13 @@ async def admin_get_users(
     resp = [
         UserWithRunGroupsResponse(
             user_id=user.user_id,
-            name=user.subject_id,
-            run_groups=run_groups_by_user[user.user_id] if user.user_id in run_groups_by_user else [],
+            subject_id=user.subject_id,
+            name=user.user_name,
+            run_groups=(
+                [map_group_to_group_response(group=rg, total_runs=0) for rg in run_groups_by_user[user.user_id]]
+                if user.user_id in run_groups_by_user
+                else []
+            ),
         )
         for user in users
     ]
