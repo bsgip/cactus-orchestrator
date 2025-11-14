@@ -68,8 +68,9 @@ class UserWithRunGroupsResponse(BaseModel):
     """Represents a user with all their associated run groups"""
 
     user_id: int
-    name: str
-    run_groups: list[int]
+    subject_id: str
+    name: str | None
+    run_groups: list[RunGroupResponse]
 
 
 class CSIPAusVersionResponse(BaseModel):

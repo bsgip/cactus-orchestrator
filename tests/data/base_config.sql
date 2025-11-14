@@ -1,11 +1,11 @@
 
 -- Users
-INSERT INTO user_ (subject_id, issuer_id, pen)
-VALUES ('user1', 'https://test-cactus-issuer.example.com', 64);
-INSERT INTO user_ (subject_id, issuer_id, pen)
-VALUES ('user2', 'https://test-cactus-issuer.example.com', 64);
-INSERT INTO user_ (subject_id, issuer_id, pen)
-VALUES ('user3', 'https://test-cactus-issuer.example.com', 64);
+INSERT INTO user_ (subject_id, issuer_id, pen, user_name)
+VALUES ('user1', 'https://test-cactus-issuer.example.com', 64, 'user1@cactus.example.com');
+INSERT INTO user_ (subject_id, issuer_id, pen, user_name)
+VALUES ('user2', 'https://test-cactus-issuer.example.com', 64, 'user2@cactus.example.com');
+INSERT INTO user_ (subject_id, issuer_id, pen, user_name)
+VALUES ('user3', 'https://test-cactus-issuer.example.com', 64, NULL);
 
 -- Run Groups
 INSERT INTO run_group (user_id, name, csip_aus_version, is_device_cert, certificate_pem, certificate_generated_at, certificate_id)

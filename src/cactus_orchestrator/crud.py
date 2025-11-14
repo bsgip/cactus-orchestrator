@@ -104,12 +104,13 @@ async def insert_run_for_run_group(
     return run.run_id
 
 
-async def select_run_groups_by_user(session: AsyncSession) -> dict[int, list[int]]:
-    stmt = select(RunGroup.run_group_id, RunGroup.user_id)
+async def select_run_groups_by_user(session: AsyncSession) -> dict[int, list[RunGroup]]:
+    """Returns all run groups associated with each user, keyed by their user_id"""
+    stmt = select(RunGroup)
     result = await session.execute(stmt)
     run_groups_by_user = defaultdict(list)
-    for run_group_id, user_id in result.all():
-        run_groups_by_user[user_id].append(run_group_id)
+    for run_group in result.scalars().all():
+        run_groups_by_user[run_group.user_id].append(run_group)
     return dict(run_groups_by_user)
 
 
