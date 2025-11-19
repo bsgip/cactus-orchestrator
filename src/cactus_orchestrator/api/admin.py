@@ -148,7 +148,7 @@ async def assume_user_context_from_run(
 @router.get("/admin/users", status_code=HTTPStatus.OK)
 async def admin_get_users(
     _: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.admin_all}))],
-) -> Page[UserWithRunGroupsResponse]:
+) -> list[UserWithRunGroupsResponse]:
     run_groups_by_user = await select_run_groups_by_user(db.session)
     users = await select_users(db.session)
 
@@ -165,8 +165,7 @@ async def admin_get_users(
         )
         for user in users
     ]
-
-    return paginate(resp)
+    return resp
 
 
 @router.get("/admin/procedure_runs/{run_group_id}", status_code=HTTPStatus.OK)

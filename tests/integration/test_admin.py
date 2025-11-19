@@ -25,9 +25,8 @@ async def test_get_test_user_list_populated(pg_base_config, client, valid_jwt_ad
     # Assert
     assert res.status_code == HTTPStatus.OK
     data = res.json()
-    assert data["total"] == 3
-    assert len(data["items"]) == 3
-    _ = [UserWithRunGroupsResponse.model_validate(d) for d in data["items"]]
+    assert len(data) == 3
+    _ = [UserWithRunGroupsResponse.model_validate(d) for d in data]
 
 
 @pytest.fixture(scope="session")
@@ -70,11 +69,10 @@ async def test_admin_get_users(client, pg_base_config, valid_jwt_admin1):
     # Assert
     assert res.status_code == HTTPStatus.OK
     data = res.json()
-    assert isinstance(data, dict)
-    assert "items" in data
-    items = [UserWithRunGroupsResponse.model_validate(i) for i in data["items"]]
+    assert isinstance(data, list)
+    items = [UserWithRunGroupsResponse.model_validate(i) for i in data]
 
-    assert len(items) == 3  # 3 users registered in pg_base_config
+    assert len(data) == 3  # 3 users registered in pg_base_config
     run_group_count = [None, 2, 1, 0]
     for item in items:
         if item.name:

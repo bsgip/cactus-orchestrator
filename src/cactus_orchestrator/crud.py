@@ -115,7 +115,7 @@ async def select_run_groups_by_user(session: AsyncSession) -> dict[int, list[Run
 
 
 async def select_users(session: AsyncSession) -> Sequence[User]:
-    result = await session.execute(select(User))
+    result = await session.execute(select(User).order_by(User.user_id))
     return result.scalars().all()
 
 
