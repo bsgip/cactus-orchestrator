@@ -144,3 +144,16 @@ class RunArtifact(Base):
     run_artifact_id: Mapped[int] = mapped_column(name="id", primary_key=True, autoincrement=True)
     compression: Mapped[str] = mapped_column(String, nullable=False)
     file_data: Mapped[bytes] = mapped_column(LargeBinary, nullable=False, unique=False)
+
+
+class ComplianceRecord(Base):
+    """Records each instance a compliance report is generated for a run group."""
+
+    __tablename__ = "compliance_record"
+
+    compliance_record_id: Mapped[int] = mapped_column(name="id", primary_key=True, autoincrement=True)
+    run_group_id: Mapped[int] = mapped_column(ForeignKey("run_group.id"))
+    requester_id: Mapped[int] = mapped_column(
+        ForeignKey("user_.id")
+    )  # User who requested generation of the compliance report
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

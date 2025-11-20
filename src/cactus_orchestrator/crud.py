@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload, selectinload, undefer
 
 from cactus_orchestrator.auth import UserContext
-from cactus_orchestrator.model import Run, RunArtifact, RunGroup, RunStatus, User
+from cactus_orchestrator.model import ComplianceRecord, Run, RunArtifact, RunGroup, RunStatus, User
 
 ACTIVE_RUN_STATUSES: set[RunStatus] = {RunStatus.provisioning, RunStatus.started, RunStatus.initialised}
 FINALISED_RUN_STATUSES: set[RunStatus] = {
@@ -331,3 +331,14 @@ async def select_group_runs_for_procedure(
     )
 
     return resp.scalars().all()
+
+
+async def insert_compliance_generation_record(
+    session: AsyncSession, run_group_id: int, requester_id: int
+) -> ComplianceRecord:
+    compliance_record = ComplianceRecord(run_group_id=run_group_id, requester_id=requester_id)
+
+    session.add(compliance_record)
+    await session.flush()
+
+    return compliance_record
