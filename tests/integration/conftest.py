@@ -16,7 +16,7 @@ def k8s_mock() -> Generator[MockedK8s, None, None]:
         patch("cactus_orchestrator.api.run.delete_service") as delete_service,
         patch("cactus_orchestrator.api.run.delete_statefulset") as delete_statefulset,
         patch("cactus_orchestrator.api.run.remove_ingress_rule") as remove_ingress_rule,
-        patch("cactus_orchestrator.api.run.RunnerClient.new_init") as init,
+        patch("cactus_orchestrator.api.run.RunnerClient.initialise") as init,
         patch("cactus_orchestrator.api.run.RunnerClient.start") as start,
         patch("cactus_orchestrator.api.run.RunnerClient.finalize") as finalize,
         patch("cactus_orchestrator.api.run.RunnerClient.status") as status,
