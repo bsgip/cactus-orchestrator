@@ -18,7 +18,7 @@ dependencies = [
     "pyjwt",
     "fastapi-async-sqlalchemy",
     "asyncpg",
-    "cactus-test-definitions==1.6.0",
+    "cactus-test-definitions==1.6.2",
     "cactus-runner @ git+https://github.com/bsgip/cactus-runner.git@v1.3.0",
     "fastapi-pagination",
     "fastapi-utils",

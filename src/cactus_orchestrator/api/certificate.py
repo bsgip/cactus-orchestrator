@@ -105,7 +105,6 @@ async def generate_client_certificate(
 
     Will return a ZIP stream of bytes with the following files:
 
-        certificate.pem         # PEM encoded certificate
         fullchain.pem           # PEM encoded certificate + MICA/MCA certificate bundle chain
         key.pem                 # PEM encoded private key (unencrypted)
         certificate.pfx              # PKCS12 encoded certificate + MICA/MCA chain / private key (unencrypted)
@@ -152,7 +151,6 @@ async def generate_client_certificate(
     # generate output ZipFile
     zip_buffer = io.BytesIO()
     with zipfile.ZipFile(zip_buffer, "a", zipfile.ZIP_DEFLATED, False) as zip_file:
-        zip_file.writestr("certificate.pem", client_cert_bytes)
         zip_file.writestr("fullchain.pem", client_cert_bytes + mica_cert_bytes + mca_cert_bytes)
         zip_file.writestr("key.pem", client_key_bytes)
         zip_file.writestr("certificate.pfx", pfx_bytes)
