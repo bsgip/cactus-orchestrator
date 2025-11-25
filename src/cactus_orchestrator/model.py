@@ -157,3 +157,4 @@ class ComplianceRecord(Base):
         ForeignKey("user_.id")
     )  # User who requested generation of the compliance report
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    file_data: Mapped[bytes] = mapped_column(LargeBinary, nullable=True, unique=False, deferred=True)
