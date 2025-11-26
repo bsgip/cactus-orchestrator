@@ -534,22 +534,22 @@ async def test_select_group_runs_aggregated_by_procedure(pg_base_config):
     async with generate_async_session(pg_base_config) as session:
         group_1_result = await select_group_runs_aggregated_by_procedure(session, 1)
         assert_list_type(ProcedureRunAggregated, group_1_result, len(TestProcedureId))
-        assert ProcedureRunAggregated(TestProcedureId.ALL_01, 2, False, 1, 11) in group_1_result
-        assert ProcedureRunAggregated(TestProcedureId.ALL_02, 1, None, 1, 12) in group_1_result
-        assert ProcedureRunAggregated(TestProcedureId.ALL_03, 1, True, 1, 13) in group_1_result
-        assert ProcedureRunAggregated(TestProcedureId.ALL_04, 2, True, 1, 15) in group_1_result
-        assert ProcedureRunAggregated(TestProcedureId.ALL_05, 2, True, 1, 17) in group_1_result
-        assert ProcedureRunAggregated(TestProcedureId.ALL_06, 2, None, 1, 19) in group_1_result
-        assert ProcedureRunAggregated(TestProcedureId.GEN_01, 0, None, None, None) in group_1_result
+        assert ProcedureRunAggregated(TestProcedureId.ALL_01, 2, False, 1, 11, None) in group_1_result
+        assert ProcedureRunAggregated(TestProcedureId.ALL_02, 1, None, 1, 12, None) in group_1_result
+        assert ProcedureRunAggregated(TestProcedureId.ALL_03, 1, True, 1, 13, None) in group_1_result
+        assert ProcedureRunAggregated(TestProcedureId.ALL_04, 2, True, 1, 15, None) in group_1_result
+        assert ProcedureRunAggregated(TestProcedureId.ALL_05, 2, True, 1, 17, None) in group_1_result
+        assert ProcedureRunAggregated(TestProcedureId.ALL_06, 2, None, 1, 19, None) in group_1_result
+        assert ProcedureRunAggregated(TestProcedureId.GEN_01, 0, None, None, None, None) in group_1_result
 
         group_2_result = await select_group_runs_aggregated_by_procedure(session, 2)
         assert_list_type(ProcedureRunAggregated, group_2_result, len(TestProcedureId))
-        assert ProcedureRunAggregated(TestProcedureId.ALL_01, 3, True, 1, 22) in group_2_result
-        assert ProcedureRunAggregated(TestProcedureId.ALL_02, 0, None, None, None) in group_2_result
+        assert ProcedureRunAggregated(TestProcedureId.ALL_01, 3, True, 1, 22, None) in group_2_result
+        assert ProcedureRunAggregated(TestProcedureId.ALL_02, 0, None, None, None, None) in group_2_result
 
         group_3_result = await select_group_runs_aggregated_by_procedure(session, 3)
         assert_list_type(ProcedureRunAggregated, group_3_result, len(TestProcedureId))
-        assert ProcedureRunAggregated(TestProcedureId.ALL_01, 0, None, None, None) in group_3_result
+        assert ProcedureRunAggregated(TestProcedureId.ALL_01, 0, None, None, None, None) in group_3_result
 
 
 @pytest.mark.parametrize(

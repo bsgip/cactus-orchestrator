@@ -13,6 +13,7 @@ from fastapi_pagination import Page, paginate
 from sqlalchemy.exc import NoResultFound
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from cactus_orchestrator import artifact
 from cactus_orchestrator.api.procedure import test_procedure_definitions
 from cactus_orchestrator.api.run import (
     map_run_to_run_response,
@@ -24,6 +25,7 @@ from cactus_orchestrator.api.run_group import map_group_to_group_response
 from cactus_orchestrator.auth import AuthPerm, UserContext, jwt_validator
 from cactus_orchestrator.crud import (
     ACTIVE_RUN_STATUSES,
+    insert_compliance_generation_record,
     select_group_runs_aggregated_by_procedure,
     select_group_runs_for_procedure,
     select_run_group_counts_for_user,
@@ -34,6 +36,7 @@ from cactus_orchestrator.crud import (
     select_user_from_run_group,
     select_user_run,
     select_users,
+    update_compliance_generation_record_with_file_data,
 )
 from cactus_orchestrator.k8s.resource import get_resource_names
 from cactus_orchestrator.model import User
@@ -202,6 +205,7 @@ async def admin_get_procedure_run_summaries_for_group(
                     latest_all_criteria_met=agg.latest_all_criteria_met,
                     latest_run_status=agg.latest_run_status,
                     latest_run_id=agg.latest_run_id,
+                    latest_run_timestamp=agg.latest_run_timestamp,
                 )
             )
 
@@ -399,3 +403,60 @@ async def admin_get_individual_run(
         raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Not Found")
 
     return map_run_to_run_response(run)
+
+
+@router.get("/admin/run_group/{run_group_id}/artifact", status_code=HTTPStatus.OK)
+async def admin_get_group_run_artifact(
+    run_group_id: int,
+    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.admin_all}))],
+) -> Response:
+    """Generates the compliance report for the run group 'run_group_id'."""
+
+    requester = await select_user_or_raise(db.session, user_context)
+    requester_id = requester.user_id
+
+    # Add the generation record to the database so we can pass the compliance_record_id during report generation
+    try:
+        compliance_record = await insert_compliance_generation_record(
+            session=db.session, run_group_id=run_group_id, requester_id=requester_id
+        )
+    except Exception as e:
+        logger.error(e)
+        raise HTTPException(
+            status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
+            detail=f"Unable to insert ComplianceRecord for {run_group_id=} and {requester_id=}",
+        )
+
+    # Generate compliance report
+    try:
+        run_group_artifact = await artifact.generate_run_group_artifact(
+            session=db.session, run_group_id=run_group_id, requester=requester, compliance_record=compliance_record
+        )
+    except NoResultFound as e:
+        logger.error(e)
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail=f"Run group {run_group_id} does not exist.")
+
+    if run_group_artifact is None:
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="RunGroupArtifact does not exist.")
+
+    # Update the compliance record to include pdf data
+    try:
+        await update_compliance_generation_record_with_file_data(
+            db.session, compliance_record=compliance_record, file_data=run_group_artifact.file_data
+        )
+    except Exception as e:
+        logger.error(e)
+        raise HTTPException(
+            status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
+            detail=(
+                "Unable to update ComplianceRecord with compliance file data"
+                f" for {run_group_id=} and {requester_id=}"
+            ),
+        )
+
+    await db.session.commit()
+
+    return Response(
+        content=run_group_artifact.file_data,
+        media_type=run_group_artifact.mime_type,
+    )
