@@ -9,7 +9,7 @@ from cactus_runner.models import RequestData, RequestList
 from cactus_runner.models import RunGroup as RunRequestRunGroup
 from cactus_runner.models import RunnerStatus, RunRequest, TestCertificates, TestConfig, TestDefinition, TestUser
 from cactus_test_definitions import CSIPAusVersion
-from cactus_test_definitions.client import TestProcedure
+from cactus_test_definitions.client.test_procedures import get_yaml_contents
 from cryptography import x509
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi_async_sqlalchemy import db
@@ -199,7 +199,7 @@ async def spawn_teststack_and_init_run(
 
             await wait_for_runner_health(session)
 
-            yaml_definition = TestProcedure.get_yaml(test.test_procedure_id)
+            yaml_definition = get_yaml_contents(test.test_procedure_id)
             run_request = RunRequest(
                 run_id=str(run_id),
                 test_definition=TestDefinition(
@@ -219,7 +219,7 @@ async def spawn_teststack_and_init_run(
                 ),
                 test_user=TestUser(user_id=str(user.user_id), name="user1"),
             )
-            init_result = await RunnerClient.new_init(session=session, run_request=run_request)
+            init_result = await RunnerClient.initialise(session=session, run_request=run_request)
 
         # finally, include new service in ingress rule
         await add_ingress_rule(run_resource_names)

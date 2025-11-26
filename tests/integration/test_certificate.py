@@ -11,13 +11,12 @@ from assertical.asserts.time import assert_nowish
 from assertical.fixtures.postgres import generate_async_session
 from cryptography import x509
 from cryptography.hazmat.backends import default_backend
-from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.serialization import Encoding, NoEncryption, PrivateFormat, pkcs12
 from sqlalchemy import select
 from sqlalchemy.orm import undefer
 
 from cactus_orchestrator.api.certificate import MEDIA_TYPE_PEM_CRT
-from cactus_orchestrator.model import RunGroup, User
+from cactus_orchestrator.model import RunGroup
 from cactus_orchestrator.schema import GenerateClientCertificateRequest
 
 
@@ -90,15 +89,13 @@ async def test_generate_new_certificate_and_fetch(
 
     # Decompose the resulting ZIP file
     zip = zipfile.ZipFile(io.BytesIO(res.content))
-
-    cert_bytes = zip.read("certificate.pem")
     cert_chain_bytes = zip.read("fullchain.pem")
     key_bytes = zip.read("key.pem")
     pfx_bytes = zip.read("certificate.pfx")
 
     # Ensure it's all valid encodings
-    cert = x509.load_pem_x509_certificate(cert_bytes)
     cert_chain = x509.load_pem_x509_certificates(cert_chain_bytes)
+    cert = cert_chain[0]  # Extract cert from the chain as we no longer save to zip
     pfx_key, pfx_cert, pfx_additional_certs = pkcs12.load_key_and_certificates(pfx_bytes, None)
 
     # Do some basic sanity checks
@@ -121,7 +118,7 @@ async def test_generate_new_certificate_and_fetch(
                 )
             )
         ).scalar_one()
-
+        cert_bytes = cert.public_bytes(Encoding.PEM)
         assert run_group.certificate_pem == cert_bytes
         assert_nowish(run_group.certificate_generated_at)
         assert run_group.is_device_cert == is_device_cert

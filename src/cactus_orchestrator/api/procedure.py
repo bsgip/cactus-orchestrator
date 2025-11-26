@@ -4,7 +4,7 @@ from importlib import resources
 from typing import Annotated
 
 from cactus_test_definitions import CSIPAusVersion
-from cactus_test_definitions.client import TestProcedureConfig, TestProcedureId, TestProcedures
+from cactus_test_definitions.client import TestProcedure, TestProcedureId, get_all_test_procedures
 from fastapi import APIRouter, Depends, HTTPException, Response
 from fastapi_async_sqlalchemy import db
 from fastapi_pagination import Page, paginate
@@ -28,11 +28,10 @@ router = APIRouter()
 disable_installed_extensions_check()
 
 
-def map_from_definitions_to_responses(definitions: TestProcedures) -> list[TestProcedureResponse]:
+def map_from_definitions_to_responses(definitions: dict[TestProcedureId, TestProcedure]) -> list[TestProcedureResponse]:
     responses = []
-    test_procedure_ids = []
-    for k, v in definitions.test_procedures.items():
-        if k in test_procedure_ids or k not in TestProcedureId:
+    for k, v in definitions.items():
+        if k not in TestProcedureId:
             continue
 
         responses.append(
@@ -40,7 +39,6 @@ def map_from_definitions_to_responses(definitions: TestProcedures) -> list[TestP
                 test_procedure_id=TestProcedureId(k), description=v.description, category=v.category, classes=v.classes
             )
         )
-        test_procedure_ids.append(k)
     return responses
 
 
@@ -49,8 +47,8 @@ def map_versions() -> list[CSIPAusVersionResponse]:
 
 
 # Test procedures
-test_procedure_definitions = TestProcedureConfig.from_resource()
-test_procedure_responses = map_from_definitions_to_responses(test_procedure_definitions)
+test_procedures_by_id = get_all_test_procedures()
+test_procedure_responses = map_from_definitions_to_responses(test_procedures_by_id)
 version_responses = map_versions()
 
 
@@ -108,7 +106,7 @@ async def get_procedure_run_summaries_for_group(
     # Enumerate our aggregated summaries from the DB and combine them with additional metadata from the YAML definitions
     results: list[TestProcedureRunSummaryResponse] = []
     for agg in await select_group_runs_aggregated_by_procedure(db.session, run_group_id):
-        definition = test_procedure_definitions.test_procedures.get(agg.test_procedure_id.value, None)
+        definition = test_procedures_by_id.get(agg.test_procedure_id, None)
         if definition and (run_group.csip_aus_version in definition.target_versions):
             results.append(
                 TestProcedureRunSummaryResponse(

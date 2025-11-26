@@ -14,7 +14,7 @@ from sqlalchemy.exc import NoResultFound
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from cactus_orchestrator import artifact
-from cactus_orchestrator.api.procedure import test_procedure_definitions
+from cactus_orchestrator.api.procedure import test_procedures_by_id
 from cactus_orchestrator.api.run import (
     map_run_to_run_response,
     select_user_or_raise,
@@ -193,7 +193,7 @@ async def admin_get_procedure_run_summaries_for_group(
     # Enumerate our aggregated summaries from the DB and combine them with additional metadata from the YAML definitions
     results: list[TestProcedureRunSummaryResponse] = []
     for agg in await select_group_runs_aggregated_by_procedure(db.session, run_group_id):
-        definition = test_procedure_definitions.test_procedures.get(agg.test_procedure_id.value, None)
+        definition = test_procedures_by_id.get(agg.test_procedure_id, None)
         if definition and (run_group.csip_aus_version in definition.target_versions):
             results.append(
                 TestProcedureRunSummaryResponse(

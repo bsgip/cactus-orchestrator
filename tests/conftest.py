@@ -11,7 +11,6 @@ from assertical.fixtures.environment import environment_snapshot
 from assertical.fixtures.fastapi import start_app_with_client
 from assertical.fixtures.postgres import generate_async_conn_str_from_connection
 from cryptography import x509
-from cryptography.hazmat import backends
 from cryptography.hazmat.primitives import asymmetric, hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.oid import NameOID

@@ -2,7 +2,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from enum import Enum, auto
 
-from cactus_test_definitions.client import TestProcedureConfig, TestProcedureId
+from cactus_test_definitions.client import TestProcedureId, get_all_test_procedures
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from cactus_orchestrator.crud import select_group_runs_aggregated_by_procedure
@@ -127,11 +127,15 @@ async def get_class_compliance(
 async def get_procedure_mapping(
     session: AsyncSession, run_group: RunGroup
 ) -> dict[TestProcedureId, TestProcedureRunSummaryResponse]:
-    test_procedure_definitions = TestProcedureConfig.from_resource()
+    test_procedure_definitions = get_all_test_procedures()
 
     procedures: list[TestProcedureRunSummaryResponse] = []
     for agg in await select_group_runs_aggregated_by_procedure(session=session, run_group_id=run_group.run_group_id):
-        definition = test_procedure_definitions.test_procedures.get(agg.test_procedure_id.value, None)
+        definition = (
+            test_procedure_definitions[agg.test_procedure_id]
+            if agg.test_procedure_id in test_procedure_definitions
+            else None
+        )
         if definition and (run_group.csip_aus_version in definition.target_versions):
             procedures.append(
                 TestProcedureRunSummaryResponse(
