@@ -333,6 +333,14 @@ def pg_base_config(pg_empty_config):
 
 
 @pytest.fixture
+def pg_compliance_config(pg_empty_config):
+    """Adds enough records to support compliance checking"""
+    execute_test_sql_file(pg_empty_config, "tests/data/compliance_config.sql")
+
+    yield pg_empty_config
+
+
+@pytest.fixture
 async def client(pg_empty_config, patch_jwks_request):
     from cactus_orchestrator.main import generate_app
 

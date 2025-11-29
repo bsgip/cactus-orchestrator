@@ -287,3 +287,18 @@ async def test_admin_get_individual_run(client, pg_base_config, valid_jwt_admin1
         run_response = RunResponse.model_validate_json(res.text)
         assert run_response.run_id == run_id
         assert run_response.test_url
+
+
+@pytest.mark.parametrize("run_group_id", [1, 2, 3])
+@pytest.mark.asyncio
+async def test_admin_get_procedure_run_summaries_for_group(client, pg_base_config, valid_jwt_admin1, run_group_id: int):
+
+    # Act
+    res = await client.get(
+        f"/admin/procedure_runs/{run_group_id}", headers={"Authorization": f"Bearer {valid_jwt_admin1}"}
+    )
+
+    # Assert
+    assert res.status_code == HTTPStatus.OK
+    for run_summary in res.json():
+        TestProcedureRunSummaryResponse.model_validate(run_summary)

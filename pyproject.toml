@@ -24,6 +24,8 @@ dependencies = [
     "fastapi-utils",
     "typing_inspect",                                                        # fastapi-utils missing dep?
     "pyasn1",
+    "reportlab",
+    "types-reportlab",
 ]
 name = "cactus-orchestrator"
 dynamic = ["version"]
