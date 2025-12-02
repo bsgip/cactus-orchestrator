@@ -52,7 +52,7 @@ async def test_clone_statefulset(mock_v1_app_api, mock_thread_cls):
     """Test cloning a Kubernetes StatefulSet."""
     container_foo = client.V1Container(name="foo")
     container_envoy = client.V1Container(name="envoy")
-    container_taskiq_worker = client.V1Container(name="taskiq_worker", env=[client.V1EnvVar(name="MYENV", value="123")])
+    container_taskiq_worker = client.V1Container(name="taskiq-worker", env=[client.V1EnvVar(name="MYENV", value="123")])
     container_bar = client.V1Container(name="bar", env=[client.V1EnvVar(name="MYENV2", value="456")])
     mock_statefulset = client.V1StatefulSet(
         api_version="apps/v1",
