@@ -52,6 +52,8 @@ async def test_clone_statefulset(mock_v1_app_api, mock_thread_cls):
     """Test cloning a Kubernetes StatefulSet."""
     container_foo = client.V1Container(name="foo")
     container_envoy = client.V1Container(name="envoy")
+    container_taskiq_worker = client.V1Container(name="taskiq_worker", env=[client.V1EnvVar(name="MYENV", value="123")])
+    container_bar = client.V1Container(name="bar", env=[client.V1EnvVar(name="MYENV2", value="456")])
     mock_statefulset = client.V1StatefulSet(
         api_version="apps/v1",
         kind="StatefulSet",
@@ -61,7 +63,9 @@ async def test_clone_statefulset(mock_v1_app_api, mock_thread_cls):
             selector=client.V1LabelSelector(match_labels={"app": "template-app"}),
             template=client.V1PodTemplateSpec(
                 metadata=client.V1ObjectMeta(labels={"app": "template-app"}),
-                spec=client.V1PodSpec(containers=[container_foo, container_envoy]),
+                spec=client.V1PodSpec(
+                    containers=[container_foo, container_envoy, container_taskiq_worker, container_bar]
+                ),
             ),
         ),
     )
@@ -79,9 +83,20 @@ async def test_clone_statefulset(mock_v1_app_api, mock_thread_cls):
     # Ensure the HREF_PREFIX env var got injected (to the correct container)
     assert container_foo.env is None
     assert container_envoy.env is not None
+    assert container_taskiq_worker.env is not None
+    assert container_bar.env == [client.V1EnvVar(name="MYENV2", value="456")], "Should be unchanged"
+
+    # The envoy container had NO env vars
     assert len(container_envoy.env) == 1
     assert container_envoy.env[0].name == "HREF_PREFIX"
     assert container_envoy.env[0].value == "/" + run_resource_names.service
+
+    # We added the env to the taskiq_worker list
+    assert len(container_taskiq_worker.env) == 2
+    assert container_taskiq_worker.env[0].name == "MYENV"
+    assert container_taskiq_worker.env[0].value == "123"
+    assert container_taskiq_worker.env[1].name == "HREF_PREFIX"
+    assert container_taskiq_worker.env[1].value == "/" + run_resource_names.service
 
 
 @pytest.mark.asyncio
