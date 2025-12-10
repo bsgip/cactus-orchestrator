@@ -97,6 +97,7 @@ class TestProcedureRunSummaryResponse(BaseModel):
     latest_all_criteria_met: bool | None  # Value for all_criteria_met of the most recent Run
     latest_run_status: int | None  # RunStatus of the most recent Run
     latest_run_id: int | None  # run_id of the most recent Run
+    latest_run_timestamp: datetime | None  # timestamp of the most recent Run
 
 
 class UserConfigurationRequest(BaseModel):

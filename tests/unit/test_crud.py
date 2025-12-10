@@ -12,6 +12,7 @@ from sqlalchemy.exc import IntegrityError, NoResultFound
 from cactus_orchestrator.auth import UserContext
 from cactus_orchestrator.crud import (
     ProcedureRunAggregated,
+    insert_compliance_generation_record,
     insert_run_for_run_group,
     insert_run_group,
     insert_user,
@@ -33,7 +34,7 @@ from cactus_orchestrator.crud import (
     update_run_with_runartifact_and_finalise,
     update_user_name,
 )
-from cactus_orchestrator.model import Run, RunArtifact, RunGroup, RunStatus, User
+from cactus_orchestrator.model import ComplianceRecord, Run, RunArtifact, RunGroup, RunStatus, User
 
 
 @pytest.mark.asyncio
@@ -533,22 +534,22 @@ async def test_select_group_runs_aggregated_by_procedure(pg_base_config):
     async with generate_async_session(pg_base_config) as session:
         group_1_result = await select_group_runs_aggregated_by_procedure(session, 1)
         assert_list_type(ProcedureRunAggregated, group_1_result, len(TestProcedureId))
-        assert ProcedureRunAggregated(TestProcedureId.ALL_01, 2, False, 1, 11) in group_1_result
-        assert ProcedureRunAggregated(TestProcedureId.ALL_02, 1, None, 1, 12) in group_1_result
-        assert ProcedureRunAggregated(TestProcedureId.ALL_03, 1, True, 1, 13) in group_1_result
-        assert ProcedureRunAggregated(TestProcedureId.ALL_04, 2, True, 1, 15) in group_1_result
-        assert ProcedureRunAggregated(TestProcedureId.ALL_05, 2, True, 1, 17) in group_1_result
-        assert ProcedureRunAggregated(TestProcedureId.ALL_06, 2, None, 1, 19) in group_1_result
-        assert ProcedureRunAggregated(TestProcedureId.GEN_01, 0, None, None, None) in group_1_result
+        assert ProcedureRunAggregated(TestProcedureId.ALL_01, 2, False, 1, 11, None) in group_1_result
+        assert ProcedureRunAggregated(TestProcedureId.ALL_02, 1, None, 1, 12, None) in group_1_result
+        assert ProcedureRunAggregated(TestProcedureId.ALL_03, 1, True, 1, 13, None) in group_1_result
+        assert ProcedureRunAggregated(TestProcedureId.ALL_04, 2, True, 1, 15, None) in group_1_result
+        assert ProcedureRunAggregated(TestProcedureId.ALL_05, 2, True, 1, 17, None) in group_1_result
+        assert ProcedureRunAggregated(TestProcedureId.ALL_06, 2, None, 1, 19, None) in group_1_result
+        assert ProcedureRunAggregated(TestProcedureId.GEN_01, 0, None, None, None, None) in group_1_result
 
         group_2_result = await select_group_runs_aggregated_by_procedure(session, 2)
         assert_list_type(ProcedureRunAggregated, group_2_result, len(TestProcedureId))
-        assert ProcedureRunAggregated(TestProcedureId.ALL_01, 3, True, 1, 22) in group_2_result
-        assert ProcedureRunAggregated(TestProcedureId.ALL_02, 0, None, None, None) in group_2_result
+        assert ProcedureRunAggregated(TestProcedureId.ALL_01, 3, True, 1, 22, None) in group_2_result
+        assert ProcedureRunAggregated(TestProcedureId.ALL_02, 0, None, None, None, None) in group_2_result
 
         group_3_result = await select_group_runs_aggregated_by_procedure(session, 3)
         assert_list_type(ProcedureRunAggregated, group_3_result, len(TestProcedureId))
-        assert ProcedureRunAggregated(TestProcedureId.ALL_01, 0, None, None, None) in group_3_result
+        assert ProcedureRunAggregated(TestProcedureId.ALL_01, 0, None, None, None, None) in group_3_result
 
 
 @pytest.mark.parametrize(
@@ -565,3 +566,37 @@ async def test_select_group_runs_for_procedure(
         result = await select_group_runs_for_procedure(session, run_group_id, test_procedure_id)
         assert [run.run_id for run in result] == expected_run_ids
         assert_list_type(Run, result, len(expected_run_ids))
+
+
+@pytest.mark.asyncio
+async def test_insert_compliance_generation_record(pg_base_config):
+    """Tests that a new compliance generation record can be inserted"""
+
+    run_group_id = 1
+    requester_id = 1  # user1
+
+    # Act
+    async with generate_async_session(pg_base_config) as s:
+        record1 = await insert_compliance_generation_record(s, run_group_id=run_group_id, requester_id=requester_id)
+
+        assert record1.compliance_record_id == 1
+        assert record1.run_group_id == run_group_id
+        assert record1.requester_id == requester_id
+        assert_nowish(record1.created_at)
+
+        await s.commit()
+
+    async with generate_async_session(pg_base_config) as s:
+        record2 = await insert_compliance_generation_record(s, run_group_id=run_group_id, requester_id=requester_id)
+
+        assert record2.compliance_record_id == 2
+        assert record2.run_group_id == run_group_id
+        assert record2.requester_id == requester_id
+        assert_nowish(record2.created_at)
+
+        await s.rollback()
+
+    # Quick check of the database
+    async with generate_async_session(pg_base_config) as s:
+        compliance_record_count = (await s.execute(select(func.count()).select_from(ComplianceRecord))).scalar_one()
+        assert compliance_record_count == 1
