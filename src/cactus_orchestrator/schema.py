@@ -4,6 +4,12 @@ from enum import StrEnum, auto
 from cactus_test_definitions.client import TestProcedureId
 from pydantic import BaseModel
 
+HEADER_USER_NAME = "CACTUS-User-Name"
+HEADER_TEST_ID = "CACTUS-Test-Id"
+HEADER_RUN_ID = "CACTUS-Run-Id"
+HEADER_GROUP_ID = "CACTUS-Group-Id"
+HEADER_GROUP_NAME = "CACTUS-Group-Name"
+
 
 class RunStatusResponse(StrEnum):
     initialised = auto()

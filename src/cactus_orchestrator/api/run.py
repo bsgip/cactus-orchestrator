@@ -25,6 +25,7 @@ from cactus_orchestrator.crud import (
     delete_runs,
     insert_run_for_run_group,
     select_active_runs_for_user,
+    select_run_group_for_user,
     select_runs_for_group,
     select_user_run,
     select_user_run_with_artifact,
@@ -41,8 +42,19 @@ from cactus_orchestrator.k8s.resource import (
 )
 from cactus_orchestrator.k8s.resource.create import add_ingress_rule, clone_service, clone_statefulset, wait_for_pod
 from cactus_orchestrator.k8s.resource.delete import delete_service, delete_statefulset, remove_ingress_rule
-from cactus_orchestrator.model import Run, RunArtifact, RunStatus
-from cactus_orchestrator.schema import InitRunRequest, InitRunResponse, RunResponse, RunStatusResponse, StartRunResponse
+from cactus_orchestrator.model import Run, RunArtifact, RunStatus, User
+from cactus_orchestrator.schema import (
+    HEADER_GROUP_ID,
+    HEADER_GROUP_NAME,
+    HEADER_RUN_ID,
+    HEADER_TEST_ID,
+    HEADER_USER_NAME,
+    InitRunRequest,
+    InitRunResponse,
+    RunResponse,
+    RunStatusResponse,
+    StartRunResponse,
+)
 from cactus_orchestrator.settings import CactusOrchestratorException, get_current_settings
 
 logger = logging.getLogger(__name__)
@@ -101,6 +113,35 @@ async def wait_for_runner_health(s: ClientSession) -> None:
 
     raise CactusOrchestratorException(
         f"Unable to fetch health from RunnerClient after {attempt+1} attempts. Will be treated as a failed start."
+    )
+
+
+async def get_run_artifact_response_for_user(user: User, run_id: int) -> Response:
+    # get run
+    try:
+        run = await select_user_run_with_artifact(db.session, user.user_id, run_id)
+    except NoResultFound as exc:
+        logger.debug(exc)
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Run does not exist.")
+
+    if run.run_artifact is None:
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="RunArtifact does not exist.")
+
+    run_group_name = ""
+    run_group = await select_run_group_for_user(db.session, user.user_id, run.run_group_id)
+    if run_group is not None:
+        run_group_name = run_group.name
+
+    return Response(
+        content=run.run_artifact.file_data,
+        headers={
+            HEADER_USER_NAME: user.user_name or user.subject_id,
+            HEADER_TEST_ID: str(run.testprocedure_id),
+            HEADER_RUN_ID: str(run.run_id),
+            HEADER_GROUP_ID: str(run.run_group_id),
+            HEADER_GROUP_NAME: run_group_name,
+        },
+        media_type=f"application/{run.run_artifact.compression}",
     )
 
 
@@ -451,24 +492,10 @@ async def get_run_artifact(
     run_id: int,
     user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.user_all}))],
 ) -> Response:
+    """Downloads a raw binary stream of the run artifacts"""
 
-    # get user
     user = await select_user_or_raise(db.session, user_context)
-
-    # get run
-    try:
-        run = await select_user_run_with_artifact(db.session, user.user_id, run_id)
-    except NoResultFound as exc:
-        logger.debug(exc)
-        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Run does not exist.")
-
-    if run.run_artifact is None:
-        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="RunArtifact does not exist.")
-
-    return Response(
-        content=run.run_artifact.file_data,
-        media_type=f"application/{run.run_artifact.compression}",
-    )
+    return await get_run_artifact_response_for_user(user, run_id)
 
 
 @router.get("/run/{run_id}/status", status_code=HTTPStatus.OK)

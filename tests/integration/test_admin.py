@@ -2,11 +2,19 @@ from http import HTTPStatus
 
 import pytest
 from assertical.fake.generator import generate_class_instance
+from assertical.fixtures.postgres import generate_async_session
 from cactus_runner.models import RunnerStatus
 from cactus_test_definitions.client import TestProcedureId
+from sqlalchemy import select
 
 from cactus_orchestrator.main import generate_app
+from cactus_orchestrator.model import RunArtifact
 from cactus_orchestrator.schema import (
+    HEADER_GROUP_ID,
+    HEADER_GROUP_NAME,
+    HEADER_RUN_ID,
+    HEADER_TEST_ID,
+    HEADER_USER_NAME,
     RunGroupResponse,
     RunResponse,
     TestProcedureRunSummaryResponse,
@@ -302,3 +310,51 @@ async def test_admin_get_procedure_run_summaries_for_group(client, pg_base_confi
     assert res.status_code == HTTPStatus.OK
     for run_summary in res.json():
         TestProcedureRunSummaryResponse.model_validate(run_summary)
+
+
+@pytest.mark.parametrize(
+    "run_id,expected_status,expected_artifact_id,expected_user,expected_test_id,expected_group_name,expected_group_id",
+    [
+        (1, HTTPStatus.NOT_FOUND, None, None, None, None, None),
+        (5, HTTPStatus.OK, 3, "user1@cactus.example.com", "ALL-01", "name-2", "2"),
+        (99, HTTPStatus.NOT_FOUND, None, None, None, None, None),  # DNE
+    ],
+)
+async def test_get_run_artifact_data(
+    k8s_mock: MockedK8s,
+    client,
+    pg_base_config,
+    valid_jwt_admin1,
+    run_id,
+    expected_status,
+    expected_artifact_id,
+    expected_user,
+    expected_test_id,
+    expected_group_name,
+    expected_group_id,
+):
+    """Does fetching the run artifact data work under common conditions"""
+
+    # Arrange
+    expected_artifact_data = None
+    async with generate_async_session(pg_base_config) as session:
+        artifact = (
+            await session.execute(select(RunArtifact).where(RunArtifact.run_artifact_id == expected_artifact_id))
+        ).scalar_one_or_none()
+        if artifact:
+            expected_artifact_data = artifact.file_data
+
+    # Act
+    res = await client.get(f"admin/run/{run_id}/artifact", headers={"Authorization": f"Bearer {valid_jwt_admin1}"})
+
+    # Assert
+    assert res.status_code == expected_status
+    if expected_status == HTTPStatus.OK:
+
+        assert expected_artifact_data == res.read()
+
+        assert res.headers[HEADER_USER_NAME] == expected_user
+        assert res.headers[HEADER_TEST_ID] == expected_test_id
+        assert res.headers[HEADER_RUN_ID] == str(run_id)
+        assert res.headers[HEADER_GROUP_ID] == expected_group_id
+        assert res.headers[HEADER_GROUP_NAME] == expected_group_name
