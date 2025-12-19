@@ -16,10 +16,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from cactus_orchestrator import artifact
 from cactus_orchestrator.api.procedure import test_procedures_by_id
 from cactus_orchestrator.api.run import (
+    get_run_artifact_response_for_user,
     map_run_to_run_response,
     select_user_or_raise,
     select_user_run_group_or_raise,
-    select_user_run_with_artifact,
 )
 from cactus_orchestrator.api.run_group import map_group_to_group_response
 from cactus_orchestrator.auth import AuthPerm, UserContext, jwt_validator
@@ -271,20 +271,8 @@ async def admin_get_run_artifact(
         )
     user = await select_user_or_raise(db.session, user_context)
 
-    # get run
-    try:
-        run = await select_user_run_with_artifact(db.session, user.user_id, run_id)
-    except NoResultFound as exc:
-        logger.debug(exc)
-        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Run does not exist.")
-
-    if run.run_artifact is None:
-        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="RunArtifact does not exist.")
-
-    return Response(
-        content=run.run_artifact.file_data,
-        media_type=f"application/{run.run_artifact.compression}",
-    )
+    # Get the download data
+    return await get_run_artifact_response_for_user(user, run_id)
 
 
 @router.get("/admin/procedure_runs/{run_group_id}/{test_procedure_id}", status_code=HTTPStatus.OK)

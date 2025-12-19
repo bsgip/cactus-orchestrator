@@ -20,10 +20,7 @@ from cactus_runner.models import (
     RunRequest,
     StepStatus,
 )
-from cactus_test_definitions import CSIPAusVersion
 from cactus_test_definitions.client import TestProcedureId
-from cryptography import x509
-from cryptography.hazmat.primitives import serialization
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import selectinload
 
@@ -31,11 +28,13 @@ from cactus_orchestrator.api.run import finalise_run, is_all_criteria_met
 from cactus_orchestrator.k8s.resource import generate_static_test_stack_id
 from cactus_orchestrator.model import Run, RunArtifact, RunGroup, RunStatus, User
 from cactus_orchestrator.schema import (
+    HEADER_GROUP_ID,
+    HEADER_GROUP_NAME,
+    HEADER_RUN_ID,
+    HEADER_TEST_ID,
+    HEADER_USER_NAME,
     InitRunRequest,
     InitRunResponse,
-    RunGroupRequest,
-    RunGroupResponse,
-    RunGroupUpdateRequest,
     RunResponse,
     StartRunResponse,
 )
@@ -1051,3 +1050,54 @@ async def test_get_run_request_data(
         )  # Ensuring request_id is passed to runner client
     else:
         k8s_mock.get_request.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "run_id,expected_status,expected_artifact_id,expected_user,expected_test_id,expected_group_name,expected_group_id",
+    [
+        (1, HTTPStatus.NOT_FOUND, None, None, None, None, None),
+        (2, HTTPStatus.OK, 1, "user1@cactus.example.com", "ALL-01", "name-1", "1"),
+        (4, HTTPStatus.OK, 2, "user1@cactus.example.com", "ALL-03", "name-1", "1"),
+        (5, HTTPStatus.OK, 3, "user1@cactus.example.com", "ALL-01", "name-2", "2"),
+        (6, HTTPStatus.NOT_FOUND, None, None, None, None, None),  # Other user
+        (99, HTTPStatus.NOT_FOUND, None, None, None, None, None),  # DNE
+    ],
+)
+async def test_get_run_artifact_data(
+    k8s_mock: MockedK8s,
+    client,
+    pg_base_config,
+    valid_jwt_user1,
+    run_id,
+    expected_status,
+    expected_artifact_id,
+    expected_user,
+    expected_test_id,
+    expected_group_name,
+    expected_group_id,
+):
+    """Does fetching the run artifact data work under common conditions"""
+
+    # Arrange
+    expected_artifact_data = None
+    async with generate_async_session(pg_base_config) as session:
+        artifact = (
+            await session.execute(select(RunArtifact).where(RunArtifact.run_artifact_id == expected_artifact_id))
+        ).scalar_one_or_none()
+        if artifact:
+            expected_artifact_data = artifact.file_data
+
+    # Act
+    res = await client.get(f"run/{run_id}/artifact", headers={"Authorization": f"Bearer {valid_jwt_user1}"})
+
+    # Assert
+    assert res.status_code == expected_status
+    if expected_status == HTTPStatus.OK:
+
+        assert expected_artifact_data == res.read()
+
+        assert res.headers[HEADER_USER_NAME] == expected_user
+        assert res.headers[HEADER_TEST_ID] == expected_test_id
+        assert res.headers[HEADER_RUN_ID] == str(run_id)
+        assert res.headers[HEADER_GROUP_ID] == expected_group_id
+        assert res.headers[HEADER_GROUP_NAME] == expected_group_name
