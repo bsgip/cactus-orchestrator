@@ -2,6 +2,7 @@ import logging
 from http import HTTPStatus
 from typing import Annotated
 
+from cactus_schema.orchestrator import RunGroupRequest, RunGroupResponse, RunGroupUpdateRequest, uri
 from cactus_test_definitions import CSIPAusVersion
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi_async_sqlalchemy import db
@@ -18,7 +19,6 @@ from cactus_orchestrator.crud import (
     select_runs_for_group,
 )
 from cactus_orchestrator.model import RunGroup
-from cactus_orchestrator.schema import RunGroupRequest, RunGroupResponse, RunGroupUpdateRequest
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +39,7 @@ def map_group_to_group_response(group: RunGroup, total_runs: int) -> RunGroupRes
     )
 
 
-@router.get("/run_group", status_code=HTTPStatus.OK)
+@router.get(uri.RunGroupList, status_code=HTTPStatus.OK)
 async def get_groups_paginated(
     user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.user_all}))],
 ) -> Page[RunGroupResponse]:
@@ -61,7 +61,7 @@ async def get_groups_paginated(
     return paginate(resp)
 
 
-@router.post("/run_group", status_code=HTTPStatus.CREATED)
+@router.post(uri.RunGroupList, status_code=HTTPStatus.CREATED)
 async def create_group(
     group_request: RunGroupRequest,
     user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.user_all}))],
@@ -83,7 +83,7 @@ async def create_group(
     return map_group_to_group_response(run_group, 0)
 
 
-@router.put("/run_group/{run_group_id}", status_code=HTTPStatus.OK)
+@router.put(uri.RunGroup, status_code=HTTPStatus.OK)
 async def update_group(
     run_group_id: int,
     group_request: RunGroupUpdateRequest,
@@ -101,7 +101,7 @@ async def update_group(
     return map_group_to_group_response(run_group, 0)
 
 
-@router.delete("/run_group/{run_group_id}", status_code=HTTPStatus.NO_CONTENT)
+@router.delete(uri.RunGroup, status_code=HTTPStatus.NO_CONTENT)
 async def delete_group(
     run_group_id: int,
     user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.user_all}))],

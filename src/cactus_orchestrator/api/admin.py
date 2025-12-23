@@ -5,6 +5,13 @@ from typing import Annotated
 
 from cactus_runner.client import ClientSession, ClientTimeout, RunnerClient
 from cactus_runner.models import RunnerStatus
+from cactus_schema.orchestrator import (
+    RunGroupResponse,
+    RunResponse,
+    TestProcedureRunSummaryResponse,
+    UserWithRunGroupsResponse,
+    uri,
+)
 from fastapi import APIRouter, Depends, Query
 from fastapi.exceptions import HTTPException
 from fastapi.responses import Response
@@ -40,12 +47,6 @@ from cactus_orchestrator.crud import (
 )
 from cactus_orchestrator.k8s.resource import get_resource_names
 from cactus_orchestrator.model import User
-from cactus_orchestrator.schema import (
-    RunGroupResponse,
-    RunResponse,
-    TestProcedureRunSummaryResponse,
-    UserWithRunGroupsResponse,
-)
 from cactus_orchestrator.settings import get_current_settings
 
 logger = logging.getLogger(__name__)
@@ -148,7 +149,7 @@ async def assume_user_context_from_run(
     return assumed_user_context, user_context
 
 
-@router.get("/admin/users", status_code=HTTPStatus.OK)
+@router.get(uri.AdminUsersList, status_code=HTTPStatus.OK)
 async def admin_get_users(
     _: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.admin_all}))],
 ) -> list[UserWithRunGroupsResponse]:
@@ -171,7 +172,7 @@ async def admin_get_users(
     return resp
 
 
-@router.get("/admin/procedure_runs/{run_group_id}", status_code=HTTPStatus.OK)
+@router.get(uri.AdminRunGroupProceduresList, status_code=HTTPStatus.OK)
 async def admin_get_procedure_run_summaries_for_group(
     user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.admin_all}))],
     run_group_id: int,
@@ -212,7 +213,7 @@ async def admin_get_procedure_run_summaries_for_group(
     return results
 
 
-@router.get("/admin/run_group", status_code=HTTPStatus.OK)
+@router.get(uri.AdminRunGroupList, status_code=HTTPStatus.OK)
 async def admin_get_groups_paginated(
     user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.admin_all}))],
     run_group_id: int | None = Query(default=None),
@@ -252,7 +253,7 @@ async def admin_get_groups_paginated(
     return paginate(resp)
 
 
-@router.get("/admin/run/{run_id}/artifact", status_code=HTTPStatus.OK)
+@router.get(uri.AdminRunArtifact, status_code=HTTPStatus.OK)
 async def admin_get_run_artifact(
     run_id: int,
     user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.admin_all}))],
@@ -275,7 +276,7 @@ async def admin_get_run_artifact(
     return await get_run_artifact_response_for_user(user, run_id)
 
 
-@router.get("/admin/procedure_runs/{run_group_id}/{test_procedure_id}", status_code=HTTPStatus.OK)
+@router.get(uri.AdminRunGroupProcedureRunList, status_code=HTTPStatus.OK)
 async def admin_get_runs_for_procedure_in_group(
     _: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.admin_all}))],
     run_group_id: int,
@@ -292,7 +293,7 @@ async def admin_get_runs_for_procedure_in_group(
     return paginate(resp)
 
 
-@router.get("/admin/run_group/{run_group_id}/run", status_code=HTTPStatus.OK)
+@router.get(uri.AdminRunGroupRunList, status_code=HTTPStatus.OK)
 async def admin_get_group_runs_paginated(
     run_group_id: int,
     _: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.admin_all}))],
@@ -310,7 +311,7 @@ async def admin_get_group_runs_paginated(
     return paginate(resp)
 
 
-@router.get("/admin/run/{run_id}/status", status_code=HTTPStatus.OK)
+@router.get(uri.AdminRunStatus, status_code=HTTPStatus.OK)
 async def admin_get_run_status(
     run_id: int,
     user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.admin_all}))],
@@ -364,7 +365,7 @@ async def admin_get_run_status(
             )
 
 
-@router.get("/admin/run/{run_id}", status_code=HTTPStatus.OK)
+@router.get(uri.AdminRun, status_code=HTTPStatus.OK)
 async def admin_get_individual_run(
     run_id: int,
     user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.admin_all}))],
@@ -393,8 +394,8 @@ async def admin_get_individual_run(
     return map_run_to_run_response(run)
 
 
-@router.get("/admin/run_group/{run_group_id}/artifact", status_code=HTTPStatus.OK)
-async def admin_get_group_run_artifact(
+@router.get(uri.AdminRunGroupCompliance, status_code=HTTPStatus.OK)
+async def admin_get_group_run_compliance_artifact(
     run_group_id: int,
     user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.admin_all}))],
 ) -> Response:

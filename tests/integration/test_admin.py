@@ -4,12 +4,7 @@ import pytest
 from assertical.fake.generator import generate_class_instance
 from assertical.fixtures.postgres import generate_async_session
 from cactus_runner.models import RunnerStatus
-from cactus_test_definitions.client import TestProcedureId
-from sqlalchemy import select
-
-from cactus_orchestrator.main import generate_app
-from cactus_orchestrator.model import RunArtifact
-from cactus_orchestrator.schema import (
+from cactus_schema.orchestrator import (
     HEADER_GROUP_ID,
     HEADER_GROUP_NAME,
     HEADER_RUN_ID,
@@ -20,6 +15,11 @@ from cactus_orchestrator.schema import (
     TestProcedureRunSummaryResponse,
     UserWithRunGroupsResponse,
 )
+from cactus_test_definitions.client import TestProcedureId
+from sqlalchemy import select
+
+from cactus_orchestrator.main import generate_app
+from cactus_orchestrator.model import RunArtifact
 from cactus_orchestrator.settings import get_current_settings
 from tests.integration import MockedK8s
 

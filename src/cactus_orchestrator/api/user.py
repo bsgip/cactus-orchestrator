@@ -1,12 +1,13 @@
-from http import HTTPStatus
 import logging
+from http import HTTPStatus
 from typing import Annotated
-from cactus_orchestrator.crud import select_user, update_user_name
-from cactus_orchestrator.schema import UserUpdateRequest
-from cactus_orchestrator.auth import AuthPerm, jwt_validator, UserContext
+
+from cactus_schema.orchestrator import UserUpdateRequest, uri
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi_async_sqlalchemy import db
-from fastapi import APIRouter, Depends
-from fastapi import HTTPException
+
+from cactus_orchestrator.auth import AuthPerm, UserContext, jwt_validator
+from cactus_orchestrator.crud import select_user, update_user_name
 
 logger = logging.getLogger(__name__)
 
@@ -14,7 +15,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-@router.patch("/user", status_code=HTTPStatus.OK)
+@router.patch(uri.User, status_code=HTTPStatus.OK)
 async def patch_user_name(
     body: UserUpdateRequest,
     user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.user_all}))],

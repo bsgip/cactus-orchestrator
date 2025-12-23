@@ -8,6 +8,19 @@ from cactus_runner.client import ClientSession, ClientTimeout, RunnerClient, Run
 from cactus_runner.models import RequestData, RequestList
 from cactus_runner.models import RunGroup as RunRequestRunGroup
 from cactus_runner.models import RunnerStatus, RunRequest, TestCertificates, TestConfig, TestDefinition, TestUser
+from cactus_schema.orchestrator import (
+    HEADER_GROUP_ID,
+    HEADER_GROUP_NAME,
+    HEADER_RUN_ID,
+    HEADER_TEST_ID,
+    HEADER_USER_NAME,
+    InitRunRequest,
+    InitRunResponse,
+    RunResponse,
+    RunStatusResponse,
+    StartRunResponse,
+    uri,
+)
 from cactus_test_definitions import CSIPAusVersion
 from cactus_test_definitions.client.test_procedures import get_yaml_contents
 from cryptography import x509
@@ -43,18 +56,6 @@ from cactus_orchestrator.k8s.resource import (
 from cactus_orchestrator.k8s.resource.create import add_ingress_rule, clone_service, clone_statefulset, wait_for_pod
 from cactus_orchestrator.k8s.resource.delete import delete_service, delete_statefulset, remove_ingress_rule
 from cactus_orchestrator.model import Run, RunArtifact, RunStatus, User
-from cactus_orchestrator.schema import (
-    HEADER_GROUP_ID,
-    HEADER_GROUP_NAME,
-    HEADER_RUN_ID,
-    HEADER_TEST_ID,
-    HEADER_USER_NAME,
-    InitRunRequest,
-    InitRunResponse,
-    RunResponse,
-    RunStatusResponse,
-    StartRunResponse,
-)
 from cactus_orchestrator.settings import CactusOrchestratorException, get_current_settings
 
 logger = logging.getLogger(__name__)
@@ -145,7 +146,7 @@ async def get_run_artifact_response_for_user(user: User, run_id: int) -> Respons
     )
 
 
-@router.get("/run_group/{run_group_id}/run", status_code=HTTPStatus.OK)
+@router.get(uri.RunGroupRunList, status_code=HTTPStatus.OK)
 async def get_group_runs_paginated(
     run_group_id: int,
     user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.user_all}))],
@@ -166,7 +167,7 @@ async def get_group_runs_paginated(
 
 
 @router.post(
-    "/run_group/{run_group_id}/run",
+    uri.RunGroupRunList,
     status_code=HTTPStatus.CREATED,
 )
 async def spawn_teststack_and_init_run(
@@ -282,7 +283,7 @@ async def spawn_teststack_and_init_run(
 
 
 @router.post(
-    "/run/{run_id}",
+    uri.Run,
     status_code=HTTPStatus.OK,
 )
 async def start_run(
@@ -396,7 +397,7 @@ async def finalise_run(
     return artifact
 
 
-@router.get("/run/{run_id}", status_code=HTTPStatus.OK)
+@router.get(uri.Run, status_code=HTTPStatus.OK)
 async def get_individual_run(
     run_id: int,
     user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.user_all}))],
@@ -415,7 +416,7 @@ async def get_individual_run(
     return map_run_to_run_response(run)
 
 
-@router.delete("/run/{run_id}", status_code=HTTPStatus.NO_CONTENT)
+@router.delete(uri.Run, status_code=HTTPStatus.NO_CONTENT)
 async def delete_individual_run(
     run_id: int,
     user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.user_all}))],
@@ -436,7 +437,7 @@ async def delete_individual_run(
     await db.session.commit()
 
 
-@router.post("/run/{run_id}/finalise", status_code=HTTPStatus.OK)
+@router.post(uri.RunFinalise, status_code=HTTPStatus.OK)
 async def finalise_run_and_teardown_teststack(
     run_id: int,
     user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.user_all}))],
@@ -487,7 +488,7 @@ async def finalise_run_and_teardown_teststack(
         )
 
 
-@router.get("/run/{run_id}/artifact", status_code=HTTPStatus.OK)
+@router.get(uri.RunArtifact, status_code=HTTPStatus.OK)
 async def get_run_artifact(
     run_id: int,
     user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.user_all}))],
@@ -498,7 +499,7 @@ async def get_run_artifact(
     return await get_run_artifact_response_for_user(user, run_id)
 
 
-@router.get("/run/{run_id}/status", status_code=HTTPStatus.OK)
+@router.get(uri.RunStatus, status_code=HTTPStatus.OK)
 async def get_run_status(
     run_id: int,
     user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.user_all}))],
@@ -541,7 +542,7 @@ async def get_run_status(
             )
 
 
-@router.get("/run/{run_id}/requests", status_code=HTTPStatus.OK)
+@router.get(uri.RunRequestList, status_code=HTTPStatus.OK)
 async def get_run_request_list(
     run_id: int,
     user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.user_all}))],
@@ -584,7 +585,7 @@ async def get_run_request_list(
             )
 
 
-@router.get("/run/{run_id}/requests/{request_id}", status_code=HTTPStatus.OK)
+@router.get(uri.RunRequest, status_code=HTTPStatus.OK)
 async def get_run_request_data(
     run_id: int,
     request_id: int,

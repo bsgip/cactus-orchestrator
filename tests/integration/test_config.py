@@ -3,11 +3,11 @@ from http import HTTPStatus
 
 import pytest
 from assertical.fixtures.postgres import generate_async_session
+from cactus_schema.orchestrator import UserConfigurationRequest, UserConfigurationResponse
 from sqlalchemy import select
 
 from cactus_orchestrator.k8s.resource import generate_static_test_stack_id
 from cactus_orchestrator.model import User
-from cactus_orchestrator.schema import UserConfigurationRequest, UserConfigurationResponse
 
 
 @pytest.mark.parametrize("is_static_uri", [True, False])

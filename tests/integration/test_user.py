@@ -1,11 +1,11 @@
 from http import HTTPStatus
 
 import pytest
-
 from assertical.fixtures.postgres import generate_async_session
-from cactus_orchestrator.model import User
-from cactus_orchestrator.schema import UserUpdateRequest
+from cactus_schema.orchestrator import UserUpdateRequest
 from sqlalchemy import select
+
+from cactus_orchestrator.model import User
 
 
 @pytest.mark.asyncio

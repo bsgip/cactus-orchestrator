@@ -20,14 +20,7 @@ from cactus_runner.models import (
     RunRequest,
     StepStatus,
 )
-from cactus_test_definitions.client import TestProcedureId
-from sqlalchemy import func, select, update
-from sqlalchemy.orm import selectinload
-
-from cactus_orchestrator.api.run import finalise_run, is_all_criteria_met
-from cactus_orchestrator.k8s.resource import generate_static_test_stack_id
-from cactus_orchestrator.model import Run, RunArtifact, RunGroup, RunStatus, User
-from cactus_orchestrator.schema import (
+from cactus_schema.orchestrator import (
     HEADER_GROUP_ID,
     HEADER_GROUP_NAME,
     HEADER_RUN_ID,
@@ -38,6 +31,13 @@ from cactus_orchestrator.schema import (
     RunResponse,
     StartRunResponse,
 )
+from cactus_test_definitions.client import TestProcedureId
+from sqlalchemy import func, select, update
+from sqlalchemy.orm import selectinload
+
+from cactus_orchestrator.api.run import finalise_run, is_all_criteria_met
+from cactus_orchestrator.k8s.resource import generate_static_test_stack_id
+from cactus_orchestrator.model import Run, RunArtifact, RunGroup, RunStatus, User
 from tests.integration import MockedK8s
 
 

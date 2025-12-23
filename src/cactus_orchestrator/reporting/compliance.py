@@ -2,12 +2,12 @@ from collections import defaultdict
 from dataclasses import dataclass
 from enum import Enum, auto
 
+from cactus_schema.orchestrator import TestProcedureRunSummaryResponse
 from cactus_test_definitions.client import TestProcedureId, get_all_test_procedures
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from cactus_orchestrator.crud import select_group_runs_aggregated_by_procedure
 from cactus_orchestrator.model import RunGroup
-from cactus_orchestrator.schema import TestProcedureRunSummaryResponse
 
 
 class ComplianceStatus(Enum):

@@ -19,6 +19,7 @@ dependencies = [
     "fastapi-async-sqlalchemy",
     "asyncpg",
     "cactus-test-definitions==1.8.5",
+    "cactus-schema>=0.0.2",
     "cactus-runner @ git+https://github.com/bsgip/cactus-runner.git@v1.4.0",
     "fastapi-pagination",
     "fastapi-utils",

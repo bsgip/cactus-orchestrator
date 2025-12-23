@@ -9,6 +9,7 @@ from unittest.mock import Mock, patch
 import pytest
 from assertical.asserts.time import assert_nowish
 from assertical.fixtures.postgres import generate_async_session
+from cactus_schema.orchestrator import GenerateClientCertificateRequest
 from cryptography import x509
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives.serialization import Encoding, NoEncryption, PrivateFormat, pkcs12
@@ -17,7 +18,6 @@ from sqlalchemy.orm import undefer
 
 from cactus_orchestrator.api.certificate import MEDIA_TYPE_PEM_CRT
 from cactus_orchestrator.model import RunGroup
-from cactus_orchestrator.schema import GenerateClientCertificateRequest
 
 
 @dataclass

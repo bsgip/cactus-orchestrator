@@ -1,43 +1,14 @@
-import os
-from datetime import datetime, timedelta, timezone
-from http import HTTPMethod, HTTPStatus
-from itertools import product
-from unittest.mock import Mock
+from datetime import datetime, timezone
+from http import HTTPStatus
 
 import pytest
-from aiohttp import ClientConnectorDNSError
 from assertical.asserts.time import assert_nowish
-from assertical.fake.generator import generate_class_instance
 from assertical.fixtures.postgres import generate_async_session
-from cactus_runner.client import RunnerClientException
-from cactus_runner.models import (
-    CriteriaEntry,
-    InitResponseBody,
-    RequestData,
-    RequestEntry,
-    RequestList,
-    RunnerStatus,
-    StepStatus,
-)
+from cactus_schema.orchestrator import RunGroupRequest, RunGroupResponse, RunGroupUpdateRequest
 from cactus_test_definitions import CSIPAusVersion
-from cactus_test_definitions.client import TestProcedureId
-from cryptography import x509
-from cryptography.hazmat.primitives import serialization
-from sqlalchemy import func, select, update
-from sqlalchemy.orm import selectinload
+from sqlalchemy import func, select
 
-from cactus_orchestrator.api.run import finalise_run, is_all_criteria_met
-from cactus_orchestrator.k8s.resource import generate_static_test_stack_id
-from cactus_orchestrator.model import Run, RunArtifact, RunGroup, RunStatus, User
-from cactus_orchestrator.schema import (
-    InitRunRequest,
-    InitRunResponse,
-    RunGroupRequest,
-    RunGroupResponse,
-    RunGroupUpdateRequest,
-    RunResponse,
-    StartRunResponse,
-)
+from cactus_orchestrator.model import Run, RunArtifact, RunGroup
 from tests.integration import MockedK8s
 
 
