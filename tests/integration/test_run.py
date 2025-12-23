@@ -85,12 +85,12 @@ async def test_spawn_teststack_and_init_run_dynamic_uris(
     # Act
     req = InitRunRequest(test_procedure_id=TestProcedureId.ALL_01.value)
     res = await client.post(
-        f"/run_group/{run_group_id}/run", json=req.model_dump(), headers={"Authorization": f"Bearer {valid_jwt_user1}"}
+        f"/run_group/{run_group_id}/run", content=req.to_json(), headers={"Authorization": f"Bearer {valid_jwt_user1}"}
     )
 
     # Assert
     assert res.status_code == HTTPStatus.CREATED
-    response_model = InitRunResponse.model_validate(res.json())
+    response_model = InitRunResponse.from_json(res.text)
     assert os.environ["TEST_EXECUTION_FQDN"] in response_model.test_url, "The returned URI should be public facing"
     assert res.headers["Location"] == f"/run/{response_model.run_id}"
 
@@ -175,12 +175,12 @@ async def test_spawn_teststack_and_init_run_static_uri(
     # Act
     req = InitRunRequest(test_procedure_id=TestProcedureId.ALL_01.value)
     res = await client.post(
-        f"/run_group/{run_group_id}/run", json=req.model_dump(), headers={"Authorization": f"Bearer {valid_jwt_user1}"}
+        f"/run_group/{run_group_id}/run", content=req.to_json(), headers={"Authorization": f"Bearer {valid_jwt_user1}"}
     )
 
     # Assert
     assert res.status_code == HTTPStatus.CREATED
-    response_model = InitRunResponse.model_validate(res.json())
+    response_model = InitRunResponse.from_json(res.text)
     assert os.environ["TEST_EXECUTION_FQDN"] in response_model.test_url, "The returned URI should be public facing"
     assert res.headers["Location"] == f"/run/{response_model.run_id}"
 
@@ -260,12 +260,12 @@ async def test_spawn_teststack_and_init_tolerant_to_status_errors(
     # Act
     req = InitRunRequest(test_procedure_id=TestProcedureId.ALL_01.value)
     res = await client.post(
-        f"/run_group/{run_group_id}/run", json=req.model_dump(), headers={"Authorization": f"Bearer {valid_jwt_user1}"}
+        f"/run_group/{run_group_id}/run", content=req.to_json(), headers={"Authorization": f"Bearer {valid_jwt_user1}"}
     )
 
     # Assert
     assert res.status_code == HTTPStatus.CREATED
-    response_model = InitRunResponse.model_validate(res.json())
+    response_model = InitRunResponse.from_json(res.text)
     assert os.environ["TEST_EXECUTION_FQDN"] in response_model.test_url, "The returned URI should be public facing"
     assert res.headers["Location"] == f"/run/{response_model.run_id}"
 
@@ -319,7 +319,7 @@ async def test_spawn_teststack_and_init_too_many_status_errors(
     req = InitRunRequest(test_procedure_id=TestProcedureId.ALL_01.value)
     res = await client.post(
         f"/run_group/{run_group_id}/run",
-        json=req.model_dump(),
+        content=req.to_json(),
         headers={"Authorization": f"Bearer {valid_jwt_user1}"},
         timeout=timedelta(seconds=30),
     )
@@ -376,7 +376,7 @@ async def test_spawn_teststack_and_init_run_static_uri_collision(
     # Act
     req = InitRunRequest(test_procedure_id=TestProcedureId.ALL_01.value)
     res = await client.post(
-        f"/run_group/{run_group_id}/run", json=req.model_dump(), headers={"Authorization": f"Bearer {valid_jwt_user1}"}
+        f"/run_group/{run_group_id}/run", content=req.to_json(), headers={"Authorization": f"Bearer {valid_jwt_user1}"}
     )
 
     # Assert
@@ -402,7 +402,7 @@ async def test_spawn_teststack_and_init_run_bad_run_group_id(
     # Act
     req = InitRunRequest(test_procedure_id=TestProcedureId.ALL_01.value)
     res = await client.post(
-        f"/run_group/{run_group_id}/run", json=req.model_dump(), headers={"Authorization": f"Bearer {valid_jwt_user1}"}
+        f"/run_group/{run_group_id}/run", content=req.to_json(), headers={"Authorization": f"Bearer {valid_jwt_user1}"}
     )
 
     # Assert
@@ -442,7 +442,7 @@ async def test_spawn_teststack_and_init_run_expired_certs(
     # Act
     req = InitRunRequest(test_procedure_id=TestProcedureId.ALL_01.value)
     res = await client.post(
-        f"/run_group/{run_group_id}/run", json=req.model_dump(), headers={"Authorization": f"Bearer {valid_jwt_user1}"}
+        f"/run_group/{run_group_id}/run", content=req.to_json(), headers={"Authorization": f"Bearer {valid_jwt_user1}"}
     )
 
     # Assert
@@ -486,7 +486,7 @@ async def test_spawn_teststack_and_init_run_teardown_on_init_failure(
     # Act
     req = InitRunRequest(test_procedure_id=TestProcedureId.ALL_01.value)
     res = await client.post(
-        f"/run_group/{run_group_id}/run", json=req.model_dump(), headers={"Authorization": f"Bearer {valid_jwt_user1}"}
+        f"/run_group/{run_group_id}/run", content=req.to_json(), headers={"Authorization": f"Bearer {valid_jwt_user1}"}
     )
 
     # Assert
@@ -517,7 +517,7 @@ async def test_start_run(
     # Assert
     if expected_success:
         assert res.status_code == HTTPStatus.OK
-        response_model = StartRunResponse.model_validate(res.json())
+        response_model = StartRunResponse.from_json(res.text)
         assert os.environ["TEST_EXECUTION_FQDN"] in response_model.test_url, "The returned URI should be public facing"
 
         k8s_mock.start.assert_called_once()
@@ -605,7 +605,7 @@ async def test_get_individual_run(client, pg_base_config, valid_jwt_user1, run_i
     # Assert
     assert res.status_code == expected_status
     if expected_status == HTTPStatus.OK:
-        run_response = RunResponse.model_validate_json(res.text)
+        run_response = RunResponse.from_json(res.text)
         assert run_response.run_id == run_id
         assert run_response.test_url
 

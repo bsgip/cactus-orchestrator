@@ -24,7 +24,7 @@ async def test_get_groups_paginated(client, pg_base_config, valid_jwt_user1):
     data = res.json()
     assert isinstance(data, dict)
     assert "items" in data
-    items = [RunGroupResponse.model_validate(i) for i in data["items"]]
+    items = [RunGroupResponse.from_dict(i) for i in data["items"]]
 
     assert [1, 2] == [i.run_group_id for i in items]
     assert items[0].csip_aus_version == "v1.2"
@@ -62,7 +62,7 @@ async def test_update_group(
     response = await client.put(
         f"/run_group/{run_group_id}",
         headers={"Authorization": f"Bearer {valid_jwt_user1}"},
-        content=body.model_dump_json(),
+        content=body.to_json(),
     )
 
     # Assert
@@ -72,7 +72,7 @@ async def test_update_group(
         assert run_group.name == expected_name
 
     if expected_status == HTTPStatus.OK:
-        response_data = RunGroupResponse.model_validate_json(response.text)
+        response_data = RunGroupResponse.from_json(response.text)
         assert response_data.run_group_id == run_group_id
         assert response_data.name == expected_name
 
@@ -94,13 +94,13 @@ async def test_create_group(client, pg_base_config, valid_jwt_user1, version, ex
     body = RunGroupRequest(csip_aus_version=version)
 
     response = await client.post(
-        "/run_group", headers={"Authorization": f"Bearer {valid_jwt_user1}"}, content=body.model_dump_json()
+        "/run_group", headers={"Authorization": f"Bearer {valid_jwt_user1}"}, content=body.to_json()
     )
 
     # Assert
     assert response.status_code == expected_status
     if expected_status == HTTPStatus.CREATED:
-        result = RunGroupResponse.model_validate_json(response.text)
+        result = RunGroupResponse.from_json(response.text)
         assert result.name, "Should be set to something"
         assert result.run_group_id > 0
         assert result.csip_aus_version == version
