@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from http import HTTPStatus
 from typing import Annotated
 
+from cactus_schema.orchestrator import GenerateClientCertificateRequest, uri
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.serialization import pkcs12
@@ -16,7 +17,6 @@ from cactus_orchestrator.api.common import select_user_run_group_or_raise
 from cactus_orchestrator.auth import AuthPerm, UserContext, jwt_validator
 from cactus_orchestrator.k8s.certificate.create import generate_client_p12_ec
 from cactus_orchestrator.k8s.certificate.fetch import fetch_certificate_key_pair, fetch_certificate_only
-from cactus_orchestrator.schema import GenerateClientCertificateRequest
 from cactus_orchestrator.settings import CactusOrchestratorException, get_current_settings
 
 logger = logging.getLogger(__name__)
@@ -31,7 +31,7 @@ MEDIA_TYPE_PEM_KEY = "application/pkcs8"
 
 
 @router.get(
-    "/certificate/authority",
+    uri.CertificateAuthority,
     status_code=HTTPStatus.OK,
     response_class=Response,
     responses={HTTPStatus.OK: {"content": {MEDIA_TYPE_CA_CRT: {}}}},
@@ -51,7 +51,7 @@ async def fetch_current_certificate_authority_der(
 
 
 @router.get(
-    "/run_group/{run_group_id}/certificate",
+    uri.CertificateRunGroup,
     status_code=HTTPStatus.OK,
     response_class=Response,
     responses={HTTPStatus.OK: {"content": {MEDIA_TYPE_PEM_CRT: {}}}},
@@ -91,7 +91,7 @@ async def fetch_client_certificate(
 
 
 @router.put(
-    "/run_group/{run_group_id}/certificate",
+    uri.CertificateRunGroup,
     status_code=HTTPStatus.OK,
     response_class=Response,
 )

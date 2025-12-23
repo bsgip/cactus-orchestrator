@@ -3,6 +3,7 @@ from http import HTTPStatus
 from typing import Annotated
 from urllib.parse import urlparse
 
+from cactus_schema.orchestrator import UserConfigurationRequest, UserConfigurationResponse, uri
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi_async_sqlalchemy import db
 
@@ -10,7 +11,6 @@ from cactus_orchestrator.api.common import select_user_or_create
 from cactus_orchestrator.auth import AuthPerm, UserContext, jwt_validator
 from cactus_orchestrator.k8s.resource import generate_envoy_dcap_uri, generate_static_test_stack_id, get_resource_names
 from cactus_orchestrator.model import User
-from cactus_orchestrator.schema import UserConfigurationRequest, UserConfigurationResponse
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +40,7 @@ def user_to_config(user: User) -> UserConfigurationResponse:
     )
 
 
-@router.get("/config")
+@router.get(uri.Config)
 async def fetch_existing_config(
     user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.user_all}))],
 ) -> UserConfigurationResponse:
@@ -50,7 +50,7 @@ async def fetch_existing_config(
     return result
 
 
-@router.post("/config", status_code=HTTPStatus.CREATED)
+@router.post(uri.Config, status_code=HTTPStatus.CREATED)
 async def update_config(
     body: UserConfigurationRequest,
     user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.user_all}))],

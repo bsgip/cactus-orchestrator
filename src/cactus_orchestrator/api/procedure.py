@@ -3,6 +3,13 @@ from http import HTTPStatus
 from importlib import resources
 from typing import Annotated
 
+from cactus_schema.orchestrator import (
+    CSIPAusVersionResponse,
+    RunResponse,
+    TestProcedureResponse,
+    TestProcedureRunSummaryResponse,
+    uri,
+)
 from cactus_test_definitions import CSIPAusVersion
 from cactus_test_definitions.client import TestProcedure, TestProcedureId, get_all_test_procedures
 from fastapi import APIRouter, Depends, HTTPException, Response
@@ -13,12 +20,6 @@ from fastapi_pagination.utils import disable_installed_extensions_check
 from cactus_orchestrator.api.run import map_run_to_run_response, select_user_run_group_or_raise
 from cactus_orchestrator.auth import AuthPerm, UserContext, jwt_validator
 from cactus_orchestrator.crud import select_group_runs_aggregated_by_procedure, select_group_runs_for_procedure
-from cactus_orchestrator.schema import (
-    CSIPAusVersionResponse,
-    RunResponse,
-    TestProcedureResponse,
-    TestProcedureRunSummaryResponse,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -52,21 +53,21 @@ test_procedure_responses = map_from_definitions_to_responses(test_procedures_by_
 version_responses = map_versions()
 
 
-@router.get("/version", status_code=HTTPStatus.OK)
+@router.get(uri.VersionList, status_code=HTTPStatus.OK)
 async def get_versions_list_paginated(
     _: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.user_all}))],
 ) -> Page[CSIPAusVersionResponse]:
     return paginate(version_responses)
 
 
-@router.get("/procedure", status_code=HTTPStatus.OK)
+@router.get(uri.ProcedureList, status_code=HTTPStatus.OK)
 async def get_test_procedure_list_paginated(
     _: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.user_all}))],
 ) -> Page[TestProcedureResponse]:
     return paginate(test_procedure_responses)
 
 
-@router.get("/procedure/{test_procedure_id}", status_code=HTTPStatus.OK)
+@router.get(uri.Procedure, status_code=HTTPStatus.OK)
 async def get_test_procedure_yaml(
     test_procedure_id: str,
     _: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.user_all}))],
@@ -94,7 +95,7 @@ async def get_test_procedure_yaml(
     return Response(content=text, status_code=200, media_type="application/yaml")
 
 
-@router.get("/procedure_runs/{run_group_id}", status_code=HTTPStatus.OK)
+@router.get(uri.ProcedureRunGroupList, status_code=HTTPStatus.OK)
 async def get_procedure_run_summaries_for_group(
     user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.user_all}))],
     run_group_id: int,
@@ -125,7 +126,7 @@ async def get_procedure_run_summaries_for_group(
     return results
 
 
-@router.get("/procedure_runs/{run_group_id}/{test_procedure_id}", status_code=HTTPStatus.OK)
+@router.get(uri.ProcedureRunGroupRunsList, status_code=HTTPStatus.OK)
 async def get_runs_for_procedure_in_group(
     user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.user_all}))],
     run_group_id: int,

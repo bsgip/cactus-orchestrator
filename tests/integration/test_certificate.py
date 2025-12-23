@@ -9,6 +9,7 @@ from unittest.mock import Mock, patch
 import pytest
 from assertical.asserts.time import assert_nowish
 from assertical.fixtures.postgres import generate_async_session
+from cactus_schema.orchestrator import GenerateClientCertificateRequest
 from cryptography import x509
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives.serialization import Encoding, NoEncryption, PrivateFormat, pkcs12
@@ -17,7 +18,6 @@ from sqlalchemy.orm import undefer
 
 from cactus_orchestrator.api.certificate import MEDIA_TYPE_PEM_CRT
 from cactus_orchestrator.model import RunGroup
-from cactus_orchestrator.schema import GenerateClientCertificateRequest
 
 
 @dataclass
@@ -73,9 +73,9 @@ async def test_generate_new_certificate_and_fetch(
         )
 
     # Act
-    body = GenerateClientCertificateRequest(is_device_cert=is_device_cert).model_dump()
+    body = GenerateClientCertificateRequest(is_device_cert=is_device_cert).to_json()
     res = await client.put(
-        f"/run_group/{run_group_id}/certificate", headers={"Authorization": f"Bearer {valid_jwt_user1}"}, json=body
+        f"/run_group/{run_group_id}/certificate", headers={"Authorization": f"Bearer {valid_jwt_user1}"}, content=body
     )
 
     # Assert
@@ -141,13 +141,15 @@ async def test_generate_new_certificate_bad_run_group_id(client, valid_jwt_user1
     # Arrange
 
     # Act
-    body = GenerateClientCertificateRequest(is_device_cert=True).model_dump()
+    body = GenerateClientCertificateRequest(is_device_cert=True).to_json()
     res = await client.put(
-        f"/run_group/{run_group_id}/certificate", headers={"Authorization": f"Bearer {valid_jwt_user1}"}, json=body
+        f"/run_group/{run_group_id}/certificate",
+        headers={"Authorization": f"Bearer {valid_jwt_user1}", "Content-Type": "application/json"},
+        content=body,
     )
 
     # Assert
-    assert res.status_code == HTTPStatus.FORBIDDEN
+    assert res.status_code == HTTPStatus.FORBIDDEN, res.text
 
     k8s_mock.fetch_certificate_key_pair.assert_not_called()
 

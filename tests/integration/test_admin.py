@@ -1,15 +1,11 @@
 from http import HTTPStatus
 
 import pytest
+from assertical.asserts.type import assert_list_type
 from assertical.fake.generator import generate_class_instance
 from assertical.fixtures.postgres import generate_async_session
 from cactus_runner.models import RunnerStatus
-from cactus_test_definitions.client import TestProcedureId
-from sqlalchemy import select
-
-from cactus_orchestrator.main import generate_app
-from cactus_orchestrator.model import RunArtifact
-from cactus_orchestrator.schema import (
+from cactus_schema.orchestrator import (
     HEADER_GROUP_ID,
     HEADER_GROUP_NAME,
     HEADER_RUN_ID,
@@ -20,6 +16,11 @@ from cactus_orchestrator.schema import (
     TestProcedureRunSummaryResponse,
     UserWithRunGroupsResponse,
 )
+from cactus_test_definitions.client import TestProcedureId
+from sqlalchemy import select
+
+from cactus_orchestrator.main import generate_app
+from cactus_orchestrator.model import RunArtifact
 from cactus_orchestrator.settings import get_current_settings
 from tests.integration import MockedK8s
 
@@ -32,9 +33,9 @@ async def test_get_test_user_list_populated(pg_base_config, client, valid_jwt_ad
 
     # Assert
     assert res.status_code == HTTPStatus.OK
-    data = res.json()
-    assert len(data) == 3
-    _ = [UserWithRunGroupsResponse.model_validate(d) for d in data]
+
+    run_summary = UserWithRunGroupsResponse.from_json(res.text)
+    assert_list_type(UserWithRunGroupsResponse, run_summary, count=3)
 
 
 @pytest.fixture(scope="session")
@@ -76,11 +77,8 @@ async def test_admin_get_users(client, pg_base_config, valid_jwt_admin1):
 
     # Assert
     assert res.status_code == HTTPStatus.OK
-    data = res.json()
-    assert isinstance(data, list)
-    items = [UserWithRunGroupsResponse.model_validate(i) for i in data]
-
-    assert len(data) == 3  # 3 users registered in pg_base_config
+    items = UserWithRunGroupsResponse.from_json(res.text)
+    assert_list_type(UserWithRunGroupsResponse, items, count=3)  # 3 users registered in pg_base_config
     run_group_count = [None, 2, 1, 0]
     for item in items:
         if item.name:
@@ -133,13 +131,12 @@ async def test_admin_procedure_run_summaries_for_group(
         assert res.status_code == HTTPStatus.NOT_FOUND
     else:
         assert res.status_code == HTTPStatus.OK
-        data = res.json()
-        assert isinstance(data, list)
-        assert (
-            len(data) > 10
-        ), "Not every test is visible to every version (RunGroup) but there should be more tests than records in the DB"
 
-        items = [TestProcedureRunSummaryResponse.model_validate(d) for d in data]
+        items = TestProcedureRunSummaryResponse.from_json(res.text)
+        assert_list_type(TestProcedureRunSummaryResponse, items)
+        assert (
+            len(items) > 10
+        ), "Not every test is visible to every version (RunGroup) but there should be more tests than records in the DB"
         counts_by_procedure_id = {procedure: count for procedure, count in expected_id_counts}
 
         assert all((i.category for i in items)), "Should not be empty"
@@ -163,11 +160,8 @@ async def test_get_groups_paginated(
 
     # Assert
     assert res.status_code == HTTPStatus.OK
-    data = res.json()
-    assert isinstance(data, dict)
-    assert "items" in data
-    items = [RunGroupResponse.model_validate(i) for i in data["items"]]
 
+    items = RunGroupResponse.from_list(res.json()["items"])
     for i, item in enumerate(items):
         assert item.run_group_id == run_groups[i]
         assert item.total_runs == run_counts[i]
@@ -292,7 +286,7 @@ async def test_admin_get_individual_run(client, pg_base_config, valid_jwt_admin1
     # Assert
     assert res.status_code == expected_status
     if expected_status == HTTPStatus.OK:
-        run_response = RunResponse.model_validate_json(res.text)
+        run_response = RunResponse.from_json(res.text)
         assert run_response.run_id == run_id
         assert run_response.test_url
 
@@ -308,8 +302,8 @@ async def test_admin_get_procedure_run_summaries_for_group(client, pg_base_confi
 
     # Assert
     assert res.status_code == HTTPStatus.OK
-    for run_summary in res.json():
-        TestProcedureRunSummaryResponse.model_validate(run_summary)
+    run_summary = TestProcedureRunSummaryResponse.from_json(res.text)
+    assert_list_type(TestProcedureRunSummaryResponse, run_summary)
 
 
 @pytest.mark.parametrize(

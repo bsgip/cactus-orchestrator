@@ -1,43 +1,14 @@
-import os
-from datetime import datetime, timedelta, timezone
-from http import HTTPMethod, HTTPStatus
-from itertools import product
-from unittest.mock import Mock
+from datetime import datetime, timezone
+from http import HTTPStatus
 
 import pytest
-from aiohttp import ClientConnectorDNSError
 from assertical.asserts.time import assert_nowish
-from assertical.fake.generator import generate_class_instance
 from assertical.fixtures.postgres import generate_async_session
-from cactus_runner.client import RunnerClientException
-from cactus_runner.models import (
-    CriteriaEntry,
-    InitResponseBody,
-    RequestData,
-    RequestEntry,
-    RequestList,
-    RunnerStatus,
-    StepStatus,
-)
+from cactus_schema.orchestrator import RunGroupRequest, RunGroupResponse, RunGroupUpdateRequest
 from cactus_test_definitions import CSIPAusVersion
-from cactus_test_definitions.client import TestProcedureId
-from cryptography import x509
-from cryptography.hazmat.primitives import serialization
-from sqlalchemy import func, select, update
-from sqlalchemy.orm import selectinload
+from sqlalchemy import func, select
 
-from cactus_orchestrator.api.run import finalise_run, is_all_criteria_met
-from cactus_orchestrator.k8s.resource import generate_static_test_stack_id
-from cactus_orchestrator.model import Run, RunArtifact, RunGroup, RunStatus, User
-from cactus_orchestrator.schema import (
-    InitRunRequest,
-    InitRunResponse,
-    RunGroupRequest,
-    RunGroupResponse,
-    RunGroupUpdateRequest,
-    RunResponse,
-    StartRunResponse,
-)
+from cactus_orchestrator.model import Run, RunArtifact, RunGroup
 from tests.integration import MockedK8s
 
 
@@ -53,7 +24,7 @@ async def test_get_groups_paginated(client, pg_base_config, valid_jwt_user1):
     data = res.json()
     assert isinstance(data, dict)
     assert "items" in data
-    items = [RunGroupResponse.model_validate(i) for i in data["items"]]
+    items = [RunGroupResponse.from_dict(i) for i in data["items"]]
 
     assert [1, 2] == [i.run_group_id for i in items]
     assert items[0].csip_aus_version == "v1.2"
@@ -91,7 +62,7 @@ async def test_update_group(
     response = await client.put(
         f"/run_group/{run_group_id}",
         headers={"Authorization": f"Bearer {valid_jwt_user1}"},
-        content=body.model_dump_json(),
+        content=body.to_json(),
     )
 
     # Assert
@@ -101,7 +72,7 @@ async def test_update_group(
         assert run_group.name == expected_name
 
     if expected_status == HTTPStatus.OK:
-        response_data = RunGroupResponse.model_validate_json(response.text)
+        response_data = RunGroupResponse.from_json(response.text)
         assert response_data.run_group_id == run_group_id
         assert response_data.name == expected_name
 
@@ -123,13 +94,13 @@ async def test_create_group(client, pg_base_config, valid_jwt_user1, version, ex
     body = RunGroupRequest(csip_aus_version=version)
 
     response = await client.post(
-        "/run_group", headers={"Authorization": f"Bearer {valid_jwt_user1}"}, content=body.model_dump_json()
+        "/run_group", headers={"Authorization": f"Bearer {valid_jwt_user1}"}, content=body.to_json()
     )
 
     # Assert
     assert response.status_code == expected_status
     if expected_status == HTTPStatus.CREATED:
-        result = RunGroupResponse.model_validate_json(response.text)
+        result = RunGroupResponse.from_json(response.text)
         assert result.name, "Should be set to something"
         assert result.run_group_id > 0
         assert result.csip_aus_version == version

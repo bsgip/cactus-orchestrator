@@ -1,10 +1,9 @@
 from http import HTTPStatus
 
 import pytest
+from cactus_schema.orchestrator import TestProcedureRunSummaryResponse
 from cactus_test_definitions import CSIPAusVersion
 from cactus_test_definitions.client import TestProcedureId
-
-from cactus_orchestrator.schema import TestProcedureRunSummaryResponse
 
 
 @pytest.mark.asyncio
@@ -94,13 +93,12 @@ async def test_procedure_run_summaries_for_group(
         assert res.status_code == HTTPStatus.FORBIDDEN
     else:
         assert res.status_code == HTTPStatus.OK
-        data = res.json()
-        assert isinstance(data, list)
+        items = TestProcedureRunSummaryResponse.from_json(res.text)
+        assert isinstance(items, list)
         assert (
-            len(data) > 10
+            len(items) > 10
         ), "Not every test is visible to every version (RunGroup) but there should be more tests than records in the DB"
 
-        items = [TestProcedureRunSummaryResponse.model_validate(d) for d in data]
         counts_by_procedure_id = {procedure: count for procedure, count in expected_id_counts}
 
         assert all((i.category for i in items)), "Should not be empty"
@@ -118,12 +116,12 @@ async def test_procedure_run_summaries_for_group_target_versions(client, pg_base
     # RunGroup 1 is v1.2
     res = await client.get("/procedure_runs/1", headers={"Authorization": f"Bearer {valid_jwt_user1}"})
     assert res.status_code == HTTPStatus.OK
-    v12_items = [TestProcedureRunSummaryResponse.model_validate(d) for d in res.json()]
+    v12_items = TestProcedureRunSummaryResponse.from_json(res.text)
 
     # RunGroup 2 is v1.3-beta-storage
     res = await client.get("/procedure_runs/2", headers={"Authorization": f"Bearer {valid_jwt_user1}"})
     assert res.status_code == HTTPStatus.OK
-    v13_bess_items = [TestProcedureRunSummaryResponse.model_validate(d) for d in res.json()]
+    v13_bess_items = TestProcedureRunSummaryResponse.from_json(res.text)
 
     # BES_01 is definitely in v1.3-storage extensions but NOT in v1.2
     assert TestProcedureId.BES_01 in [i.test_procedure_id for i in v13_bess_items]

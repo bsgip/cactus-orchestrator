@@ -3,11 +3,11 @@ from http import HTTPStatus
 
 import pytest
 from assertical.fixtures.postgres import generate_async_session
+from cactus_schema.orchestrator import UserConfigurationRequest, UserConfigurationResponse
 from sqlalchemy import select
 
 from cactus_orchestrator.k8s.resource import generate_static_test_stack_id
 from cactus_orchestrator.model import User
-from cactus_orchestrator.schema import UserConfigurationRequest, UserConfigurationResponse
 
 
 @pytest.mark.parametrize("is_static_uri", [True, False])
@@ -26,7 +26,7 @@ async def test_fetch_existing_config_domain_none_value(client, pg_base_config, v
 
     # Assert
     assert res.status_code == HTTPStatus.OK
-    data = UserConfigurationResponse.model_validate_json(res.content)
+    data = UserConfigurationResponse.from_json(res.text)
     assert data.subscription_domain == ""
     assert data.is_static_uri is is_static_uri
     if is_static_uri:
@@ -149,12 +149,12 @@ async def test_update_existing_config(
         is_static_uri=input_is_static_uri,
         pen=input_pen,
     )
-    res = await client.post("/config", headers={"Authorization": f"Bearer {valid_jwt_user1}"}, json=req.model_dump())
+    res = await client.post("/config", headers={"Authorization": f"Bearer {valid_jwt_user1}"}, content=req.to_json())
 
     # Assert
     assert res.status_code == HTTPStatus.CREATED
 
-    data = UserConfigurationResponse.model_validate_json(res.content)
+    data = UserConfigurationResponse.from_json(res.text)
     assert data.subscription_domain == expected_domain
     assert data.is_static_uri == expected_is_static_uri
     assert data.pen == expected_pen
