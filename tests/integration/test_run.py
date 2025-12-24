@@ -10,16 +10,6 @@ from assertical.asserts.time import assert_nowish
 from assertical.fake.generator import generate_class_instance
 from assertical.fixtures.postgres import generate_async_session
 from cactus_runner.client import RunnerClientException
-from cactus_runner.models import (
-    CriteriaEntry,
-    InitResponseBody,
-    RequestData,
-    RequestEntry,
-    RequestList,
-    RunnerStatus,
-    RunRequest,
-    StepStatus,
-)
 from cactus_schema.orchestrator import (
     HEADER_GROUP_ID,
     HEADER_GROUP_NAME,
@@ -30,6 +20,16 @@ from cactus_schema.orchestrator import (
     InitRunResponse,
     RunResponse,
     StartRunResponse,
+)
+from cactus_schema.runner import (
+    CriteriaEntry,
+    InitResponseBody,
+    RequestData,
+    RequestEntry,
+    RequestList,
+    RunnerStatus,
+    RunRequest,
+    StepStatus,
 )
 from cactus_test_definitions.client import TestProcedureId
 from sqlalchemy import func, select, update

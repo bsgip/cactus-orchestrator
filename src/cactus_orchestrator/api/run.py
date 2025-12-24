@@ -5,9 +5,6 @@ from http import HTTPStatus
 from typing import Annotated
 
 from cactus_runner.client import ClientSession, ClientTimeout, RunnerClient, RunnerClientException
-from cactus_runner.models import RequestData, RequestList
-from cactus_runner.models import RunGroup as RunRequestRunGroup
-from cactus_runner.models import RunnerStatus, RunRequest, TestCertificates, TestConfig, TestDefinition, TestUser
 from cactus_schema.orchestrator import (
     HEADER_GROUP_ID,
     HEADER_GROUP_NAME,
@@ -21,6 +18,9 @@ from cactus_schema.orchestrator import (
     StartRunResponse,
     uri,
 )
+from cactus_schema.runner import RequestData, RequestList
+from cactus_schema.runner import RunGroup as RunRequestRunGroup
+from cactus_schema.runner import RunnerStatus, RunRequest, TestCertificates, TestConfig, TestDefinition, TestUser
 from cactus_test_definitions import CSIPAusVersion
 from cactus_test_definitions.client.test_procedures import get_yaml_contents
 from cryptography import x509
