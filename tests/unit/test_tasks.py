@@ -7,8 +7,7 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 from assertical.asserts.time import assert_nowish
 from assertical.fixtures.postgres import generate_async_session
-from cactus_runner.client import ClientInteraction
-from cactus_runner.models import ClientInteractionType
+from cactus_schema.runner import ClientInteraction, ClientInteractionType
 from sqlalchemy import select
 
 from cactus_orchestrator.model import Run, RunStatus

@@ -4,7 +4,6 @@ from http import HTTPStatus
 from typing import Annotated
 
 from cactus_runner.client import ClientSession, ClientTimeout, RunnerClient
-from cactus_runner.models import RunnerStatus
 from cactus_schema.orchestrator import (
     RunGroupResponse,
     RunResponse,
@@ -12,6 +11,7 @@ from cactus_schema.orchestrator import (
     UserWithRunGroupsResponse,
     uri,
 )
+from cactus_schema.runner import RunnerStatus
 from fastapi import APIRouter, Depends, Query
 from fastapi.exceptions import HTTPException
 from fastapi.responses import Response

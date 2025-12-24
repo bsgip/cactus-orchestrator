@@ -4,7 +4,6 @@ import pytest
 from assertical.asserts.type import assert_list_type
 from assertical.fake.generator import generate_class_instance
 from assertical.fixtures.postgres import generate_async_session
-from cactus_runner.models import RunnerStatus
 from cactus_schema.orchestrator import (
     HEADER_GROUP_ID,
     HEADER_GROUP_NAME,
@@ -16,6 +15,7 @@ from cactus_schema.orchestrator import (
     TestProcedureRunSummaryResponse,
     UserWithRunGroupsResponse,
 )
+from cactus_schema.runner import RunnerStatus
 from cactus_test_definitions.client import TestProcedureId
 from sqlalchemy import select
 
