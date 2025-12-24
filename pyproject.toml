@@ -18,9 +18,9 @@ dependencies = [
     "pyjwt",
     "fastapi-async-sqlalchemy",
     "asyncpg",
-    "cactus-test-definitions==1.8.5",
+    "cactus-test-definitions==1.8.6",
     "cactus-schema[orchestrator]>=0.0.3",
-    "cactus-runner @ git+https://github.com/bsgip/cactus-runner.git@v1.4.0",
+    "cactus-runner @ git+https://github.com/bsgip/cactus-runner.git@v1.6.0",
     "fastapi-pagination",
     "fastapi-utils",
     "typing_inspect",                                                        # fastapi-utils missing dep?
