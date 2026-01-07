@@ -82,6 +82,7 @@ def map_run_to_run_response(run: Run) -> RunResponse:
         created_at=run.created_at,
         finalised_at=run.finalised_at,
         is_device_cert=run.is_device_cert,
+        has_artifacts=run.run_artifact_id is not None,
     )
 
 
