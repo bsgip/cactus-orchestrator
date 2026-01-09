@@ -109,6 +109,11 @@ class Run(Base):
             "testprocedure_id",
             desc("id"),
         ),
+        Index(
+            "run_playlist_execution_id_order_idx",
+            "playlist_execution_id",
+            "playlist_order",
+        ),
     )
 
     run_id: Mapped[int] = mapped_column(name="id", primary_key=True, autoincrement=True)
@@ -129,6 +134,12 @@ class Run(Base):
     is_device_cert: Mapped[bool] = mapped_column(
         BOOLEAN, server_default="0"
     )  # If True - this run was initialised using device certificate. Otherwise initialised using aggregator certificate
+
+    # Playlist support - nullable for single-run executions
+    playlist_execution_id: Mapped[str | None] = mapped_column(
+        String, nullable=True, index=True
+    )  # UUID linking runs in the same playlist execution
+    playlist_order: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 0-based order within the playlist
 
     run_artifact_id: Mapped[int | None] = mapped_column(ForeignKey("run_artifact.id"), nullable=True)
     run_artifact: Mapped["RunArtifact"] = relationship(lazy="raise")

@@ -351,3 +351,68 @@ async def update_compliance_generation_record_with_file_data(
 ) -> None:
     compliance_record.file_data = file_data
     await session.flush()
+
+
+async def insert_playlist_runs(
+    session: AsyncSession,
+    run_group_id: int,
+    teststack_id: str,
+    playlist_execution_id: str,
+    test_procedure_ids: list[str],
+    is_device_cert: bool,
+) -> list[Run]:
+    """Create all Run records for a playlist execution.
+
+    The first run is set to 'provisioning' status, subsequent runs are set to 'initialised'.
+    All runs share the same teststack_id and playlist_execution_id.
+    """
+    runs = []
+    for order, procedure_id in enumerate(test_procedure_ids):
+        run = Run(
+            run_group_id=run_group_id,
+            teststack_id=teststack_id,
+            testprocedure_id=procedure_id,
+            run_status=RunStatus.provisioning if order == 0 else RunStatus.initialised,
+            is_device_cert=is_device_cert,
+            playlist_execution_id=playlist_execution_id,
+            playlist_order=order,
+        )
+        session.add(run)
+        runs.append(run)
+    await session.flush()
+    return runs
+
+
+async def select_playlist_runs(
+    session: AsyncSession,
+    playlist_execution_id: str,
+) -> Sequence[Run]:
+    """Get all runs in a playlist, ordered by playlist_order."""
+    stmt = select(Run).where(Run.playlist_execution_id == playlist_execution_id).order_by(Run.playlist_order)
+    result = await session.execute(stmt)
+    return result.scalars().all()
+
+
+async def count_playlist_runs(
+    session: AsyncSession,
+    playlist_execution_id: str,
+) -> int:
+    """Count the total number of runs in a playlist."""
+    stmt = select(func.count()).select_from(Run).where(Run.playlist_execution_id == playlist_execution_id)
+    result = await session.execute(stmt)
+    return result.scalar_one()
+
+
+async def select_next_playlist_run(
+    session: AsyncSession,
+    playlist_execution_id: str,
+    current_order: int,
+) -> Run | None:
+    """Get the next run in a playlist after the given order position."""
+    stmt = (
+        select(Run)
+        .where(Run.playlist_execution_id == playlist_execution_id)
+        .where(Run.playlist_order == current_order + 1)
+    )
+    result = await session.execute(stmt)
+    return result.scalar_one_or_none()
