@@ -1189,3 +1189,210 @@ async def test_backwards_compatibility_single_run(
         assert run.playlist_execution_id is None
         assert run.playlist_order is None
         assert run.testprocedure_id == TestProcedureId.ALL_01.value
+
+
+async def create_playlist_for_test(
+    client,
+    k8s_mock: MockedK8s,
+    pg_base_config,
+    client_cert_pem_bytes: bytes,
+    valid_jwt: str,
+    test_procedure_ids: list[str],
+    run_group_id: int = 1,
+) -> InitRunResponse:
+    """Helper to set up k8s mocks, configure user/run_group, and create a playlist."""
+    k8s_mock.health.return_value = True
+    k8s_mock.init.return_value = generate_class_instance(InitResponseBody, is_started=False)
+
+    async with generate_async_session(pg_base_config) as session:
+        user = (await session.execute(select(User).where(User.user_id == 1))).scalar_one()
+        user.subscription_domain = "playlist.test"
+        user.is_static_uri = False
+
+        run_group = (await session.execute(select(RunGroup).where(RunGroup.run_group_id == run_group_id))).scalar_one()
+        run_group.certificate_pem = client_cert_pem_bytes
+        run_group.is_device_cert = True
+
+        await session.commit()
+
+    req = InitRunRequest(test_procedure_ids=test_procedure_ids)
+    res = await client.post(
+        f"/run_group/{run_group_id}/run", content=req.to_json(), headers={"Authorization": f"Bearer {valid_jwt}"}
+    )
+    assert res.status_code == HTTPStatus.CREATED
+    return InitRunResponse.from_json(res.text)
+
+
+@pytest.mark.asyncio
+async def test_playlist_finalize_advances_to_next_test(
+    client, k8s_mock: MockedK8s, pg_base_config, client_cert_pem_bytes, valid_jwt_user1
+):
+    response_model = await create_playlist_for_test(
+        client,
+        k8s_mock,
+        pg_base_config,
+        client_cert_pem_bytes,
+        valid_jwt_user1,
+        [TestProcedureId.ALL_01.value, TestProcedureId.ALL_02.value],
+    )
+    first_run_id = response_model.playlist_runs[0].run_id
+    second_run_id = response_model.playlist_runs[1].run_id
+
+    # Update first run to started status
+    async with generate_async_session(pg_base_config) as session:
+        await session.execute(update(Run).where(Run.run_id == first_run_id).values(run_status=RunStatus.started))
+        await session.commit()
+
+    # Mock runner status to report second test is now active (simulating advancement)
+    finalize_data = b"\x1f\x8b\x08\x00test_data"
+    k8s_mock.finalize.return_value = finalize_data
+    k8s_mock.status.return_value = generate_class_instance(
+        RunnerStatus,
+        test_procedure_name=TestProcedureId.ALL_02.value,  # Runner reports next test is active
+        step_status={},
+    )
+
+    # Finalize first run
+    response = await client.post(
+        f"/run/{first_run_id}/finalise", headers={"Authorization": f"Bearer {valid_jwt_user1}"}
+    )
+    assert response.status_code == HTTPStatus.OK
+
+    # Assert - teststack should NOT be torn down, second run should be started
+    k8s_mock.delete_statefulset.assert_not_called()
+    k8s_mock.delete_service.assert_not_called()
+
+    async with generate_async_session(pg_base_config) as session:
+        first_run = (await session.execute(select(Run).where(Run.run_id == first_run_id))).scalar_one()
+        second_run = (await session.execute(select(Run).where(Run.run_id == second_run_id))).scalar_one()
+
+        assert first_run.run_status == RunStatus.finalised_by_client
+        assert second_run.run_status == RunStatus.started  # Advanced to next test
+
+
+@pytest.mark.asyncio
+async def test_playlist_finalize_teardown_on_last_test(
+    client, k8s_mock: MockedK8s, pg_base_config, client_cert_pem_bytes, valid_jwt_user1
+):
+    response_model = await create_playlist_for_test(
+        client,
+        k8s_mock,
+        pg_base_config,
+        client_cert_pem_bytes,
+        valid_jwt_user1,
+        [TestProcedureId.ALL_01.value, TestProcedureId.ALL_02.value],
+    )
+    first_run_id = response_model.playlist_runs[0].run_id
+    second_run_id = response_model.playlist_runs[1].run_id
+
+    # Set up state: first run already finalized, second run is active
+    async with generate_async_session(pg_base_config) as session:
+        await session.execute(
+            update(Run).where(Run.run_id == first_run_id).values(run_status=RunStatus.finalised_by_client)
+        )
+        await session.execute(update(Run).where(Run.run_id == second_run_id).values(run_status=RunStatus.started))
+        await session.commit()
+
+    # Mock runner status to report no active test (playlist complete)
+    finalize_data = b"\x1f\x8b\x08\x00test_data"
+    k8s_mock.finalize.return_value = finalize_data
+    k8s_mock.status.return_value = generate_class_instance(
+        RunnerStatus,
+        test_procedure_name="-",  # No active test - playlist complete
+        step_status={},
+    )
+
+    # Finalize last run
+    response = await client.post(
+        f"/run/{second_run_id}/finalise", headers={"Authorization": f"Bearer {valid_jwt_user1}"}
+    )
+    assert response.status_code == HTTPStatus.OK
+
+    # Assert - teststack should be torn down
+    k8s_mock.delete_statefulset.assert_called_once()
+    k8s_mock.delete_service.assert_called_once()
+    k8s_mock.remove_ingress_rule.assert_called_once()
+
+    async with generate_async_session(pg_base_config) as session:
+        second_run = (await session.execute(select(Run).where(Run.run_id == second_run_id))).scalar_one()
+        assert second_run.run_status == RunStatus.finalised_by_client
+
+
+@pytest.mark.asyncio
+async def test_delete_playlist_run_deletes_all_siblings(
+    client, k8s_mock: MockedK8s, pg_base_config, client_cert_pem_bytes, valid_jwt_user1
+):
+    response_model = await create_playlist_for_test(
+        client,
+        k8s_mock,
+        pg_base_config,
+        client_cert_pem_bytes,
+        valid_jwt_user1,
+        [TestProcedureId.ALL_01.value, TestProcedureId.ALL_02.value, TestProcedureId.ALL_03.value],
+    )
+    run_ids = [r.run_id for r in response_model.playlist_runs]
+
+    # Verify runs exist
+    async with generate_async_session(pg_base_config) as session:
+        runs = (await session.execute(select(Run).where(Run.run_id.in_(run_ids)))).scalars().all()
+        assert len(runs) == 3
+
+    # Delete the second run (middle of playlist)
+    response = await client.delete(f"/run/{run_ids[1]}", headers={"Authorization": f"Bearer {valid_jwt_user1}"})
+    assert response.status_code == HTTPStatus.NO_CONTENT
+
+    # Assert - teststack should be torn down
+    k8s_mock.delete_statefulset.assert_called_once()
+    k8s_mock.delete_service.assert_called_once()
+
+    # All runs should be deleted
+    async with generate_async_session(pg_base_config) as session:
+        remaining_runs = (await session.execute(select(Run).where(Run.run_id.in_(run_ids)))).scalars().all()
+        assert len(remaining_runs) == 0
+
+
+@pytest.mark.asyncio
+async def test_get_individual_run_returns_playlist_total(
+    client, k8s_mock: MockedK8s, pg_base_config, client_cert_pem_bytes, valid_jwt_user1
+):
+    response_model = await create_playlist_for_test(
+        client,
+        k8s_mock,
+        pg_base_config,
+        client_cert_pem_bytes,
+        valid_jwt_user1,
+        [TestProcedureId.ALL_01.value, TestProcedureId.ALL_02.value, TestProcedureId.ALL_03.value],
+    )
+
+    # Get first run details
+    first_run_id = response_model.playlist_runs[0].run_id
+    response = await client.get(f"/run/{first_run_id}", headers={"Authorization": f"Bearer {valid_jwt_user1}"})
+    assert response.status_code == HTTPStatus.OK
+
+    run_response = RunResponse.from_json(response.text)
+    assert run_response.playlist_execution_id is not None
+    assert run_response.playlist_order == 0
+    assert run_response.playlist_total == 3
+
+
+@pytest.mark.asyncio
+async def test_start_run_rejects_out_of_order_playlist_run(
+    client, k8s_mock: MockedK8s, pg_base_config, client_cert_pem_bytes, valid_jwt_user1
+):
+    response_model = await create_playlist_for_test(
+        client,
+        k8s_mock,
+        pg_base_config,
+        client_cert_pem_bytes,
+        valid_jwt_user1,
+        [TestProcedureId.ALL_01.value, TestProcedureId.ALL_02.value],
+    )
+    first_run_id = response_model.playlist_runs[0].run_id
+    second_run_id = response_model.playlist_runs[1].run_id
+
+    # Try to start the second run while first is still active
+    response = await client.post(f"/run/{second_run_id}", headers={"Authorization": f"Bearer {valid_jwt_user1}"})
+
+    # Should be rejected with CONFLICT
+    assert response.status_code == HTTPStatus.CONFLICT
+    assert str(first_run_id) in response.text

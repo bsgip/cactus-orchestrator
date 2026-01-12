@@ -36,12 +36,14 @@ from cactus_orchestrator.api.common import select_user_or_raise, select_user_run
 from cactus_orchestrator.auth import AuthPerm, UserContext, jwt_validator
 from cactus_orchestrator.crud import (
     ACTIVE_RUN_STATUSES,
+    count_playlist_runs,
     create_runartifact,
     delete_runs,
     insert_playlist_runs,
     insert_run_for_run_group,
     select_active_runs_for_user,
     select_next_playlist_run,
+    select_playlist_runs,
     select_run_group_for_user,
     select_runs_for_group,
     select_user_run,
@@ -374,7 +376,10 @@ async def start_run(
     run_id: int,
     user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.user_all}))],
 ) -> StartRunResponse:
-    """Request a test run to progress to the execution phase."""
+    """Request a test run to progress to the execution phase.
+
+    For playlist runs, only the currently active test can be started.
+    """
     # get user
     user = await select_user_or_raise(db.session, user_context)
 
@@ -384,6 +389,21 @@ async def start_run(
     except NoResultFound as exc:
         logger.debug(exc)
         raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Not Found")
+
+    # For playlist runs, validate this is the current active test
+    if run.playlist_execution_id:
+        playlist_runs = await select_playlist_runs(db.session, run.playlist_execution_id)
+        # Find the first active run in the playlist
+        current_active_run = next(
+            (r for r in playlist_runs if r.run_status in ACTIVE_RUN_STATUSES),
+            None,
+        )
+        if current_active_run and current_active_run.run_id != run.run_id:
+            raise HTTPException(
+                status_code=HTTPStatus.CONFLICT,
+                detail=f"Cannot start run {run_id}. "
+                f"Run {current_active_run.run_id} is the current active test in this playlist.",
+            )
 
     # resource ids
     run_resource_names = get_resource_names(run.teststack_id)
@@ -497,7 +517,12 @@ async def get_individual_run(
         logger.debug(exc)
         raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Not Found")
 
-    return map_run_to_run_response(run)
+    # Calculate playlist_total if this is a playlist run
+    playlist_total = None
+    if run.playlist_execution_id:
+        playlist_total = await count_playlist_runs(db.session, run.playlist_execution_id)
+
+    return map_run_to_run_response(run, playlist_total)
 
 
 @router.delete(uri.Run, status_code=HTTPStatus.NO_CONTENT)
@@ -505,6 +530,8 @@ async def delete_individual_run(
     run_id: int,
     user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.user_all}))],
 ) -> None:
+    """Delete a run. For playlist runs, this will delete all runs in the playlist
+    since they share a teststack."""
 
     # get user
     user = await select_user_or_raise(db.session, user_context)
@@ -516,8 +543,17 @@ async def delete_individual_run(
         logger.debug(exc)
         raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Not Found")
 
-    await prepare_run_for_delete(run)
-    await delete_runs(db.session, [run])
+    # For playlist runs, delete all siblings
+    if run.playlist_execution_id:
+        playlist_runs = await select_playlist_runs(db.session, run.playlist_execution_id)
+        # Teardown shared teststack (only need once)
+        await prepare_run_for_delete(run)
+        # Delete all runs in the playlist
+        await delete_runs(db.session, list(playlist_runs))
+    else:
+        await prepare_run_for_delete(run)
+        await delete_runs(db.session, [run])
+
     await db.session.commit()
 
 
@@ -564,29 +600,37 @@ async def finalise_run_and_teardown_teststack(
         # Handle playlist advancement or teardown
         should_teardown = True
         if run.playlist_execution_id and run.playlist_order is not None:
-            # This is a playlist run - check if there's a next test
-            async with ClientSession(
-                base_url=run_resource_names.runner_base_url,
-                timeout=ClientTimeout(settings.test_execution_comms_timeout_seconds),
-            ) as session:
-                try:
-                    runner_status = await RunnerClient.status(session)
-                    # Check if runner has advanced to next test (test_procedure_name != "-")
-                    if runner_status.test_procedure_name and runner_status.test_procedure_name != "-":
-                        # Runner has next test active - update next run status
-                        next_run = await select_next_playlist_run(
-                            db.session, run.playlist_execution_id, run.playlist_order
-                        )
-                        if next_run:
+            # This is a playlist - check if there's a next test
+            next_run = await select_next_playlist_run(db.session, run.playlist_execution_id, run.playlist_order)
+            if next_run:
+                async with ClientSession(
+                    base_url=run_resource_names.runner_base_url,
+                    timeout=ClientTimeout(settings.test_execution_comms_timeout_seconds),
+                ) as session:
+                    try:
+                        runner_status = await RunnerClient.status(session)
+                        # Verify runner has advanced to the next test
+                        if (
+                            runner_status.test_procedure_name
+                            and runner_status.test_procedure_name == next_run.testprocedure_id
+                        ):
+                            # Runner has next test active - update next run status
                             await update_run_run_status(db.session, next_run.run_id, RunStatus.started)
                             await db.session.commit()
                             should_teardown = False
                             logger.info(
                                 f"Playlist advanced: run {run.run_id} finalized, next run {next_run.run_id} started"
                             )
-                except Exception as exc:
-                    logger.error(f"Error checking runner status for playlist advancement: {exc}")
-                    # If we can't check status, assume playlist failed and teardown
+                        elif runner_status.test_procedure_name == "-":
+                            logger.info(f"Playlist ended: runner reports no active test after run {run.run_id}")
+                        else:
+                            logger.warning(
+                                f"Playlist state mismatch: expected {next_run.testprocedure_id}, "
+                                f"got {runner_status.test_procedure_name}"
+                            )
+                    except Exception as exc:
+                        logger.error(f"Error checking runner status for playlist advancement: {exc}")
+                        # If we can't check status, assume playlist failed and teardown
 
         if should_teardown:
             await teardown_teststack(run_resource_names)
