@@ -24,7 +24,7 @@ from cactus_schema.runner import RequestData, RequestList
 from cactus_schema.runner import RunGroup as RunRequestRunGroup
 from cactus_schema.runner import RunnerStatus, RunRequest, TestCertificates, TestConfig, TestDefinition, TestUser
 from cactus_test_definitions import CSIPAusVersion
-from cactus_test_definitions.client.test_procedures import get_yaml_contents
+from cactus_test_definitions.client.test_procedures import TestProcedureId, get_yaml_contents
 from cryptography import x509
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi_async_sqlalchemy import db
@@ -36,7 +36,6 @@ from cactus_orchestrator.api.common import select_user_or_raise, select_user_run
 from cactus_orchestrator.auth import AuthPerm, UserContext, jwt_validator
 from cactus_orchestrator.crud import (
     ACTIVE_RUN_STATUSES,
-    count_playlist_runs,
     create_runartifact,
     delete_runs,
     insert_playlist_runs,
@@ -230,9 +229,9 @@ async def spawn_teststack_and_init_run(
         # Because this is a static URI - we need to make sure there are no running test instances with this value set
         # (otherwise we are going to cause a collision and problems)
         # This is a limitation of enabling static URIs and the user will be warned about it when enabling things
-        runs = await select_active_runs_for_user(db.session, user.user_id)
-        if len(runs) > 0:
-            run_ids_str = ",".join((str(r.run_id) for r in runs))
+        active_runs = await select_active_runs_for_user(db.session, user.user_id)
+        if len(active_runs) > 0:
+            run_ids_str = ",".join((str(r.run_id) for r in active_runs))
             raise HTTPException(
                 HTTPStatus.CONFLICT,
                 detail=f"Static URIs are enabled therefore only a single run can be active. The following run IDs are still active and will need to be finalised first: {run_ids_str}.",  # noqa: E501
@@ -245,21 +244,26 @@ async def spawn_teststack_and_init_run(
     template_resource_names = get_template_names(run_group.csip_aus_version)
 
     # Create Run records - either single or playlist
+    runs: list[Run] | None = None
     if is_playlist:
         runs = await insert_playlist_runs(
             db.session,
             run_group_id,
             teststack_id,
             playlist_execution_id,  # type: ignore  # We know it's not None when is_playlist
-            procedure_ids,
+            [p.value for p in procedure_ids],  # Convert TestProcedureId enums to strings
             run_group.is_device_cert,
         )
         first_run_id = runs[0].run_id
     else:
         first_run_id = await insert_run_for_run_group(
-            db.session, run_group_id, teststack_id, procedure_ids[0], RunStatus.provisioning, run_group.is_device_cert
+            db.session,
+            run_group_id,
+            teststack_id,
+            procedure_ids[0].value,
+            RunStatus.provisioning,
+            run_group.is_device_cert,
         )
-        runs = None  # Will be populated later if needed
 
     settings = get_current_settings()
 
@@ -283,12 +287,11 @@ async def spawn_teststack_and_init_run(
             run_requests: list[RunRequest] = []
             if is_playlist and runs:
                 for run in runs:
-                    yaml_definition = get_yaml_contents(run.testprocedure_id)
+                    test_proc_id = TestProcedureId(run.testprocedure_id)
+                    yaml_definition = get_yaml_contents(test_proc_id)
                     run_request = RunRequest(
                         run_id=str(run.run_id),
-                        test_definition=TestDefinition(
-                            test_procedure_id=run.testprocedure_id, yaml_definition=yaml_definition
-                        ),
+                        test_definition=TestDefinition(test_procedure_id=test_proc_id, yaml_definition=yaml_definition),
                         run_group=RunRequestRunGroup(
                             run_group_id="1",
                             name="group 1",
@@ -325,11 +328,8 @@ async def spawn_teststack_and_init_run(
                 )
                 run_requests.append(run_request)
 
-            # Send to runner - use list for playlist, single for backward compatibility
-            if is_playlist:
-                init_result = await RunnerClient.initialise_playlist(session=session, run_requests=run_requests)
-            else:
-                init_result = await RunnerClient.initialise(session=session, run_request=run_requests[0])
+            # Always send list to runner (runner accepts both single and list)
+            init_result = await RunnerClient.initialise(session=session, run_request=run_requests)
 
         # finally, include new service in ingress rule
         await add_ingress_rule(run_resource_names)
