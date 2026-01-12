@@ -2,7 +2,8 @@ import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Generator
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
+from uuid import uuid4
 
 import pytest
 from assertical.asserts.time import assert_nowish
@@ -11,7 +12,7 @@ from cactus_schema.runner import ClientInteraction, ClientInteractionType
 from sqlalchemy import select
 
 from cactus_orchestrator.model import Run, RunStatus
-from cactus_orchestrator.tasks import generate_idleteardowntask
+from cactus_orchestrator.tasks import generate_idleteardowntask, teardown_idle_teststack
 
 
 @dataclass
@@ -120,3 +121,50 @@ async def test_teardown_idle_teststack(k8s_mock, pg_base_config, client):
     assert k8s_mock.delete_service.call_count == len(expected_finalised_run_ids)
     assert k8s_mock.delete_statefulset.call_count == len(expected_finalised_run_ids)
     assert k8s_mock.remove_ingress_rule.call_count == len(expected_finalised_run_ids)
+
+
+@pytest.mark.asyncio
+@patch("cactus_orchestrator.tasks.count_playlist_runs", spec=AsyncMock)
+@patch("cactus_orchestrator.tasks.select_nonfinalised_runs", spec=AsyncMock)
+@patch("cactus_orchestrator.tasks.is_idle", spec=AsyncMock)
+@patch("cactus_orchestrator.tasks.teardown_teststack", spec=AsyncMock)
+@patch("cactus_orchestrator.tasks.finalize_teststack_runs", spec=AsyncMock)
+async def test_teardown_idle_teststack_with_playlist(
+    mock_finalize_runs, mock_teardown, mock_is_idle, mock_select_runs, mock_count_playlist
+):
+    """Test that when a playlist teststack goes idle, all sibling runs in a playlist are finalized together."""
+
+    playlist_execution_id = str(uuid4())
+
+    # Create mock runs with playlist info
+    mock_runs = [
+        Run(
+            run_id=101,
+            run_group_id=1,
+            teststack_id="playlist-teststack",
+            testprocedure_id="ALL-01",
+            created_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
+            finalised_at=None,
+            run_status=RunStatus.started,
+            playlist_execution_id=playlist_execution_id,
+            playlist_order=0,
+        ),
+    ]
+
+    # Configure async mocks
+    async def async_return(value):
+        return value
+
+    mock_select_runs.side_effect = lambda *args, **kwargs: async_return(mock_runs)
+    mock_is_idle.side_effect = lambda *args, **kwargs: async_return(True)
+    mock_count_playlist.side_effect = lambda *args, **kwargs: async_return(3)
+    mock_finalize_runs.side_effect = lambda *args, **kwargs: async_return(None)
+    mock_teardown.side_effect = lambda *args, **kwargs: async_return(None)
+
+    # Run the teardown task with a mock session
+    mock_session = MagicMock()
+    mock_session.commit.side_effect = lambda: async_return(None)
+
+    await teardown_idle_teststack(mock_session, 3600, 1800, 120)
+    mock_finalize_runs.assert_called_once()
+    mock_teardown.assert_called_once()

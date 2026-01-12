@@ -353,7 +353,6 @@ async def spawn_teststack_and_init_run(
             PlaylistRunInfo(
                 run_id=run.run_id,
                 test_procedure_id=run.testprocedure_id,
-                playlist_order=run.playlist_order,  # type: ignore  # We know it's set for playlist runs
             )
             for run in runs
         ]

@@ -1,8 +1,8 @@
 """add playlist support to runs
 
-Revision ID: 172f0f9f0b85
+Revision ID: 2f16d11c4630
 Revises: a232a79c72df
-Create Date: 2026-01-09 14:13:45.936584
+Create Date: 2026-01-12 10:31:29.032613
 
 """
 
@@ -13,7 +13,7 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision: str = "172f0f9f0b85"
+revision: str = "2f16d11c4630"
 down_revision: Union[str, None] = "a232a79c72df"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None

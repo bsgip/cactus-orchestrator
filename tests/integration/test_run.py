@@ -1101,3 +1101,101 @@ async def test_get_run_artifact_data(
         assert res.headers[HEADER_RUN_ID] == str(run_id)
         assert res.headers[HEADER_GROUP_ID] == expected_group_id
         assert res.headers[HEADER_GROUP_NAME] == expected_group_name
+
+
+@pytest.mark.asyncio
+async def test_spawn_teststack_with_playlist(
+    client, k8s_mock: MockedK8s, pg_base_config, client_cert_pem_bytes, valid_jwt_user1
+):
+    subscription_domain = "playlist.test"
+    run_group_id = 1
+
+    k8s_mock.health.return_value = True
+    k8s_mock.init.return_value = generate_class_instance(InitResponseBody, is_started=False)
+
+    async with generate_async_session(pg_base_config) as session:
+        user = (await session.execute(select(User).where(User.user_id == 1))).scalar_one()
+        user.subscription_domain = subscription_domain
+        user.is_static_uri = False
+
+        run_group = (await session.execute(select(RunGroup).where(RunGroup.run_group_id == run_group_id))).scalar_one()
+        run_group.certificate_pem = client_cert_pem_bytes
+        run_group.is_device_cert = True
+
+        await session.commit()
+
+    # Act - Create playlist with multiple tests
+    req = InitRunRequest(test_procedure_ids=[TestProcedureId.ALL_01.value, TestProcedureId.ALL_02.value])
+    res = await client.post(
+        f"/run_group/{run_group_id}/run", content=req.to_json(), headers={"Authorization": f"Bearer {valid_jwt_user1}"}
+    )
+
+    # Assert
+    assert res.status_code == HTTPStatus.CREATED
+    response_model = InitRunResponse.from_json(res.text)
+    assert os.environ["TEST_EXECUTION_FQDN"] in response_model.test_url
+    assert response_model.playlist_execution_id is not None
+    assert response_model.playlist_runs is not None
+    assert len(response_model.playlist_runs) == 2
+
+    # Check playlist run details - order is implicit in array position
+    assert response_model.playlist_runs[0].test_procedure_id == TestProcedureId.ALL_01.value
+    assert response_model.playlist_runs[1].test_procedure_id == TestProcedureId.ALL_02.value
+
+    # Check k8s - only ONE teststack should be created
+    k8s_mock.clone_statefulset.assert_called_once()
+    k8s_mock.clone_service.assert_called_once()
+    k8s_mock.add_ingress_rule.assert_called_once()
+    k8s_mock.wait_for_pod.assert_called_once()
+    k8s_mock.init.assert_awaited_once()
+
+    # DB - all runs created with correct statuses
+    async with generate_async_session(pg_base_config) as session:
+        from cactus_orchestrator.crud import select_playlist_runs
+
+        playlist_runs = await select_playlist_runs(session, response_model.playlist_execution_id)
+        assert len(playlist_runs) == 2
+        assert playlist_runs[0].run_status == RunStatus.initialised  # First run
+        assert playlist_runs[1].run_status == RunStatus.initialised  # Second run
+        assert all(r.teststack_id == playlist_runs[0].teststack_id for r in playlist_runs)  # Same teststack
+
+
+@pytest.mark.asyncio
+async def test_backwards_compatibility_single_run(
+    client, k8s_mock: MockedK8s, pg_base_config, client_cert_pem_bytes, valid_jwt_user1
+):
+    subscription_domain = "single.test"
+    run_group_id = 1
+
+    k8s_mock.health.return_value = True
+    k8s_mock.init.return_value = generate_class_instance(InitResponseBody, is_started=False)
+
+    async with generate_async_session(pg_base_config) as session:
+        user = (await session.execute(select(User).where(User.user_id == 1))).scalar_one()
+        user.subscription_domain = subscription_domain
+        user.is_static_uri = False
+
+        run_group = (await session.execute(select(RunGroup).where(RunGroup.run_group_id == run_group_id))).scalar_one()
+        run_group.certificate_pem = client_cert_pem_bytes
+        run_group.is_device_cert = True
+
+        await session.commit()
+
+    # Act - Use old single test_procedure_id format
+    req = InitRunRequest(test_procedure_id=TestProcedureId.ALL_01.value)
+    res = await client.post(
+        f"/run_group/{run_group_id}/run", content=req.to_json(), headers={"Authorization": f"Bearer {valid_jwt_user1}"}
+    )
+
+    # Assert
+    assert res.status_code == HTTPStatus.CREATED
+    response_model = InitRunResponse.from_json(res.text)
+    assert response_model.playlist_execution_id is None
+    assert response_model.playlist_runs is None or len(response_model.playlist_runs) == 0
+
+    # DB - run should have NULL playlist fields
+    async with generate_async_session(pg_base_config) as session:
+        run = (await session.execute(select(Run).where(Run.run_id == response_model.run_id))).scalar_one()
+        assert run.playlist_execution_id is None
+        assert run.playlist_order is None
+        assert run.testprocedure_id == TestProcedureId.ALL_01.value
