@@ -13,9 +13,15 @@ from kubernetes.client.exceptions import ApiException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from cactus_orchestrator.api.run import finalise_run, teardown_teststack
-from cactus_orchestrator.crud import select_nonfinalised_runs, update_run_run_status
+from cactus_orchestrator.crud import (
+    ACTIVE_RUN_STATUSES,
+    count_playlist_runs,
+    select_nonfinalised_runs,
+    select_playlist_runs,
+    update_run_run_status,
+)
 from cactus_orchestrator.k8s.resource import get_resource_names
-from cactus_orchestrator.model import RunStatus
+from cactus_orchestrator.model import Run, RunStatus
 from cactus_orchestrator.settings import CactusOrchestratorSettings
 
 logger = logging.getLogger(__name__)
@@ -36,6 +42,30 @@ def is_maxlive_overtime(now: datetime, created_at: datetime, overtime_seconds: i
     return False
 
 
+async def finalize_teststack_runs(
+    session: AsyncSession,
+    run: Run,
+    runner_url: str,
+    run_status: RunStatus,
+    finalised_at: datetime,
+    comms_timeout_seconds: int,
+) -> None:
+    """Finalize all runs for a teststack (handles both single runs and playlists)."""
+    if run.playlist_execution_id:
+        playlist_runs = await select_playlist_runs(session, run.playlist_execution_id)
+        for sibling in playlist_runs:
+            if sibling.run_status in ACTIVE_RUN_STATUSES:
+                if run_status == RunStatus.terminated:
+                    await update_run_run_status(session, sibling.run_id, run_status, finalised_at)
+                else:
+                    await finalise_run(sibling, runner_url, session, run_status, finalised_at, comms_timeout_seconds)
+    else:  # Single run
+        if run_status == RunStatus.terminated:
+            await update_run_run_status(session, run.run_id, run_status, finalised_at)
+        else:
+            await finalise_run(run, runner_url, session, run_status, finalised_at, comms_timeout_seconds)
+
+
 async def teardown_idle_teststack(
     session: AsyncSession,
     teardowntask_max_lifetime_seconds: int,
@@ -44,7 +74,14 @@ async def teardown_idle_teststack(
 ) -> None:
     runs = await select_nonfinalised_runs(session)
 
+    # Track playlist_execution_ids we've already processed
+    processed_playlists: set[str] = set()
+
     for run in runs:
+        # Skip if this run is part of a playlist we've already processed
+        if run.playlist_execution_id and run.playlist_execution_id in processed_playlists:
+            continue
+
         now = datetime.now(timezone.utc)
         run_resource_names = get_resource_names(run.teststack_id)
 
@@ -57,28 +94,39 @@ async def teardown_idle_teststack(
             logger.warning("Call to cactus-runner last request endpoint failed.")
             logger.debug("Exception", exc_info=exc)
 
-        if idle or is_maxlive_overtime(now, run.created_at, teardowntask_max_lifetime_seconds):
+        # Apply the max timeout but scaled to the number of tests in the playlist (a little crude)
+        if run.playlist_execution_id:
+            playlist_count = await count_playlist_runs(session, run.playlist_execution_id)
+            effective_max_lifetime = teardowntask_max_lifetime_seconds * playlist_count
+        else:
+            effective_max_lifetime = teardowntask_max_lifetime_seconds
+
+        if idle or is_maxlive_overtime(now, run.created_at, effective_max_lifetime):
             logger.info(f"(Idle/Overtime Task) Shutting down {run_resource_names.service}")
+            if run.playlist_execution_id:
+                processed_playlists.add(run.playlist_execution_id)
+
             try:
-                await finalise_run(
+                await finalize_teststack_runs(
+                    session,
                     run,
                     run_resource_names.runner_base_url,
-                    session,
                     RunStatus.finalised_by_timeout,
                     now,
                     comms_timeout_seconds,
                 )
                 await session.commit()
                 await teardown_teststack(run_resource_names)
+
             except (ApiException, ClientConnectionError) as exc:
                 logger.warning(
-                    (
-                        f"Failed to teardown idle instance with service name {run_resource_names.service} because it "
-                        "could not be reached, flagging as terminated..."
-                    )
+                    f"Failed to teardown idle instance with service name {run_resource_names.service} because it "
+                    "could not be reached, flagging as terminated...",
+                    exc_info=exc,
                 )
-                logger.debug(exc)
-                await update_run_run_status(session, run.run_id, run_status=RunStatus.terminated, finalised_at=now)
+                await finalize_teststack_runs(
+                    session, run, run_resource_names.runner_base_url, RunStatus.terminated, now, comms_timeout_seconds
+                )
                 await session.commit()
 
             except Exception as exc:
