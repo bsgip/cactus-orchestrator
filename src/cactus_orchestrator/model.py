@@ -109,11 +109,6 @@ class Run(Base):
             "testprocedure_id",
             desc("id"),
         ),
-        Index(
-            "run_playlist_execution_id_order_idx",
-            "playlist_execution_id",
-            "playlist_order",
-        ),
     )
 
     run_id: Mapped[int] = mapped_column(name="id", primary_key=True, autoincrement=True)
