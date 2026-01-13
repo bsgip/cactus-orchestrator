@@ -8,18 +8,23 @@ from cactus_test_definitions import CSIPAusVersion
 from cactus_test_definitions.client import TestProcedureId
 from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError, NoResultFound
+from uuid import uuid4
 
 from cactus_orchestrator.auth import UserContext
 from cactus_orchestrator.crud import (
     ProcedureRunAggregated,
+    count_playlist_runs,
     insert_compliance_generation_record,
+    insert_playlist_runs,
     insert_run_for_run_group,
     insert_run_group,
     insert_user,
     select_active_runs_for_user,
     select_group_runs_aggregated_by_procedure,
     select_group_runs_for_procedure,
+    select_next_playlist_run,
     select_nonfinalised_runs,
+    select_playlist_runs,
     select_run_group_counts_for_user,
     select_run_group_for_user,
     select_run_groups_by_user,
@@ -600,3 +605,135 @@ async def test_insert_compliance_generation_record(pg_base_config):
     async with generate_async_session(pg_base_config) as s:
         compliance_record_count = (await s.execute(select(func.count()).select_from(ComplianceRecord))).scalar_one()
         assert compliance_record_count == 1
+
+
+@pytest.mark.asyncio
+async def test_insert_playlist_runs(pg_base_config):
+
+    playlist_execution_id = str(uuid4())
+    test_procedure_ids = ["ALL-01", "ALL-02", "ALL-03"]
+
+    async with generate_async_session(pg_base_config) as session:
+        runs = await insert_playlist_runs(
+            session,
+            run_group_id=1,
+            teststack_id="test-stack-playlist",
+            playlist_execution_id=playlist_execution_id,
+            test_procedure_ids=test_procedure_ids,
+            is_device_cert=True,
+        )
+
+        assert len(runs) == 3
+        assert runs[0].run_status == RunStatus.provisioning
+        assert runs[1].run_status == RunStatus.initialised
+        assert runs[2].run_status == RunStatus.initialised
+        assert all(r.playlist_execution_id == playlist_execution_id for r in runs)
+        assert [r.playlist_order for r in runs] == [0, 1, 2]
+        assert all(r.teststack_id == "test-stack-playlist" for r in runs)
+        assert [r.testprocedure_id for r in runs] == test_procedure_ids
+        assert all(r.is_device_cert is True for r in runs)
+
+        await session.commit()
+
+
+@pytest.mark.asyncio
+async def test_select_playlist_runs(pg_base_config):
+
+    playlist_execution_id = str(uuid4())
+
+    async with generate_async_session(pg_base_config) as session:
+        await insert_playlist_runs(
+            session,
+            run_group_id=1,
+            teststack_id="test-stack",
+            playlist_execution_id=playlist_execution_id,
+            test_procedure_ids=["ALL-03", "ALL-02", "ALL-01"],  # Insert in mixed order
+            is_device_cert=False,
+        )
+        await session.commit()
+
+    async with generate_async_session(pg_base_config) as session:
+        playlist_runs = await select_playlist_runs(session, playlist_execution_id)
+        assert len(playlist_runs) == 3
+        # Should be returned in playlist_order order
+        assert [r.testprocedure_id for r in playlist_runs] == ["ALL-03", "ALL-02", "ALL-01"]
+        assert [r.playlist_order for r in playlist_runs] == [0, 1, 2]
+
+
+@pytest.mark.asyncio
+async def test_count_playlist_runs(pg_base_config):
+
+    playlist_execution_id = str(uuid4())
+
+    async with generate_async_session(pg_base_config) as session:
+        await insert_playlist_runs(
+            session,
+            run_group_id=1,
+            teststack_id="test-stack",
+            playlist_execution_id=playlist_execution_id,
+            test_procedure_ids=["ALL-01", "ALL-02", "ALL-03", "ALL-04"],
+            is_device_cert=False,
+        )
+        await session.commit()
+
+    async with generate_async_session(pg_base_config) as session:
+        count = await count_playlist_runs(session, playlist_execution_id)
+        assert count == 4
+
+
+@pytest.mark.asyncio
+async def test_select_next_playlist_run(pg_base_config):
+
+    playlist_execution_id = str(uuid4())
+
+    async with generate_async_session(pg_base_config) as session:
+        runs = await insert_playlist_runs(
+            session,
+            run_group_id=1,
+            teststack_id="test-stack",
+            playlist_execution_id=playlist_execution_id,
+            test_procedure_ids=["ALL-01", "ALL-02", "ALL-03"],
+            is_device_cert=False,
+        )
+        # Access run_ids within session context
+        run_ids = [r.run_id for r in runs]
+        await session.commit()
+
+    # Test selecting next runs in a new session
+    async with generate_async_session(pg_base_config) as session:
+        # Get next after order 0 (should be order 1)
+        next_run = await select_next_playlist_run(session, playlist_execution_id, 0)
+        assert next_run is not None
+        assert next_run.playlist_order == 1
+        assert next_run.run_id == run_ids[1]
+
+        # Get next after order 1 (should be order 2)
+        next_run = await select_next_playlist_run(session, playlist_execution_id, 1)
+        assert next_run is not None
+        assert next_run.playlist_order == 2
+        assert next_run.run_id == run_ids[2]
+
+        # Get next after order 2 (should be None - last in playlist)
+        next_run = await select_next_playlist_run(session, playlist_execution_id, 2)
+        assert next_run is None
+
+
+@pytest.mark.asyncio
+async def test_playlist_backward_compatibility_single_runs(pg_base_config):
+    async with generate_async_session(pg_base_config) as session:
+        run_id = await insert_run_for_run_group(
+            session,
+            run_group_id=1,
+            teststack_id="single-stack",
+            testprocedure_id="ALL-01",
+            run_status=RunStatus.initialised,
+            is_device_cert=True,
+        )
+        await session.commit()
+
+    async with generate_async_session(pg_base_config) as session:
+        run = (await session.execute(select(Run).where(Run.run_id == run_id))).scalar_one()
+        # New playlist fields should be None for single runs
+        assert run.playlist_execution_id is None
+        assert run.playlist_order is None
+        assert run.testprocedure_id == "ALL-01"

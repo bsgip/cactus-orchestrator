@@ -130,6 +130,12 @@ class Run(Base):
         BOOLEAN, server_default="0"
     )  # If True - this run was initialised using device certificate. Otherwise initialised using aggregator certificate
 
+    # Playlist support - nullable for single-run executions
+    playlist_execution_id: Mapped[str | None] = mapped_column(
+        String, nullable=True, index=True
+    )  # UUID linking runs in the same playlist execution
+    playlist_order: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 0-based order within the playlist
+
     run_artifact_id: Mapped[int | None] = mapped_column(ForeignKey("run_artifact.id"), nullable=True)
     run_artifact: Mapped["RunArtifact"] = relationship(lazy="raise")
 
