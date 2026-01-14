@@ -5,7 +5,7 @@ from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from cactus_orchestrator.auth import UserContext
-from cactus_orchestrator.crud import insert_user, select_run_group_for_user, select_user
+from cactus_orchestrator.crud import insert_user, select_run_group_for_user, select_run_groups_for_user, select_user
 from cactus_orchestrator.model import RunGroup, User
 
 logger = logging.getLogger(__name__)
@@ -55,3 +55,23 @@ async def select_user_run_group_or_raise(
         )
 
     return (user, run_group)
+
+
+async def select_user_run_groups_or_raise(
+    session: AsyncSession, user_context: UserContext
+) -> tuple[User, list[RunGroup]]:
+    """Selects a user for the specific user context AND their associated run_groups.
+
+    Raises if the user not found."""
+
+    user = await select_user_or_raise(session, user_context)
+
+    run_groups = await select_run_groups_for_user(session, user.user_id)
+
+    if not run_groups:
+        logger.error(f"No run groups found for user {user.user_id}")
+        raise HTTPException(
+            status_code=HTTPStatus.FORBIDDEN, detail=f"Cannot find any run groups for user {user.user_id}"
+        )
+
+    return (user, list(run_groups))
