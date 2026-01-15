@@ -36,7 +36,6 @@ from cactus_orchestrator.api.common import select_user_or_raise, select_user_run
 from cactus_orchestrator.auth import AuthPerm, UserContext, jwt_validator
 from cactus_orchestrator.crud import (
     ACTIVE_RUN_STATUSES,
-    count_playlist_runs,
     create_runartifact,
     delete_runs,
     insert_playlist_runs,
@@ -44,6 +43,7 @@ from cactus_orchestrator.crud import (
     select_active_runs_for_user,
     select_next_playlist_run,
     select_playlist_runs,
+    select_playlist_runs_with_status,
     select_run_group_for_user,
     select_runs_for_group,
     select_user_run,
@@ -70,7 +70,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-def map_run_to_run_response(run: Run, playlist_total: int | None = None) -> RunResponse:
+def map_run_to_run_response(run: Run, playlist_runs: list[PlaylistRunInfo] | None = None) -> RunResponse:
     status = RunStatusResponse.finalised
     if run.run_status == RunStatus.initialised:
         status = RunStatusResponse.initialised
@@ -93,7 +93,7 @@ def map_run_to_run_response(run: Run, playlist_total: int | None = None) -> RunR
         has_artifacts=run.run_artifact_id is not None,
         playlist_execution_id=run.playlist_execution_id,
         playlist_order=run.playlist_order,
-        playlist_total=playlist_total,
+        playlist_runs=playlist_runs,
     )
 
 
@@ -527,12 +527,27 @@ async def get_individual_run(
         logger.debug(exc)
         raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Not Found")
 
-    # Calculate playlist_total if this is a playlist run
-    playlist_total = None
+    # Fetch playlist_runs if this is a playlist run
+    playlist_runs = None
     if run.playlist_execution_id:
-        playlist_total = await count_playlist_runs(db.session, run.playlist_execution_id)
+        sibling_runs = await select_playlist_runs_with_status(db.session, run.playlist_execution_id)
+        playlist_runs = []
+        for r in sibling_runs:
+            # Map run status to response status
+            if r.run_status == RunStatus.initialised:
+                status = RunStatusResponse.initialised
+            elif r.run_status == RunStatus.started:
+                status = RunStatusResponse.started
+            elif r.run_status == RunStatus.provisioning:
+                status = RunStatusResponse.provisioning
+            elif r.run_status == RunStatus.skipped:
+                status = RunStatusResponse.skipped
+            else:
+                status = RunStatusResponse.finalised
 
-    return map_run_to_run_response(run, playlist_total)
+            playlist_runs.append(PlaylistRunInfo(run_id=r.run_id, test_procedure_id=r.testprocedure_id, status=status))
+
+    return map_run_to_run_response(run, playlist_runs)
 
 
 @router.delete(uri.Run, status_code=HTTPStatus.NO_CONTENT)

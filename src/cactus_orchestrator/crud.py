@@ -170,6 +170,11 @@ async def select_runs_for_group(
         filters.append(Run.run_status.in_(FINALISED_RUN_STATUSES))
     elif finalised is False:
         filters.append(Run.run_status.in_(ACTIVE_RUN_STATUSES))
+        # Exclude initialised runs that are part of a playlist (not yet active)
+        # Keep single runs and truly active playlist runs (provisioning/started)
+        filters.append(
+            (Run.run_status != RunStatus.initialised) | (Run.playlist_execution_id == None)  # noqa: E711
+        )
 
     if filters:
         stmt = stmt.where(and_(*filters))
@@ -188,6 +193,8 @@ async def select_active_runs_for_user(session: AsyncSession, user_id: int) -> Se
         .join(RunGroup)
         .where(RunGroup.user_id == user_id)
         .where(Run.run_status.in_(ACTIVE_RUN_STATUSES))
+        # Exclude initialised runs that are part of a playlist (not yet active)
+        .where((Run.run_status != RunStatus.initialised) | (Run.playlist_execution_id == None))  # noqa: E711
         .options(selectinload(Run.run_group))
         .order_by(Run.run_id.desc())
     )
@@ -450,3 +457,21 @@ async def select_next_playlist_run(
     )
     result = await session.execute(stmt)
     return result.scalar_one_or_none()
+
+
+async def select_playlist_runs_with_status(
+    session: AsyncSession,
+    playlist_execution_id: str,
+) -> list[Run]:
+    """
+    Retrieve all runs in a playlist ordered by playlist_order.
+
+    Returns: List of Run objects
+    """
+    stmt = (
+        select(Run)
+        .where(Run.playlist_execution_id == playlist_execution_id)
+        .order_by(Run.playlist_order)
+    )
+    result = await session.execute(stmt)
+    return result.scalars().all()
