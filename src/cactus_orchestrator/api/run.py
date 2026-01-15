@@ -335,13 +335,18 @@ async def spawn_teststack_and_init_run(
                 )
                 run_requests.append(run_request)
 
-            # Always send list to runner (runner accepts both single and list)
-            # Pass start_index for playlists so runner skips to the correct test
-            init_result = await RunnerClient.initialise(
-                session=session,
-                run_request=run_requests,
-                start_index=start_index if is_playlist and start_index > 0 else None,
-            )
+            # This is not ideal, existing only to allow different versioning for 1.2 and 1.3 runners for now.
+            # Once the 1.3 runner can be updated, this should be simplified.
+            # For backwards compatibility: send single RunRequest for non-playlist runs,
+            # send list[RunRequest] for playlists. Older runners only accept single RunRequest.
+            # Only pass start_index kwarg when needed (older clients don't have this parameter).
+            init_kwargs: dict = {
+                "session": session,
+                "run_request": run_requests if is_playlist else run_request,
+            }
+            if is_playlist and start_index > 0:
+                init_kwargs["start_index"] = start_index
+            init_result = await RunnerClient.initialise(**init_kwargs)
 
         # finally, include new service in ingress rule
         await add_ingress_rule(run_resource_names)
