@@ -78,6 +78,8 @@ def map_run_to_run_response(run: Run, playlist_total: int | None = None) -> RunR
         status = RunStatusResponse.started
     elif run.run_status == RunStatus.provisioning:
         status = RunStatusResponse.provisioning
+    elif run.run_status == RunStatus.skipped:
+        status = RunStatusResponse.skipped
 
     return RunResponse(
         run_id=run.run_id,
@@ -208,6 +210,7 @@ async def spawn_teststack_and_init_run(
 
     is_playlist = len(procedure_ids) > 1
     playlist_execution_id = str(uuid4()) if is_playlist else None
+    start_index = test.start_index if test.start_index is not None else 0
 
     # get user and the preferred certificate
     user, run_group = await select_user_run_group_or_raise(db.session, user_context, run_group_id, with_cert=True)
@@ -255,8 +258,10 @@ async def spawn_teststack_and_init_run(
             playlist_execution_id,  # type: ignore  # We know it's not None when is_playlist
             [p.value for p in procedure_ids],  # Convert TestProcedureId enums to strings
             run_group.is_device_cert,
+            start_index,
         )
-        first_run_id = runs[0].run_id
+        # First active run is at start_index
+        first_run_id = runs[start_index].run_id
     else:
         first_run_id = await insert_run_for_run_group(
             db.session,
@@ -331,7 +336,12 @@ async def spawn_teststack_and_init_run(
                 run_requests.append(run_request)
 
             # Always send list to runner (runner accepts both single and list)
-            init_result = await RunnerClient.initialise(session=session, run_request=run_requests)
+            # Pass start_index for playlists so runner skips to the correct test
+            init_result = await RunnerClient.initialise(
+                session=session,
+                run_request=run_requests,
+                start_index=start_index if is_playlist and start_index > 0 else None,
+            )
 
         # finally, include new service in ingress rule
         await add_ingress_rule(run_resource_names)

@@ -1,6 +1,6 @@
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Sequence
 
 from cactus_test_definitions import CSIPAusVersion
@@ -17,6 +17,7 @@ FINALISED_RUN_STATUSES: set[RunStatus] = {
     RunStatus.finalised_by_client,
     RunStatus.finalised_by_timeout,
     RunStatus.terminated,
+    RunStatus.skipped,
 }
 
 
@@ -360,23 +361,56 @@ async def insert_playlist_runs(
     playlist_execution_id: str,
     test_procedure_ids: list[str],
     is_device_cert: bool,
+    start_index: int = 0,
 ) -> list[Run]:
     """Create all Run records for a playlist execution.
 
-    The first run is set to 'provisioning' status, subsequent runs are set to 'initialised'.
+    The run at start_index is set to 'provisioning' status (the first active run).
+    Runs before start_index are marked as 'skipped' with finalised_at set.
+    Runs after start_index are set to 'initialised'.
     All runs share the same teststack_id and playlist_execution_id.
+
+    Args:
+        start_index: The index to start execution from. Runs before this index
+                     will be marked as skipped.
     """
     runs = []
+    now = datetime.now(timezone.utc)
     for order, procedure_id in enumerate(test_procedure_ids):
-        run = Run(
-            run_group_id=run_group_id,
-            teststack_id=teststack_id,
-            testprocedure_id=procedure_id,
-            run_status=RunStatus.provisioning if order == 0 else RunStatus.initialised,
-            is_device_cert=is_device_cert,
-            playlist_execution_id=playlist_execution_id,
-            playlist_order=order,
-        )
+        if order < start_index:
+            # Runs before start_index are skipped
+            run = Run(
+                run_group_id=run_group_id,
+                teststack_id=teststack_id,
+                testprocedure_id=procedure_id,
+                run_status=RunStatus.skipped,
+                is_device_cert=is_device_cert,
+                playlist_execution_id=playlist_execution_id,
+                playlist_order=order,
+                finalised_at=now,
+            )
+        elif order == start_index:
+            # The run at start_index is the first active run
+            run = Run(
+                run_group_id=run_group_id,
+                teststack_id=teststack_id,
+                testprocedure_id=procedure_id,
+                run_status=RunStatus.provisioning,
+                is_device_cert=is_device_cert,
+                playlist_execution_id=playlist_execution_id,
+                playlist_order=order,
+            )
+        else:
+            # Runs after start_index are pending
+            run = Run(
+                run_group_id=run_group_id,
+                teststack_id=teststack_id,
+                testprocedure_id=procedure_id,
+                run_status=RunStatus.initialised,
+                is_device_cert=is_device_cert,
+                playlist_execution_id=playlist_execution_id,
+                playlist_order=order,
+            )
         session.add(run)
         runs.append(run)
     await session.flush()
