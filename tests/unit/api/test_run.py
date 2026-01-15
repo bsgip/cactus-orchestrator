@@ -2,6 +2,7 @@ import pytest
 from assertical.fixtures.postgres import generate_async_session
 from fastapi.exceptions import HTTPException
 
+from cactus_orchestrator.api.common import select_user_run_groups_or_raise
 from cactus_orchestrator.api.run import select_user_run_group_or_raise
 from cactus_orchestrator.auth import AuthPerm, UserContext
 from cactus_orchestrator.model import RunGroup, User
@@ -12,6 +13,12 @@ user_1_context = UserContext(
 )
 user_2_context = UserContext(
     subject_id="user2", issuer_id="https://test-cactus-issuer.example.com", permissions=[AuthPerm.user_all]
+)
+user_3_context = UserContext(
+    subject_id="user3", issuer_id="https://test-cactus-issuer.example.com", permissions=[AuthPerm.user_all]
+)
+non_existent_user_context = UserContext(
+    subject_id="DNE", issuer_id="https://test-cactus-issuer.example.com", permissions=[AuthPerm.user_all]
 )
 
 
@@ -54,3 +61,38 @@ async def test_select_user_run_group_or_raise__raises_exception(
             _ = await select_user_run_group_or_raise(
                 session=session, user_context=user_context, run_group_id=run_group_id
             )
+
+
+@pytest.mark.parametrize(
+    "user_context, user_id, run_group_ids",
+    [
+        (user_1_context, 1, [1, 2]),  # user 1 run group 1,2
+        (user_2_context, 2, [3]),  # user 2 run group 3
+    ],
+)
+@pytest.mark.asyncio
+async def test_select_user_run_groups_or_raise(
+    user_context: UserContext, user_id: int, run_group_ids: list[int], pg_base_config
+):
+    async with generate_async_session(pg_base_config) as session:
+        user, run_groups = await select_user_run_groups_or_raise(session=session, user_context=user_context)
+        assert isinstance(user, User)
+        assert user.user_id == user_id
+        assert isinstance(run_groups, list)
+        assert all([isinstance(r, RunGroup) for r in run_groups])
+        assert [r.run_group_id for r in run_groups] == run_group_ids
+
+
+@pytest.mark.parametrize(
+    "user_context",
+    [
+        user_3_context,  # user 3 doesn't have any run groups
+        non_existent_user_context,  # user doesn't exist
+    ],
+)
+@pytest.mark.asyncio
+async def test_select_user_run_groups_or_raise__raises_exception(user_context: UserContext, pg_base_config):
+
+    async with generate_async_session(pg_base_config) as session:
+        with pytest.raises(HTTPException):
+            _ = await select_user_run_groups_or_raise(session=session, user_context=user_context)
