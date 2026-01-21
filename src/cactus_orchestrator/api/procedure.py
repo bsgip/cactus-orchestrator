@@ -102,7 +102,7 @@ async def get_procedure_run_summaries_for_group(
 ) -> list[TestProcedureRunSummaryResponse]:
     """Will not serve summaries for test procedures outside the RunGroup csip_aus_version"""
     # Check permissions
-    (_, run_group) = await select_user_run_group_or_raise(db.session, user_context, run_group_id)
+    _, run_group = await select_user_run_group_or_raise(db.session, user_context, run_group_id)
 
     # Enumerate our aggregated summaries from the DB and combine them with additional metadata from the YAML definitions
     results: list[TestProcedureRunSummaryResponse] = []

@@ -123,9 +123,9 @@ async def test_procedure_run_summaries_for_group_target_versions(client, pg_base
     assert res.status_code == HTTPStatus.OK
     v13_bess_items = TestProcedureRunSummaryResponse.from_json(res.text)
 
-    # BES_01 is definitely in v1.3-storage extensions but NOT in v1.2
-    assert TestProcedureId.BES_01 in [i.test_procedure_id for i in v13_bess_items]
-    assert TestProcedureId.BES_01 not in [i.test_procedure_id for i in v12_items]
+    # STO_01 is definitely in v1.3-storage extensions but NOT in v1.2
+    assert TestProcedureId.STO_01 in [i.test_procedure_id for i in v13_bess_items]
+    assert TestProcedureId.STO_01 not in [i.test_procedure_id for i in v12_items]
 
 
 @pytest.mark.parametrize(
