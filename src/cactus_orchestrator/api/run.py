@@ -70,16 +70,21 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-def map_run_to_run_response(run: Run, playlist_runs: list[PlaylistRunInfo] | None = None) -> RunResponse:
+def map_run_status_to_run_status_response(run_status: RunStatus) -> RunStatusResponse:
     status = RunStatusResponse.finalised
-    if run.run_status == RunStatus.initialised:
+    if run_status == RunStatus.initialised:
         status = RunStatusResponse.initialised
-    elif run.run_status == RunStatus.started:
+    elif run_status == RunStatus.started:
         status = RunStatusResponse.started
-    elif run.run_status == RunStatus.provisioning:
+    elif run_status == RunStatus.provisioning:
         status = RunStatusResponse.provisioning
-    elif run.run_status == RunStatus.skipped:
+    elif run_status == RunStatus.skipped:
         status = RunStatusResponse.skipped
+    return status
+
+
+def map_run_to_run_response(run: Run, playlist_runs: list[PlaylistRunInfo] | None = None) -> RunResponse:
+    status = map_run_status_to_run_status_response(run.run_status)
 
     return RunResponse(
         run_id=run.run_id,
@@ -365,6 +370,7 @@ async def spawn_teststack_and_init_run(
             PlaylistRunInfo(
                 run_id=run.run_id,
                 test_procedure_id=run.testprocedure_id,
+                status=map_run_status_to_run_status_response(run.run_status),
             )
             for run in runs
         ]
@@ -533,18 +539,7 @@ async def get_individual_run(
         sibling_runs = await select_playlist_runs_with_status(db.session, run.playlist_execution_id)
         playlist_runs = []
         for r in sibling_runs:
-            # Map run status to response status
-            if r.run_status == RunStatus.initialised:
-                status = RunStatusResponse.initialised
-            elif r.run_status == RunStatus.started:
-                status = RunStatusResponse.started
-            elif r.run_status == RunStatus.provisioning:
-                status = RunStatusResponse.provisioning
-            elif r.run_status == RunStatus.skipped:
-                status = RunStatusResponse.skipped
-            else:
-                status = RunStatusResponse.finalised
-
+            status = map_run_status_to_run_status_response(r.run_status)
             playlist_runs.append(PlaylistRunInfo(run_id=r.run_id, test_procedure_id=r.testprocedure_id, status=status))
 
     return map_run_to_run_response(run, playlist_runs)
@@ -639,13 +634,20 @@ async def finalise_run_and_teardown_teststack(
                             runner_status.test_procedure_name
                             and runner_status.test_procedure_name == next_run.testprocedure_id
                         ):
-                            # Runner has next test active - update next run status
-                            await update_run_run_status(db.session, next_run.run_id, RunStatus.started)
+                            # Runner has next test - check if it's actually started or just initialized
+                            # timestamp_start is only set when preconditions are applied and test begins
+                            if runner_status.timestamp_start:
+                                await update_run_run_status(db.session, next_run.run_id, RunStatus.started)
+                                logger.info(
+                                    f"Playlist advanced: run {run.run_id} finalized, next run {next_run.run_id} started"
+                                )
+                            else:
+                                # Test is initialized but not started - leave status as initialised
+                                logger.info(
+                                    f"Playlist advanced: run {run.run_id} finalized, next run {next_run.run_id} initialized (awaiting start)"
+                                )
                             await db.session.commit()
                             should_teardown = False
-                            logger.info(
-                                f"Playlist advanced: run {run.run_id} finalized, next run {next_run.run_id} started"
-                            )
                         elif runner_status.test_procedure_name == "-":
                             logger.info(f"Playlist ended: runner reports no active test after run {run.run_id}")
                         else:
@@ -661,6 +663,71 @@ async def finalise_run_and_teardown_teststack(
             await teardown_teststack(run_resource_names)
     else:
         artifact = run.run_artifact
+
+    if artifact is None:
+        return Response(status_code=HTTPStatus.NO_CONTENT)
+    else:
+        return Response(
+            status_code=HTTPStatus.OK,
+            content=artifact.file_data,
+            media_type=f"application/{artifact.compression}",
+        )
+
+
+@router.post(uri.RunPlaylistFinalise, status_code=HTTPStatus.OK)
+async def finalise_playlist(
+    run_id: int,
+    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.user_all}))],
+) -> Response:
+    """Skip all remaining tests in a playlist.
+
+    This will:
+    1. Finalize the current test (if active)
+    2. Mark all remaining 'initialised' runs as 'skipped'
+    3. Teardown the teststack
+
+    Returns the artifact from the current test if available.
+    """
+    user = await select_user_or_raise(db.session, user_context)
+
+    try:
+        run = await select_user_run_with_artifact(db.session, user.user_id, run_id)
+    except NoResultFound as exc:
+        logger.debug(exc)
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Not Found")
+
+    if not run.playlist_execution_id:
+        raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail="Run is not part of a playlist")
+
+    artifact = None
+    settings = get_current_settings()
+    run_resource_names = get_resource_names(run.teststack_id)
+
+    # Finalize current test if it's active
+    if run.run_status in ACTIVE_RUN_STATUSES:
+        artifact = await finalise_run(
+            run,
+            run_resource_names.runner_base_url,
+            db.session,
+            RunStatus.finalised_by_client,
+            datetime.now(timezone.utc),
+            settings.test_execution_comms_timeout_seconds,
+        )
+        await db.session.commit()
+    else:
+        artifact = run.run_artifact
+
+    # Mark all remaining initialised runs as skipped
+    playlist_runs = await select_playlist_runs(db.session, run.playlist_execution_id)
+    for playlist_run in playlist_runs:
+        if playlist_run.run_status == RunStatus.initialised:
+            await update_run_run_status(db.session, playlist_run.run_id, RunStatus.skipped)
+    await db.session.commit()
+
+    # Teardown the teststack
+    await teardown_teststack(run_resource_names)
+
+    logger.info(f"Playlist skipped: run {run.run_id} finalized, remaining runs marked as skipped")
 
     if artifact is None:
         return Response(status_code=HTTPStatus.NO_CONTENT)
