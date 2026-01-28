@@ -275,9 +275,7 @@ async def select_user_run_with_artifact(session: AsyncSession, user_id: int, run
     return resp.scalar_one()
 
 
-async def select_user_runs_with_artifacts(
-    session: AsyncSession, user_id: int, run_ids: list[int]
-) -> Sequence[Run]:
+async def select_user_runs_with_artifacts(session: AsyncSession, user_id: int, run_ids: list[int]) -> Sequence[Run]:
     stmt = (
         select(Run)
         .join(RunGroup)

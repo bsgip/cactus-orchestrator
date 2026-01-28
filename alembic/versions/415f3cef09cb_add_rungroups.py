@@ -37,8 +37,10 @@ def upgrade() -> None:
 
     # Prepopulate the run group table with a "default group" for each user (we are going to force the run group id to
     # match the current user id)
-    op.execute("""INSERT INTO run_group (id, user_id, name, csip_aus_version)
-           SELECT id, id, 'Default Group', 'v1.2' from user_;""")
+    op.execute(
+        """INSERT INTO run_group (id, user_id, name, csip_aus_version)
+           SELECT id, id, 'Default Group', 'v1.2' from user_;"""
+    )
     op.execute("SELECT setval('run_group_id_seq',  nextval('user__id_seq'));")  # Roll the ID sequence forward
 
     # The run_group_id column can now be copied direct from the user_id column (before we drop it)
