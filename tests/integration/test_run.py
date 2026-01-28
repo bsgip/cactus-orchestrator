@@ -100,13 +100,11 @@ async def test_spawn_teststack_and_init_run_dynamic_uris(
     k8s_mock.add_ingress_rule.assert_called_once()
     k8s_mock.wait_for_pod.assert_called_once()
 
-    # Check init was called the correct params (a list of RunRequests)
+    # Check init was called with a single RunRequest (not a list) for backwards compatibility
     k8s_mock.init.assert_awaited_once()
-    run_requests = k8s_mock.init.call_args_list[0].kwargs["run_request"]
-    assert isinstance(run_requests, list)
-    assert len(run_requests) == 1
-    run_request = run_requests[0]
+    run_request = k8s_mock.init.call_args_list[0].kwargs["run_request"]
     assert isinstance(run_request, RunRequest)
+    assert not isinstance(run_request, list)
     assert run_request.test_definition.test_procedure_id == TestProcedureId.ALL_01
     if is_device_cert:
         assert run_request.run_group.test_certificates.aggregator is None
@@ -185,13 +183,11 @@ async def test_spawn_teststack_and_init_run_static_uri(
     k8s_mock.add_ingress_rule.assert_called_once()
     k8s_mock.wait_for_pod.assert_called_once()
 
-    # Check init was called the correct params (a list of RunRequests)
+    # Check init was called with a single RunRequest (not a list) for backwards compatibility
     k8s_mock.init.assert_awaited_once()
-    run_requests = k8s_mock.init.call_args_list[0].kwargs["run_request"]
-    assert isinstance(run_requests, list)
-    assert len(run_requests) == 1
-    run_request = run_requests[0]
+    run_request = k8s_mock.init.call_args_list[0].kwargs["run_request"]
     assert isinstance(run_request, RunRequest)
+    assert not isinstance(run_request, list)
     assert run_request.test_definition.test_procedure_id == TestProcedureId.ALL_01
     if is_device_cert:
         assert run_request.run_group.test_certificates.aggregator is None
@@ -1139,6 +1135,14 @@ async def test_spawn_teststack_with_playlist(
     k8s_mock.wait_for_pod.assert_called_once()
     k8s_mock.init.assert_awaited_once()
 
+    # Verify RunnerClient.initialise received a list of RunRequests for playlists
+    run_requests = k8s_mock.init.call_args_list[0].kwargs["run_request"]
+    assert isinstance(run_requests, list)
+    assert len(run_requests) == 2
+    assert all(isinstance(r, RunRequest) for r in run_requests)
+    assert run_requests[0].test_definition.test_procedure_id == TestProcedureId.ALL_01
+    assert run_requests[1].test_definition.test_procedure_id == TestProcedureId.ALL_02
+
     # DB - all runs created with correct statuses
     async with generate_async_session(pg_base_config) as session:
         from cactus_orchestrator.crud import select_playlist_runs
@@ -1182,6 +1186,12 @@ async def test_backwards_compatibility_single_run(
     response_model = InitRunResponse.from_json(res.text)
     assert response_model.playlist_execution_id is None
     assert response_model.playlist_runs is None or len(response_model.playlist_runs) == 0
+
+    # Verify RunnerClient.initialise received a single RunRequest (not a list) for backwards compatibility
+    k8s_mock.init.assert_awaited_once()
+    run_request = k8s_mock.init.call_args_list[0].kwargs["run_request"]
+    assert isinstance(run_request, RunRequest)
+    assert not isinstance(run_request, list)
 
     # DB - run should have NULL playlist fields
     async with generate_async_session(pg_base_config) as session:
