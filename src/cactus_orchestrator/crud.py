@@ -275,6 +275,27 @@ async def select_user_run_with_artifact(session: AsyncSession, user_id: int, run
     return resp.scalar_one()
 
 
+async def select_user_runs_with_artifacts(
+    session: AsyncSession, user_id: int, run_ids: list[int]
+) -> Sequence[Run]:
+    stmt = (
+        select(Run)
+        .join(RunGroup)
+        .where(
+            and_(
+                Run.run_id.in_(run_ids),
+                RunGroup.user_id == user_id,
+            )
+        )
+        .options(joinedload(Run.run_artifact))
+        .options(selectinload(Run.run_group))
+    )
+
+    resp = await session.execute(stmt)
+
+    return resp.unique().scalars().all()
+
+
 @dataclass
 class ProcedureRunAggregated:
     test_procedure_id: TestProcedureId

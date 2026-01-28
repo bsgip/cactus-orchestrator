@@ -1,5 +1,7 @@
 import asyncio
+import io
 import logging
+import zipfile
 from datetime import datetime, timezone
 from http import HTTPStatus
 from typing import Annotated
@@ -15,6 +17,7 @@ from cactus_schema.orchestrator import (
     InitRunRequest,
     InitRunResponse,
     PlaylistRunInfo,
+    RunArtifactMultipleRequest,
     RunResponse,
     RunStatusResponse,
     StartRunResponse,
@@ -48,6 +51,7 @@ from cactus_orchestrator.crud import (
     select_runs_for_group,
     select_user_run,
     select_user_run_with_artifact,
+    select_user_runs_with_artifacts,
     update_run_run_status,
     update_run_with_runartifact_and_finalise,
 )
@@ -748,6 +752,43 @@ async def get_run_artifact(
 
     user = await select_user_or_raise(db.session, user_context)
     return await get_run_artifact_response_for_user(user, run_id)
+
+
+@router.post(uri.RunArtifactMultiple, status_code=HTTPStatus.OK)
+async def get_run_artifacts_multiple(
+    request: RunArtifactMultipleRequest,
+    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.user_all}))],
+) -> Response:
+    """Downloads multiple run artifacts as a single zip file.
+
+    Each run's artifact (itself a zip) is extracted and placed into a folder named by run_id."""
+
+    user = await select_user_or_raise(db.session, user_context)
+
+    runs = await select_user_runs_with_artifacts(db.session, user.user_id, request.run_ids)
+
+    if not runs:
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="No runs found for the provided run_ids.")
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as outer_zf:
+        for run in runs:
+            if run.run_artifact is None:
+                continue
+            folder = f"run_{run.run_id}"
+            try:
+                inner_zip = zipfile.ZipFile(io.BytesIO(run.run_artifact.file_data))
+                for entry in inner_zip.namelist():
+                    outer_zf.writestr(f"{folder}/{entry}", inner_zip.read(entry))
+            except zipfile.BadZipFile:
+                # If the artifact isn't a valid zip, store it as a raw file
+                outer_zf.writestr(f"{folder}/artifact.bin", run.run_artifact.file_data)
+
+    return Response(
+        status_code=HTTPStatus.OK,
+        content=buf.getvalue(),
+        media_type="application/zip",
+    )
 
 
 @router.get(uri.RunStatus, status_code=HTTPStatus.OK)
