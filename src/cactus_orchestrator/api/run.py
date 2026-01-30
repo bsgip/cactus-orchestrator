@@ -1,5 +1,7 @@
 import asyncio
+import io
 import logging
+import zipfile
 from datetime import datetime, timezone
 from http import HTTPStatus
 from typing import Annotated
@@ -494,7 +496,7 @@ async def finalise_run(
         # NOTE: we are assuming that files are small, consider streaming to file store
         # if sizes increase.
         try:
-            file_data = await RunnerClient.finalize(s)
+            file_data = await RunnerClient.finalize(session=s, as_zip=True)
         except Exception as exc:
             logger.error(f"Error finalizing run {run.run_id}", exc_info=exc)
             file_data = None
@@ -504,6 +506,19 @@ async def finalise_run(
 
     # If we were able to finalize - save the data. If not, we will still shut it down - people will be forced to redo
     if file_data:
+        # We (potentially) passed the reporting data via the zip file. Extract it from the zip and store it in the database.
+        zip_file = zipfile.ZipFile(io.BytesIO(file_data))
+        reporting_data = None
+        for name in zip_file.namelist():
+            # There should 0 or 1 file that starts with reporting data
+            if name.startswith("ReportingData"):
+                reporting_data = zip_file.read(name)
+                break
+
+        if reporting_data:
+            # Store reporting data in db
+            pass
+
         artifact = await create_runartifact(session, compression, file_data)
     else:
         artifact = None
