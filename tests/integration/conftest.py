@@ -1,3 +1,7 @@
+import os
+import shutil
+import tempfile
+from pathlib import Path
 from typing import Generator
 from unittest.mock import patch
 
@@ -42,3 +46,33 @@ def k8s_mock() -> Generator[MockedK8s, None, None]:
             list_requests=list_requests,
             get_request=get_request,
         )
+
+
+@pytest.fixture
+def zip_file_data() -> bytes:
+    json_reporting_data = ""
+
+    # Work in a temporary directory
+    with tempfile.TemporaryDirectory() as tempdirname:
+        base_path = Path(tempdirname)
+
+        # All the test procedure artifacts should be placed in `archive_dir` to be archived
+        archive_dir = base_path / "archive"
+        os.mkdir(archive_dir)
+
+        # Create reporting data json file
+        if json_reporting_data is not None:
+            file_path = archive_dir / f"ReportingData.json"
+            with open(file_path, "w") as f:
+                f.write(json_reporting_data)
+
+        # Create the temporary zip file
+        ARCHIVE_BASEFILENAME = "finalize"
+        ARCHIVE_KIND = "zip"
+        shutil.make_archive(str(base_path / ARCHIVE_BASEFILENAME), ARCHIVE_KIND, archive_dir)
+
+        # Read the zip file contents as binary
+        archive_path = base_path / f"{ARCHIVE_BASEFILENAME}.{ARCHIVE_KIND}"
+        with open(archive_path, mode="rb") as f:
+            zip_contents = f.read()
+    return zip_contents

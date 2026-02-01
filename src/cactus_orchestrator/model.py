@@ -151,6 +151,7 @@ class RunArtifact(Base):
     run_artifact_id: Mapped[int] = mapped_column(name="id", primary_key=True, autoincrement=True)
     compression: Mapped[str] = mapped_column(String, nullable=False)
     file_data: Mapped[bytes] = mapped_column(LargeBinary, nullable=False, unique=False)
+    reporting_data: Mapped[str] = mapped_column(String, nullable=True, unique=False)
 
 
 class ComplianceRecord(Base):
