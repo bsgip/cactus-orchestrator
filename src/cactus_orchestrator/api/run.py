@@ -512,14 +512,10 @@ async def finalise_run(
         for name in zip_file.namelist():
             # There should 0 or 1 file that starts with reporting data
             if name.startswith("ReportingData"):
-                reporting_data = zip_file.read(name)
+                reporting_data = zip_file.read(name).decode()
                 break
 
-        if reporting_data:
-            # Store reporting data in db
-            pass
-
-        artifact = await create_runartifact(session, compression, file_data)
+        artifact = await create_runartifact(session, compression, file_data, reporting_data)
     else:
         artifact = None
 
