@@ -84,7 +84,7 @@ def replace_pdf_in_zip_data(pdf_data: bytes, zip_data: bytes, pdf_filename_prefi
     return updated_zip_data
 
 
-def regenerate_run_artifact(run_artifact: RunArtifact) -> RunArtifact:
+def regenerate_pdf_report(run_artifact: RunArtifact) -> RunArtifact:
     """Updates the run artifact to include a regenerated pdf test procedure report.
 
     The pdf report is generated from `run_artifiact.reporting_data`, and replaces
@@ -131,7 +131,5 @@ def regenerate_run_artifact(run_artifact: RunArtifact) -> RunArtifact:
         msg = "Failed to replace pdf in archive."
         logger.error(msg, exc_info=exc)
         raise ValueError(f"Artifact regeneration error: {msg}")
-
-    # TODO Add record to database showing a new pdf generation event
 
     return run_artifact

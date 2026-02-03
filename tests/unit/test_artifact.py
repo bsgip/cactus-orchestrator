@@ -6,7 +6,7 @@ from assertical.fake.generator import generate_class_instance
 from cactus_runner.models import ActiveTestProcedure, CheckResult, ReportingData, ResourceAnnotations, RunnerState
 from cactus_test_definitions.client import TestProcedureId, get_test_procedure
 
-from cactus_orchestrator.artifact import regenerate_run_artifact, replace_pdf_in_zip_data
+from cactus_orchestrator.artifact import regenerate_pdf_report, replace_pdf_in_zip_data
 from cactus_orchestrator.model import RunArtifact
 
 
@@ -76,30 +76,30 @@ def run_artifact() -> RunArtifact:
     return artifact
 
 
-def test_regenerate_run_artifact(run_artifact: RunArtifact):
+def test_regenerate_pdf_report(run_artifact: RunArtifact):
 
     # Act
-    updated_artifact = regenerate_run_artifact(run_artifact=run_artifact)
+    updated_artifact = regenerate_pdf_report(run_artifact=run_artifact)
 
     # Assert
     assert isinstance(updated_artifact, RunArtifact)
 
 
-def test_regenerate_run_artifact_raises_exception(run_artifact: RunArtifact):
+def test_regenerate_pdf_report_raises_exception(run_artifact: RunArtifact):
     original_reporting_data = run_artifact.reporting_data
 
     with pytest.raises(ValueError) as excinfo:
         run_artifact.reporting_data = None
-        regenerate_run_artifact(run_artifact=run_artifact)
+        regenerate_pdf_report(run_artifact=run_artifact)
     assert "No reporting data" in str(excinfo.value)
 
     with pytest.raises(ValueError) as excinfo:
         run_artifact.reporting_data = "{}"  # not valid reporting data json
-        regenerate_run_artifact(run_artifact=run_artifact)
+        regenerate_pdf_report(run_artifact=run_artifact)
     assert "Failed to convert json" in str(excinfo.value)
 
     with pytest.raises(ValueError) as excinfo:
         run_artifact.reporting_data = original_reporting_data
         run_artifact.file_data = b""  # not valid zip file
-        regenerate_run_artifact(run_artifact=run_artifact)
+        regenerate_pdf_report(run_artifact=run_artifact)
     assert "Failed to replace pdf in archive" in str(excinfo.value)
