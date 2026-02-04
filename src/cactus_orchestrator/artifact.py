@@ -6,7 +6,12 @@ from dataclasses import dataclass
 from cactus_runner.models import ReportingData
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from cactus_orchestrator.crud import select_run_group_for_user, select_user_from_run_group
+from cactus_orchestrator.crud import (
+    create_run_report_generation_record,
+    select_run_group_for_user,
+    select_user_from_run_group,
+    update_runartifact_with_file_data,
+)
 from cactus_orchestrator.model import ComplianceRecord, RunArtifact, User
 from cactus_orchestrator.reporting.compliance import get_compliance_for_run_group, get_procedure_mapping
 from cactus_orchestrator.reporting.compliance_reporting import pdf_report_as_bytes
@@ -84,7 +89,7 @@ def replace_pdf_in_zip_data(pdf_data: bytes, zip_data: bytes, pdf_filename_prefi
     return updated_zip_data
 
 
-def regenerate_pdf_report(run_artifact: RunArtifact) -> RunArtifact:
+def regenerate_pdf_report(run_artifact: RunArtifact) -> bytes:
     """Updates the run artifact to include a regenerated pdf test procedure report.
 
     The pdf report is generated from `run_artifiact.reporting_data`, and replaces
@@ -95,7 +100,7 @@ def regenerate_pdf_report(run_artifact: RunArtifact) -> RunArtifact:
     Args:
         run_artifact (RunArtifact): The RunArtifact to be updated. Note: this value is mutated.
     Returns:
-        RunArtifact: A RunArtifact instance with the file_data updated.
+        bytes: the updated zip file data.
     Raises:
         ValueError if regeneration of artifact fails for any reason.
     """
@@ -126,10 +131,37 @@ def regenerate_pdf_report(run_artifact: RunArtifact) -> RunArtifact:
         updated_zip_data = replace_pdf_in_zip_data(
             pdf_data=pdf_data, zip_data=run_artifact.file_data, pdf_filename_prefix=CACTUS_TEST_PROCEDURE_REPORT_PREFIX
         )
-        run_artifact.file_data = updated_zip_data
     except Exception as exc:
         msg = "Failed to replace pdf in archive."
         logger.error(msg, exc_info=exc)
         raise ValueError(f"Artifact regeneration error: {msg}")
+
+    return updated_zip_data
+
+
+async def regenerate_run_artifact(session: AsyncSession, run_artifact: RunArtifact) -> RunArtifact:
+    """Regenerates the RunArtifact.
+
+    - Uses the reporting data to (re)generate the run report.
+    - Replaces the run report in the file data of `run_artifact`.
+    - Updates the run artifact in the orchestrator database (to reflect the new file data).
+    - Adds an entry to the RunReportGeneration table to record the fact the report was regenerated.
+
+    Args:
+        session: A database session.
+        run_artifact (RunArtifact): The RunArtifact to update.
+    Returns:
+        RunArtifact: the updated RunArtifact
+    Raises:
+        ValueError: if regeneration of pdf report fails
+    """
+
+    updated_zip_data = regenerate_pdf_report(run_artifact=run_artifact)
+
+    # Update the file data
+    await update_runartifact_with_file_data(session=session, run_artifact=run_artifact, file_data=updated_zip_data)
+
+    # Record the successful regeneration
+    await create_run_report_generation_record(session=session, run_artifact_id=run_artifact.run_artifact_id)
 
     return run_artifact

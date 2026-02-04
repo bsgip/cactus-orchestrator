@@ -2,12 +2,17 @@ import io
 import zipfile
 
 import pytest
+from assertical.asserts.time import assert_nowish
 from assertical.fake.generator import generate_class_instance
+from assertical.fixtures.postgres import generate_async_session
 from cactus_runner.models import ActiveTestProcedure, CheckResult, ReportingData, ResourceAnnotations, RunnerState
 from cactus_test_definitions.client import TestProcedureId, get_test_procedure
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from cactus_orchestrator.artifact import regenerate_pdf_report, replace_pdf_in_zip_data
-from cactus_orchestrator.model import RunArtifact
+from cactus_orchestrator.artifact import regenerate_pdf_report, regenerate_run_artifact, replace_pdf_in_zip_data
+from cactus_orchestrator.crud import select_user_run_with_artifact
+from cactus_orchestrator.model import RunArtifact, RunReportGeneration
 
 
 @pytest.mark.parametrize("original_data, replacement_data", [(b"before", b"after"), (b"before", b"before")])
@@ -79,10 +84,10 @@ def run_artifact() -> RunArtifact:
 def test_regenerate_pdf_report(run_artifact: RunArtifact):
 
     # Act
-    updated_artifact = regenerate_pdf_report(run_artifact=run_artifact)
+    updated_zip_file_data = regenerate_pdf_report(run_artifact=run_artifact)
 
     # Assert
-    assert isinstance(updated_artifact, RunArtifact)
+    assert isinstance(updated_zip_file_data, bytes)
 
 
 def test_regenerate_pdf_report_raises_exception(run_artifact: RunArtifact):
@@ -103,3 +108,35 @@ def test_regenerate_pdf_report_raises_exception(run_artifact: RunArtifact):
         run_artifact.file_data = b""  # not valid zip file
         regenerate_pdf_report(run_artifact=run_artifact)
     assert "Failed to replace pdf in archive" in str(excinfo.value)
+
+
+@pytest.mark.asyncio
+async def test_regenerate_run_artifact(pg_base_config, run_artifact: RunArtifact):
+    async def get_run_report_generation_records(
+        session: AsyncSession, run_artifact_id: int
+    ) -> list[RunReportGeneration]:
+        stmt = select(RunReportGeneration).where(RunReportGeneration.run_artifact_id == run_artifact_id)
+        resp = await session.execute(stmt)
+
+        return list(resp.scalars().all())
+
+    async with generate_async_session(pg_base_config) as s:
+        # Arrange
+        run = await select_user_run_with_artifact(session=s, user_id=1, run_id=2)
+        run.run_artifact.file_data = run_artifact.file_data  # borrow the file data from another fixture
+        run.run_artifact.reporting_data = run_artifact.reporting_data  # borrow the reporting data from another fixture
+        original_file_data = run.run_artifact.file_data
+
+        # Act
+        updated_run_artifact = await regenerate_run_artifact(session=s, run_artifact=run.run_artifact)
+
+        # Assert
+        check_run = await select_user_run_with_artifact(session=s, user_id=1, run_id=2)
+        assert check_run.run_artifact.file_data != original_file_data
+        assert check_run.run_artifact.file_data == updated_run_artifact.file_data
+
+        records = await get_run_report_generation_records(
+            session=s, run_artifact_id=check_run.run_artifact.run_artifact_id
+        )
+        assert len(records) == 1
+        assert_nowish(records[0].created_at)
