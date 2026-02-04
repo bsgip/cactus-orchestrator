@@ -52,7 +52,9 @@ class RunReportGeneration(Base):
     run_report_generation_id: Mapped[int] = mapped_column(
         name="id", primary_key=True, autoincrement=True
     )  # primary key
-    run_artifact_id: Mapped[int | None] = mapped_column(ForeignKey("run_artifact.id"), nullable=True)
+    run_artifact_id: Mapped[int] = mapped_column(
+        ForeignKey("run_artifact.id")
+    )  # The run artifact that was (re)generated
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
