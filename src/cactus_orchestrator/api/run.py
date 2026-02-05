@@ -35,6 +35,7 @@ from sqlalchemy.exc import NoResultFound
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from cactus_orchestrator.api.common import select_user_or_raise, select_user_run_group_or_raise
+from cactus_orchestrator.artifact import regenerate_run_artifact
 from cactus_orchestrator.auth import AuthPerm, UserContext, jwt_validator
 from cactus_orchestrator.crud import (
     ACTIVE_RUN_STATUSES,
@@ -141,6 +142,20 @@ async def get_run_artifact_response_for_user(user: User, run_id: int) -> Respons
 
     if run.run_artifact is None:
         raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="RunArtifact does not exist.")
+
+    # Each time we request the run artifact we regenerate the test procedure report.
+    # Only attempt regeneration if there is reporting data
+    # Note: all other files in the run artifact remain unaffected.
+    if run.run_artifact.reporting_data is not None:
+        try:
+            await regenerate_run_artifact(session=db.session, run_artifact=run.run_artifact)
+        except ValueError as exc:
+            msg = f"Unable to update the run artifact {run.run_artifact.run_artifact_id} with a regenerated run report."
+            logger.error(msg)
+            raise HTTPException(
+                status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
+                detail=msg,
+            )
 
     run_group_name = ""
     run_group = await select_run_group_for_user(db.session, user.user_id, run.run_group_id)
