@@ -56,7 +56,7 @@ async def generate_run_group_artifact(
     return Artifact(file_data=file_data, mime_type="application/pdf")
 
 
-def replace_pdf_in_zip_data(pdf_data: bytes, zip_data: bytes, pdf_filename_prefix: str) -> bytes:
+async def replace_pdf_in_zip_data(pdf_data: bytes, zip_data: bytes, pdf_filename_prefix: str) -> bytes:
     """Replaces the existing pdfs in `zip_data` with the pdf bytes from `pdf_data`
 
     Since there could be more than one pdf in the existing archive, replacements will happen
@@ -89,7 +89,7 @@ def replace_pdf_in_zip_data(pdf_data: bytes, zip_data: bytes, pdf_filename_prefi
     return updated_zip_data
 
 
-def regenerate_pdf_report(run_artifact: RunArtifact) -> bytes:
+async def regenerate_pdf_report(run_artifact: RunArtifact) -> bytes:
     """Updates the run artifact to include a regenerated pdf test procedure report.
 
     The pdf report is generated from `run_artifiact.reporting_data`, and replaces
@@ -117,7 +117,7 @@ def regenerate_pdf_report(run_artifact: RunArtifact) -> bytes:
 
     msg = "Failed to generate pdf report from reporting data."
     try:
-        pdf_data = generate_pdf_report_from_run_artifact(reporting_data=reporting_data)
+        pdf_data = await generate_pdf_report_from_run_artifact(reporting_data=reporting_data)
     except Exception as exc:
         logger.error(msg, exc_info=exc)
         raise ValueError(f"Artifact regeneration error: {msg}")
@@ -128,7 +128,7 @@ def regenerate_pdf_report(run_artifact: RunArtifact) -> bytes:
 
     try:
         CACTUS_TEST_PROCEDURE_REPORT_PREFIX = "CactusTestProcedureReport"
-        updated_zip_data = replace_pdf_in_zip_data(
+        updated_zip_data = await replace_pdf_in_zip_data(
             pdf_data=pdf_data, zip_data=run_artifact.file_data, pdf_filename_prefix=CACTUS_TEST_PROCEDURE_REPORT_PREFIX
         )
     except Exception as exc:
@@ -156,7 +156,7 @@ async def regenerate_run_artifact(session: AsyncSession, run_artifact: RunArtifa
         ValueError: if regeneration of pdf report fails
     """
 
-    updated_zip_data = regenerate_pdf_report(run_artifact=run_artifact)
+    updated_zip_data = await regenerate_pdf_report(run_artifact=run_artifact)
 
     # Update the file data
     await update_runartifact_with_file_data(session=session, run_artifact=run_artifact, file_data=updated_zip_data)

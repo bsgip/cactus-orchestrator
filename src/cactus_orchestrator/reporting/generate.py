@@ -8,7 +8,7 @@ from cactus_orchestrator.reporting.run_reporting import pdf_report_as_bytes
 logger = logging.getLogger(__name__)
 
 
-def generate_pdf_report_from_run_artifact(reporting_data: ReportingData) -> bytes | None:
+async def generate_pdf_report_from_run_artifact(reporting_data: ReportingData) -> bytes | None:
 
     # Unpack the readings
     readings = {r.reading_type: pd.read_json(r.readings_as_json) for r in reporting_data.readings}

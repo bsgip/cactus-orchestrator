@@ -1043,17 +1043,6 @@ async def test_get_run_request_data(
         k8s_mock.get_request.assert_not_called()
 
 
-@pytest.mark.parametrize(
-    "run_id,expected_status,expected_artifact_id,expected_user,expected_test_id,expected_group_name,expected_group_id",
-    [
-        (1, HTTPStatus.NOT_FOUND, None, None, None, None, None),
-        (2, HTTPStatus.OK, 1, "user1@cactus.example.com", "ALL-01", "name-1", "1"),
-        (4, HTTPStatus.OK, 2, "user1@cactus.example.com", "ALL-03", "name-1", "1"),
-        (5, HTTPStatus.OK, 3, "user1@cactus.example.com", "ALL-01", "name-2", "2"),
-        (6, HTTPStatus.NOT_FOUND, None, None, None, None, None),  # Other user
-        (99, HTTPStatus.NOT_FOUND, None, None, None, None, None),  # DNE
-    ],
-)
 @pytest.fixture
 def reporting_data_json():
 
