@@ -13,18 +13,21 @@ import plotly.graph_objects as go  # type: ignore
 from cactus_runner import __version__ as cactus_runner_version
 from cactus_runner.app.envoy_common import ReadingLocation
 from cactus_runner.app.timeline import Timeline, duration_to_label
-from cactus_runner.models import CheckResult, ClientCertificateType, RunnerState, Site
-from cactus_schema.runner import ClientInteraction, ClientInteractionType, RequestEntry, StepStatus
-from cactus_test_definitions import CSIPAusVersion
-from cactus_test_definitions import __version__ as cactus_test_definitions_version
-from envoy.server.model import (
-    DynamicOperatingEnvelope,
+from cactus_runner.models import (
+    CheckResult,
+    ClientCertificateType,
+    ReadingType,
+    RunnerState,
+    Site,
     SiteDERAvailability,
     SiteDERRating,
     SiteDERSetting,
     SiteDERStatus,
 )
-from envoy.server.model.site_reading import SiteReadingType
+from cactus_schema.runner import ClientInteraction, ClientInteractionType, RequestEntry, StepStatus
+from cactus_test_definitions import CSIPAusVersion
+from cactus_test_definitions import __version__ as cactus_test_definitions_version
+from envoy.server.model import DynamicOperatingEnvelope
 from envoy_schema.server.schema.sep2.types import (
     DataQualifierType,
     DeviceCategory,
@@ -1166,7 +1169,7 @@ def kind_to_string(kind: KindType | int) -> str:
     return KindType(kind).name.replace("_", " ").lower()
 
 
-def reading_description(srt: SiteReadingType, exclude_mup: bool = False) -> str:
+def reading_description(srt: ReadingType, exclude_mup: bool = False) -> str:
     mup = srt.site_reading_type_id
     uom_string = uom_to_string(srt.uom)
     qualifier_string = data_qualifier_to_string(srt.data_qualifier)
@@ -1195,13 +1198,13 @@ def truncate_mrid(mrid: str) -> str:
     return mrid[:7] + "..." if len(mrid) > 7 else mrid
 
 
-def validate_cell(reading_type: SiteReadingType, col_idx: int, row_num: int) -> str | None:
+def validate_cell(reading_type: ReadingType, col_idx: int, row_num: int) -> str | None:
     """
     Validates a cell value and returns an error message if invalid.
     These validation steps come from SA TS 5573:2025, Table 8.1
 
     Args:
-        reading_type: The SiteReadingType object
+        reading_type: The ReadingType object
         col_idx: Column index (0-based)
         row_num: Row number for error message (1-based, excluding header)
 
@@ -1264,10 +1267,10 @@ def format_cell_value(value, is_error: bool) -> str | Paragraph:
     return value
 
 
-def allow_zero_width_duration(srt: SiteReadingType) -> bool:
-    """Certain SiteReadingTypes (eg BESS types) expect zero duration readings. Most other reading types do NOT
+def allow_zero_width_duration(srt: ReadingType) -> bool:
+    """Certain ReadingTypes (eg BESS types) expect zero duration readings. Most other reading types do NOT
 
-    Returns True if the supplied SiteReadingType is permitted to have zero duration readings. False otherwise"""
+    Returns True if the supplied ReadingType is permitted to have zero duration readings. False otherwise"""
     return srt.uom == UomType.REAL_ENERGY_WATT_HOURS  # This is our shorthand for identifying BESS readings
 
 
@@ -1313,9 +1316,9 @@ def validate_reading_duration(readings_df: pd.DataFrame, allow_zero_duration: bo
 
 
 def generate_reading_count_table(
-    reading_counts: dict[SiteReadingType, int],
+    reading_counts: dict[ReadingType, int],
     stylesheet: StyleSheet,
-    readings: dict[SiteReadingType, pd.DataFrame] | None = None,
+    readings: dict[ReadingType, pd.DataFrame] | None = None,
 ):
     """
     Generate reading count table with validation and error highlighting.
@@ -1426,8 +1429,8 @@ def generate_reading_count_table(
 
 def generate_readings_section(
     runner_state: RunnerState,
-    readings: dict[SiteReadingType, pd.DataFrame],
-    reading_counts: dict[SiteReadingType, int],
+    readings: dict[ReadingType, pd.DataFrame],
+    reading_counts: dict[ReadingType, int],
     stylesheet: StyleSheet,
 ) -> list[Flowable]:
 
@@ -1471,8 +1474,8 @@ def generate_page_elements(
     test_run_id: str,
     run_group_name: str,
     check_results: dict[str, CheckResult],
-    readings: dict[SiteReadingType, pd.DataFrame],
-    reading_counts: dict[SiteReadingType, int],
+    readings: dict[ReadingType, pd.DataFrame],
+    reading_counts: dict[ReadingType, int],
     sites: list[Site],
     timeline: Timeline | None,
     stylesheet: StyleSheet,
@@ -1555,9 +1558,9 @@ def generate_page_elements(
 def pdf_report_as_bytes(
     runner_state: RunnerState,
     check_results: dict[str, CheckResult],
-    readings: dict[SiteReadingType, pd.DataFrame],
-    reading_counts: dict[SiteReadingType, int],
-    sites: Sequence[Site],
+    readings: dict[ReadingType, pd.DataFrame],
+    reading_counts: dict[ReadingType, int],
+    sites: list[Site],
     timeline: Timeline | None,
     no_spacers: bool = False,
 ) -> bytes:
