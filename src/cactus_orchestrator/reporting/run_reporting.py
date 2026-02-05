@@ -4,7 +4,6 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from functools import partial
 from http import HTTPStatus
-from typing import Sequence
 
 import pandas as pd
 import PIL.Image as PilImage
@@ -55,6 +54,8 @@ from reportlab.platypus import (
     Table,
     TableStyle,
 )
+
+from cactus_orchestrator import __version__ as cactus_orchestrator_version
 
 logger = logging.getLogger(__name__)
 
@@ -222,6 +223,9 @@ def first_page_template(
     )
     canvas.drawRightString(
         PAGE_WIDTH - MARGIN, PAGE_HEIGHT - BANNER_HEIGHT - 0.65 * inch, f"CSIP Aus {csip_aus_version}"
+    )
+    canvas.drawRightString(
+        PAGE_WIDTH - MARGIN, PAGE_HEIGHT - BANNER_HEIGHT - 0.80 * inch, f"CSIP Aus {cactus_orchestrator_version}"
     )
 
 
