@@ -222,10 +222,12 @@ def first_page_template(
         PAGE_WIDTH - MARGIN, PAGE_HEIGHT - BANNER_HEIGHT - 0.5 * inch, f"Cactus Runner v{cactus_runner_version}"
     )
     canvas.drawRightString(
-        PAGE_WIDTH - MARGIN, PAGE_HEIGHT - BANNER_HEIGHT - 0.65 * inch, f"CSIP Aus {csip_aus_version}"
+        PAGE_WIDTH - MARGIN,
+        PAGE_HEIGHT - BANNER_HEIGHT - 0.65 * inch,
+        f"Cactus Orchestrator {cactus_orchestrator_version}",
     )
     canvas.drawRightString(
-        PAGE_WIDTH - MARGIN, PAGE_HEIGHT - BANNER_HEIGHT - 0.80 * inch, f"CSIP Aus {cactus_orchestrator_version}"
+        PAGE_WIDTH - MARGIN, PAGE_HEIGHT - BANNER_HEIGHT - 0.80 * inch, f"CSIP Aus {csip_aus_version}"
     )
 
 
