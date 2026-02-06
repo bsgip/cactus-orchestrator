@@ -149,7 +149,7 @@ async def get_run_artifact_response_for_user(user: User, run_id: int) -> Respons
     if run.run_artifact.reporting_data is not None:
         try:
             await regenerate_run_artifact(session=db.session, run_artifact=run.run_artifact)
-        except ValueError as exc:
+        except ValueError:
             msg = f"Unable to update the run artifact {run.run_artifact.run_artifact_id} with a regenerated run report."
             logger.error(msg)
             raise HTTPException(
@@ -521,7 +521,8 @@ async def finalise_run(
 
     # If we were able to finalize - save the data. If not, we will still shut it down - people will be forced to redo
     if file_data:
-        # We (potentially) passed the reporting data via the zip file. Extract it from the zip and store it in the database.
+        # We (potentially) passed the reporting data via the zip file.
+        # Extract it from the zip and store it in the database.
         zip_file = zipfile.ZipFile(io.BytesIO(file_data))
         reporting_data = None
         for name in zip_file.namelist():

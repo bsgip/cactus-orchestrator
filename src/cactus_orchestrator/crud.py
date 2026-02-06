@@ -238,7 +238,7 @@ async def update_run_with_runartifact_and_finalise(
     await session.flush()
 
 
-async def create_run_report_generation_record(session: AsyncSession, run_artifact_id: int):
+async def create_run_report_generation_record(session: AsyncSession, run_artifact_id: int) -> RunReportGeneration:
     run_report_generation_record = RunReportGeneration(run_artifact_id=run_artifact_id)
     session.add(run_report_generation_record)
     await session.flush()
