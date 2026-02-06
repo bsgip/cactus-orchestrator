@@ -511,7 +511,7 @@ async def finalise_run(
         # NOTE: we are assuming that files are small, consider streaming to file store
         # if sizes increase.
         try:
-            file_data = await RunnerClient.finalize(session=s, as_zip=True)
+            file_data = await RunnerClient.finalize(session=s)
         except Exception as exc:
             logger.error(f"Error finalizing run {run.run_id}", exc_info=exc)
             file_data = None
