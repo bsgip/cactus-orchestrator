@@ -149,6 +149,7 @@ async def get_run_artifact_response_for_user(user: User, run_id: int) -> Respons
     if run.run_artifact.reporting_data is not None:
         try:
             await regenerate_run_artifact(session=db.session, run_artifact=run.run_artifact)
+            await db.session.commit()
         except ValueError:
             msg = f"Unable to update the run artifact {run.run_artifact.run_artifact_id} with a regenerated run report."
             logger.error(msg)
