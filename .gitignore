@@ -1,6 +1,9 @@
 *.yml
 *.yaml
 
+# A folder for devs to put files they don't want committed.
+local
+
 # vscode
 .vscode
 *.code-workspace

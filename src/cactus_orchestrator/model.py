@@ -42,6 +42,22 @@ class User(Base):
     run_groups: Mapped[list["RunGroup"]] = relationship(lazy="raise", back_populates="user")
 
 
+class RunReportGeneration(Base):
+    """A RunReportGeneration records each time the RunArtifact is updated with a newly
+    generated pdf report (generated from the reporting_data held in the RunArtifact table.
+    """
+
+    __tablename__ = "run_report_generation"
+
+    run_report_generation_id: Mapped[int] = mapped_column(
+        name="id", primary_key=True, autoincrement=True
+    )  # primary key
+    run_artifact_id: Mapped[int] = mapped_column(
+        ForeignKey("run_artifact.id")
+    )  # The run artifact that was (re)generated
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class RunGroup(Base):
     """A RunGroup is so users can organise their runs under the label of a specific device/client. Contains the TLS
     certs that will be utilised by runs under this group. Contains some settings that are unique to all runs in this
@@ -151,6 +167,7 @@ class RunArtifact(Base):
     run_artifact_id: Mapped[int] = mapped_column(name="id", primary_key=True, autoincrement=True)
     compression: Mapped[str] = mapped_column(String, nullable=False)
     file_data: Mapped[bytes] = mapped_column(LargeBinary, nullable=False, unique=False)
+    reporting_data: Mapped[str] = mapped_column(String, nullable=True, unique=False)
 
 
 class ComplianceRecord(Base):
