@@ -652,10 +652,8 @@ async def finalise_run_and_teardown_teststack(
                                 )
                             else:
                                 # Test is initialized but not started - leave status as initialised
-                                logger.info(
-                                    f"""Playlist advanced: run {run.run_id} finalized,
-                                     next run {next_run.run_id} initialized (awaiting start)"""
-                                )
+                                logger.info(f"""Playlist advanced: run {run.run_id} finalized,
+                                     next run {next_run.run_id} initialized (awaiting start)""")
                             await db.session.commit()
                             should_teardown = False
                         elif runner_status.test_procedure_name == "-":
