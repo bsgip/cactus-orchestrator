@@ -20,7 +20,7 @@ dependencies = [
     "asyncpg",
     "cactus-test-definitions==1.8.16",
     "cactus-schema >=0.0.12",
-    "cactus-runner @ git+https://github.com/bsgip/cactus-runner.git@41fa9a746d4311130d2a217934da136a04616aa4",
+    "cactus-runner @ git+https://github.com/bsgip/cactus-runner.git@v1.6.11",
     "fastapi-pagination",
     "fastapi-utils",
     "typing_inspect",                                                        # fastapi-utils missing dep?
