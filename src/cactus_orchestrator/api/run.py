@@ -1,5 +1,7 @@
 import asyncio
+import io
 import logging
+import zipfile
 from datetime import datetime, timezone
 from http import HTTPStatus
 from typing import Annotated
@@ -15,6 +17,7 @@ from cactus_schema.orchestrator import (
     InitRunRequest,
     InitRunResponse,
     PlaylistRunInfo,
+    RunArtifactMultipleRequest,
     RunResponse,
     RunStatusResponse,
     StartRunResponse,
@@ -36,7 +39,6 @@ from cactus_orchestrator.api.common import select_user_or_raise, select_user_run
 from cactus_orchestrator.auth import AuthPerm, UserContext, jwt_validator
 from cactus_orchestrator.crud import (
     ACTIVE_RUN_STATUSES,
-    count_playlist_runs,
     create_runartifact,
     delete_runs,
     insert_playlist_runs,
@@ -44,10 +46,12 @@ from cactus_orchestrator.crud import (
     select_active_runs_for_user,
     select_next_playlist_run,
     select_playlist_runs,
+    select_playlist_runs_with_status,
     select_run_group_for_user,
     select_runs_for_group,
     select_user_run,
     select_user_run_with_artifact,
+    select_user_runs_with_artifacts,
     update_run_run_status,
     update_run_with_runartifact_and_finalise,
 )
@@ -70,16 +74,21 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-def map_run_to_run_response(run: Run, playlist_total: int | None = None) -> RunResponse:
+def map_run_status_to_run_status_response(run_status: RunStatus) -> RunStatusResponse:
     status = RunStatusResponse.finalised
-    if run.run_status == RunStatus.initialised:
+    if run_status == RunStatus.initialised:
         status = RunStatusResponse.initialised
-    elif run.run_status == RunStatus.started:
+    elif run_status == RunStatus.started:
         status = RunStatusResponse.started
-    elif run.run_status == RunStatus.provisioning:
+    elif run_status == RunStatus.provisioning:
         status = RunStatusResponse.provisioning
-    elif run.run_status == RunStatus.skipped:
+    elif run_status == RunStatus.skipped:
         status = RunStatusResponse.skipped
+    return status
+
+
+def map_run_to_run_response(run: Run, playlist_runs: list[PlaylistRunInfo] | None = None) -> RunResponse:
+    status = map_run_status_to_run_status_response(run.run_status)
 
     return RunResponse(
         run_id=run.run_id,
@@ -93,7 +102,7 @@ def map_run_to_run_response(run: Run, playlist_total: int | None = None) -> RunR
         has_artifacts=run.run_artifact_id is not None,
         playlist_execution_id=run.playlist_execution_id,
         playlist_order=run.playlist_order,
-        playlist_total=playlist_total,
+        playlist_runs=playlist_runs,
     )
 
 
@@ -370,6 +379,7 @@ async def spawn_teststack_and_init_run(
             PlaylistRunInfo(
                 run_id=run.run_id,
                 test_procedure_id=run.testprocedure_id,
+                status=map_run_status_to_run_status_response(run.run_status),
             )
             for run in runs
         ]
@@ -532,12 +542,16 @@ async def get_individual_run(
         logger.debug(exc)
         raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Not Found")
 
-    # Calculate playlist_total if this is a playlist run
-    playlist_total = None
+    # Fetch playlist_runs if this is a playlist run
+    playlist_runs = None
     if run.playlist_execution_id:
-        playlist_total = await count_playlist_runs(db.session, run.playlist_execution_id)
+        sibling_runs = await select_playlist_runs_with_status(db.session, run.playlist_execution_id)
+        playlist_runs = []
+        for r in sibling_runs:
+            status = map_run_status_to_run_status_response(r.run_status)
+            playlist_runs.append(PlaylistRunInfo(run_id=r.run_id, test_procedure_id=r.testprocedure_id, status=status))
 
-    return map_run_to_run_response(run, playlist_total)
+    return map_run_to_run_response(run, playlist_runs)
 
 
 @router.delete(uri.Run, status_code=HTTPStatus.NO_CONTENT)
@@ -629,13 +643,19 @@ async def finalise_run_and_teardown_teststack(
                             runner_status.test_procedure_name
                             and runner_status.test_procedure_name == next_run.testprocedure_id
                         ):
-                            # Runner has next test active - update next run status
-                            await update_run_run_status(db.session, next_run.run_id, RunStatus.started)
+                            # Runner has next test - check if it's actually started or just initialized
+                            # timestamp_start is only set when preconditions are applied and test begins
+                            if runner_status.timestamp_start:
+                                await update_run_run_status(db.session, next_run.run_id, RunStatus.started)
+                                logger.info(
+                                    f"Playlist advanced: run {run.run_id} finalized, next run {next_run.run_id} started"
+                                )
+                            else:
+                                # Test is initialized but not started - leave status as initialised
+                                logger.info(f"""Playlist advanced: run {run.run_id} finalized,
+                                     next run {next_run.run_id} initialized (awaiting start)""")
                             await db.session.commit()
                             should_teardown = False
-                            logger.info(
-                                f"Playlist advanced: run {run.run_id} finalized, next run {next_run.run_id} started"
-                            )
                         elif runner_status.test_procedure_name == "-":
                             logger.info(f"Playlist ended: runner reports no active test after run {run.run_id}")
                         else:
@@ -662,6 +682,70 @@ async def finalise_run_and_teardown_teststack(
         )
 
 
+@router.post(uri.RunPlaylistFinalise, status_code=HTTPStatus.OK)
+async def finalise_playlist(
+    run_id: int,
+    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.user_all}))],
+) -> Response:
+    """Skip all remaining tests in a playlist.
+
+    This will:
+    1. Finalize the current test (if active)
+    2. Mark all remaining 'initialised' runs as 'skipped'
+    3. Teardown the teststack
+
+    Returns the artifact from the current test if available.
+    """
+    user = await select_user_or_raise(db.session, user_context)
+
+    try:
+        run = await select_user_run_with_artifact(db.session, user.user_id, run_id)
+    except NoResultFound as exc:
+        logger.debug(exc)
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Not Found")
+
+    if not run.playlist_execution_id:
+        raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail="Run is not part of a playlist")
+
+    artifact = None
+    settings = get_current_settings()
+    run_resource_names = get_resource_names(run.teststack_id)
+
+    # Finalize current test if it's active
+    if run.run_status in ACTIVE_RUN_STATUSES:
+        artifact = await finalise_run(
+            run,
+            run_resource_names.runner_base_url,
+            db.session,
+            RunStatus.finalised_by_client,
+            datetime.now(timezone.utc),
+            settings.test_execution_comms_timeout_seconds,
+        )
+    else:
+        artifact = run.run_artifact
+
+    # Mark all remaining initialised runs as skipped
+    playlist_runs = await select_playlist_runs(db.session, run.playlist_execution_id)
+    for playlist_run in playlist_runs:
+        if playlist_run.run_status == RunStatus.initialised:
+            await update_run_run_status(db.session, playlist_run.run_id, RunStatus.skipped)
+    await db.session.commit()
+
+    # Teardown the teststack
+    await teardown_teststack(run_resource_names)
+
+    logger.info(f"Playlist skipped: run {run.run_id} finalized, remaining runs marked as skipped")
+
+    if artifact is None:
+        return Response(status_code=HTTPStatus.NO_CONTENT)
+    else:
+        return Response(
+            status_code=HTTPStatus.OK,
+            content=artifact.file_data,
+            media_type=f"application/{artifact.compression}",
+        )
+
+
 @router.get(uri.RunArtifact, status_code=HTTPStatus.OK)
 async def get_run_artifact(
     run_id: int,
@@ -671,6 +755,43 @@ async def get_run_artifact(
 
     user = await select_user_or_raise(db.session, user_context)
     return await get_run_artifact_response_for_user(user, run_id)
+
+
+@router.post(uri.RunArtifactMultiple, status_code=HTTPStatus.OK)
+async def get_run_artifacts_multiple(
+    request: RunArtifactMultipleRequest,
+    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.user_all}))],
+) -> Response:
+    """Downloads multiple run artifacts as a single zip file.
+
+    Each run's artifact (itself a zip) is extracted and placed into a folder named by run_id."""
+
+    user = await select_user_or_raise(db.session, user_context)
+
+    runs = await select_user_runs_with_artifacts(db.session, user.user_id, request.run_ids)
+
+    if not runs:
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="No runs found for the provided run_ids.")
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as outer_zf:
+        for run in runs:
+            if run.run_artifact is None:
+                continue
+            folder = f"run_{run.run_id}"
+            try:
+                inner_zip = zipfile.ZipFile(io.BytesIO(run.run_artifact.file_data))
+                for entry in inner_zip.namelist():
+                    outer_zf.writestr(f"{folder}/{entry}", inner_zip.read(entry))
+            except zipfile.BadZipFile:
+                # If the artifact isn't a valid zip, store it as a raw file
+                outer_zf.writestr(f"{folder}/artifact.bin", run.run_artifact.file_data)
+
+    return Response(
+        status_code=HTTPStatus.OK,
+        content=buf.getvalue(),
+        media_type="application/zip",
+    )
 
 
 @router.get(uri.RunStatus, status_code=HTTPStatus.OK)

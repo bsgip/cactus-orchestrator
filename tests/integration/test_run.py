@@ -1362,7 +1362,7 @@ async def test_delete_playlist_run_deletes_all_siblings(
 
 
 @pytest.mark.asyncio
-async def test_get_individual_run_returns_playlist_total(
+async def test_get_individual_run_returns_playlist_runs(
     client, k8s_mock: MockedK8s, pg_base_config, client_cert_pem_bytes, valid_jwt_user1
 ):
     response_model = await create_playlist_for_test(
@@ -1382,7 +1382,8 @@ async def test_get_individual_run_returns_playlist_total(
     run_response = RunResponse.from_json(response.text)
     assert run_response.playlist_execution_id is not None
     assert run_response.playlist_order == 0
-    assert run_response.playlist_total == 3
+    assert run_response.playlist_runs is not None
+    assert len(run_response.playlist_runs) == 3
 
 
 @pytest.mark.asyncio
