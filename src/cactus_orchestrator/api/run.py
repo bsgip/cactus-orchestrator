@@ -367,10 +367,7 @@ async def spawn_teststack_and_init_run(
     # Build response with playlist info if applicable
     if is_playlist and runs:
         playlist_runs = [
-            PlaylistRunInfo(
-                run_id=run.run_id,
-                test_procedure_id=run.testprocedure_id,
-            )
+            PlaylistRunInfo(run_id=run.run_id, test_procedure_id=run.testprocedure_id, status=run.run_status)
             for run in runs
         ]
         return InitRunResponse(
