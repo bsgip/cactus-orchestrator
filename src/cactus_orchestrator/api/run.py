@@ -721,7 +721,6 @@ async def finalise_playlist(
             datetime.now(timezone.utc),
             settings.test_execution_comms_timeout_seconds,
         )
-        await db.session.commit()
     else:
         artifact = run.run_artifact
 
