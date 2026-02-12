@@ -748,11 +748,11 @@ def test_is_all_criteria_met(runner_status: RunnerStatus | None, expected: bool 
 )
 @pytest.mark.asyncio
 async def test_finalise_run_creates_run_artifact_and_updates_run(
-    pg_base_config, k8s_mock: MockedK8s, runner_status, all_criteria_met
+    pg_base_config, k8s_mock: MockedK8s, zip_file_data: bytes, runner_status, all_criteria_met
 ):
     """Finalize correctly updates the DB with data requested from the runner"""
     # Arrange
-    finalize_data = b"file_data"
+    finalize_data = zip_file_data
 
     k8s_mock.status.return_value = runner_status
     k8s_mock.finalize.return_value = finalize_data
@@ -823,10 +823,11 @@ async def test_finalise_run_handles_runner_finalize_failure(
 async def test_finalise_run_handles_runner_status_failure(
     pg_base_config,
     k8s_mock: MockedK8s,
+    zip_file_data: bytes,
 ):
     """Finalize will still proceed even if the runner status cannot be determined"""
     # Arrange
-    finalize_data = b"file_data"
+    finalize_data = zip_file_data
 
     k8s_mock.status.side_effect = Exception("my mock exception")
     k8s_mock.finalize.return_value = finalize_data
@@ -856,9 +857,11 @@ async def test_finalise_run_handles_runner_status_failure(
 
 
 @pytest.mark.asyncio
-async def test_finalise_run_and_teardown_teststack_success(client, pg_base_config, k8s_mock, valid_jwt_user1):
+async def test_finalise_run_and_teardown_teststack_success(
+    client, pg_base_config, k8s_mock, zip_file_data, valid_jwt_user1
+):
     # Arrange
-    finalize_data = b"\x1f\x8b\x08\x00I\xe9\xe4g\x02\xff\xcb,)N\xccM\xf5M,\xca\xcc\x07\x00\xcd\xcc5\xc5\x0b\x00\x00\x00"
+    finalize_data = zip_file_data
     k8s_mock.finalize.return_value = finalize_data
     k8s_mock.status.return_value = generate_class_instance(RunnerStatus, step_status={})
 
@@ -884,11 +887,13 @@ async def test_finalise_run_and_teardown_teststack_success(client, pg_base_confi
 
 
 @pytest.mark.asyncio
-async def test_finalise_run_and_teardown_teststack_idempotent(client, pg_base_config, k8s_mock, valid_jwt_user1):
+async def test_finalise_run_and_teardown_teststack_idempotent(
+    client, pg_base_config, k8s_mock, zip_file_data, valid_jwt_user1
+):
     """Tests that finalising the same run multiple times will not cause any weird side effects"""
 
     # Arrange
-    finalize_data = b"\x1f\x8b\x08\x00I\xe9\xe4g\x02\xff\xcb,)N\xccM\xf5M,\xca\xcc\x07\x00\xcd\xcc5\xc5\x0b\x00\x00\x00"
+    finalize_data = zip_file_data
     k8s_mock.finalize.side_effect = [finalize_data, Exception("Mock exception - shouldn't be raised")]
     k8s_mock.status.side_effect = [
         generate_class_instance(RunnerStatus, step_status={}),
@@ -1038,6 +1043,59 @@ async def test_get_run_request_data(
         k8s_mock.get_request.assert_not_called()
 
 
+@pytest.fixture
+def reporting_data_json():
+
+    from cactus_runner.models import ActiveTestProcedure, CheckResult, ReportingData, ResourceAnnotations, RunnerState
+    from cactus_test_definitions.client import TestProcedureId, get_test_procedure
+
+    runner_state = generate_class_instance(
+        RunnerState,
+        active_test_procedure=generate_class_instance(
+            ActiveTestProcedure,
+            definition=get_test_procedure(test_procedure_id=TestProcedureId.ALL_01),
+            step_status={},
+            finished_zip_data=None,
+            resource_annotations=ResourceAnnotations(der_control_ids_by_alias={"a": 1}),
+        ),
+    )
+    reporting_data = generate_class_instance(
+        ReportingData, check_results={"key": generate_class_instance(CheckResult)}, runner_state=runner_state
+    )
+    reporting_data_json = reporting_data.to_json()
+    return reporting_data_json
+
+
+@pytest.fixture
+def file_data():
+    import io
+    import zipfile
+
+    PDF_FILENAME = f"CactusTestProcedureReport.pdf"
+    TXT_FILENAME = "other_file.txt"
+    PDF_DATA = b"before"
+    TXT_DATA = b"other"
+
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as archive:
+        with archive.open(PDF_FILENAME, "w") as file:
+            file.write(PDF_DATA)
+        with archive.open(TXT_FILENAME, "w") as file:
+            file.write(TXT_DATA)
+
+    zip_data = zip_buffer.getvalue()
+    return zip_data
+
+
+@pytest.fixture
+def pg_regeneration_config(pg_base_config, reporting_data_json, file_data):
+    stmt = """UPDATE run_artifact SET reporting_data = %s, file_data = %s WHERE id = 1;"""
+    with pg_base_config.cursor() as cursor:
+        cursor.execute(stmt, (reporting_data_json, file_data))
+        pg_base_config.commit()
+    yield pg_base_config
+
+
 @pytest.mark.parametrize(
     "run_id,expected_status,expected_artifact_id,expected_user,expected_test_id,expected_group_name,expected_group_id",
     [
@@ -1052,7 +1110,7 @@ async def test_get_run_request_data(
 async def test_get_run_artifact_data(
     k8s_mock: MockedK8s,
     client,
-    pg_base_config,
+    pg_regeneration_config,
     valid_jwt_user1,
     run_id,
     expected_status,
@@ -1062,16 +1120,19 @@ async def test_get_run_artifact_data(
     expected_group_name,
     expected_group_id,
 ):
-    """Does fetching the run artifact data work under common conditions"""
+    """Does fetching the run artifact data work under common conditions
+
+    Also tests file_data gets regenerated for run_artifact(id=1)
+    """
 
     # Arrange
-    expected_artifact_data = None
-    async with generate_async_session(pg_base_config) as session:
+    original_artifact_data = None
+    async with generate_async_session(pg_regeneration_config) as session:
         artifact = (
             await session.execute(select(RunArtifact).where(RunArtifact.run_artifact_id == expected_artifact_id))
         ).scalar_one_or_none()
         if artifact:
-            expected_artifact_data = artifact.file_data
+            original_artifact_data = artifact.file_data
 
     # Act
     res = await client.get(f"run/{run_id}/artifact", headers={"Authorization": f"Bearer {valid_jwt_user1}"})
@@ -1080,7 +1141,12 @@ async def test_get_run_artifact_data(
     assert res.status_code == expected_status
     if expected_status == HTTPStatus.OK:
 
-        assert expected_artifact_data == res.read()
+        if artifact.reporting_data is None:
+            assert original_artifact_data == res.read()
+        else:
+            # the file_data was regenerated from the artifacts reporting_data
+            # the new file data shouldn't match the previous (original) artifact data
+            assert original_artifact_data != res.read()
 
         assert res.headers[HEADER_USER_NAME] == expected_user
         assert res.headers[HEADER_TEST_ID] == expected_test_id
@@ -1235,7 +1301,7 @@ async def create_playlist_for_test(
 
 @pytest.mark.asyncio
 async def test_playlist_finalize_advances_to_next_test(
-    client, k8s_mock: MockedK8s, pg_base_config, client_cert_pem_bytes, valid_jwt_user1
+    client, k8s_mock: MockedK8s, zip_file_data, pg_base_config, client_cert_pem_bytes, valid_jwt_user1
 ):
     response_model = await create_playlist_for_test(
         client,
@@ -1254,7 +1320,7 @@ async def test_playlist_finalize_advances_to_next_test(
         await session.commit()
 
     # Mock runner status to report second test is now active (simulating advancement)
-    finalize_data = b"\x1f\x8b\x08\x00test_data"
+    finalize_data = zip_file_data
     k8s_mock.finalize.return_value = finalize_data
     k8s_mock.status.return_value = generate_class_instance(
         RunnerStatus,
@@ -1282,7 +1348,7 @@ async def test_playlist_finalize_advances_to_next_test(
 
 @pytest.mark.asyncio
 async def test_playlist_finalize_teardown_on_last_test(
-    client, k8s_mock: MockedK8s, pg_base_config, client_cert_pem_bytes, valid_jwt_user1
+    client, k8s_mock: MockedK8s, zip_file_data, pg_base_config, client_cert_pem_bytes, valid_jwt_user1
 ):
     response_model = await create_playlist_for_test(
         client,
@@ -1304,7 +1370,7 @@ async def test_playlist_finalize_teardown_on_last_test(
         await session.commit()
 
     # Mock runner status to report no active test (playlist complete)
-    finalize_data = b"\x1f\x8b\x08\x00test_data"
+    finalize_data = zip_file_data
     k8s_mock.finalize.return_value = finalize_data
     k8s_mock.status.return_value = generate_class_instance(
         RunnerStatus,

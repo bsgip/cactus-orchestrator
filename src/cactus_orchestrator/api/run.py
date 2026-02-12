@@ -36,6 +36,7 @@ from sqlalchemy.exc import NoResultFound
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from cactus_orchestrator.api.common import select_user_or_raise, select_user_run_group_or_raise
+from cactus_orchestrator.artifact import regenerate_run_artifact
 from cactus_orchestrator.auth import AuthPerm, UserContext, jwt_validator
 from cactus_orchestrator.crud import (
     ACTIVE_RUN_STATUSES,
@@ -148,6 +149,21 @@ async def get_run_artifact_response_for_user(user: User, run_id: int) -> Respons
 
     if run.run_artifact is None:
         raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="RunArtifact does not exist.")
+
+    # Each time we request the run artifact we regenerate the test procedure report.
+    # Only attempt regeneration if there is reporting data
+    # Note: all other files in the run artifact remain unaffected.
+    if run.run_artifact.reporting_data is not None:
+        try:
+            await regenerate_run_artifact(session=db.session, run_artifact=run.run_artifact)
+            await db.session.commit()
+        except ValueError:
+            msg = f"Unable to update the run artifact {run.run_artifact.run_artifact_id} with a regenerated run report."
+            logger.error(msg)
+            raise HTTPException(
+                status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
+                detail=msg,
+            )
 
     run_group_name = ""
     run_group = await select_run_group_for_user(db.session, user.user_id, run.run_group_id)
@@ -505,7 +521,7 @@ async def finalise_run(
         # NOTE: we are assuming that files are small, consider streaming to file store
         # if sizes increase.
         try:
-            file_data = await RunnerClient.finalize(s)
+            file_data = await RunnerClient.finalize(session=s)
         except Exception as exc:
             logger.error(f"Error finalizing run {run.run_id}", exc_info=exc)
             file_data = None
@@ -515,7 +531,17 @@ async def finalise_run(
 
     # If we were able to finalize - save the data. If not, we will still shut it down - people will be forced to redo
     if file_data:
-        artifact = await create_runartifact(session, compression, file_data)
+        # We (potentially) passed the reporting data via the zip file.
+        # Extract it from the zip and store it in the database.
+        zip_file = zipfile.ZipFile(io.BytesIO(file_data))
+        reporting_data = None
+        for name in zip_file.namelist():
+            # There should 0 or 1 file that starts with reporting data
+            if name.startswith("ReportingData"):
+                reporting_data = zip_file.read(name).decode()
+                break
+
+        artifact = await create_runartifact(session, compression, file_data, reporting_data)
     else:
         artifact = None
 

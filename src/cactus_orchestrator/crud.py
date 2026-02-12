@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload, selectinload, undefer
 
 from cactus_orchestrator.auth import UserContext
-from cactus_orchestrator.model import ComplianceRecord, Run, RunArtifact, RunGroup, RunStatus, User
+from cactus_orchestrator.model import ComplianceRecord, Run, RunArtifact, RunGroup, RunReportGeneration, RunStatus, User
 
 ACTIVE_RUN_STATUSES: set[RunStatus] = {RunStatus.provisioning, RunStatus.started, RunStatus.initialised}
 FINALISED_RUN_STATUSES: set[RunStatus] = {
@@ -214,11 +214,18 @@ async def update_run_run_status(
     await session.execute(stmt)
 
 
-async def create_runartifact(session: AsyncSession, compression: str, file_data: bytes) -> RunArtifact:
-    runartifact = RunArtifact(compression=compression, file_data=file_data)
+async def create_runartifact(
+    session: AsyncSession, compression: str, file_data: bytes, reporting_data: str | None
+) -> RunArtifact:
+    runartifact = RunArtifact(compression=compression, file_data=file_data, reporting_data=reporting_data)
     session.add(runartifact)
     await session.flush()
     return runartifact
+
+
+async def update_runartifact_with_file_data(session: AsyncSession, run_artifact: RunArtifact, file_data: bytes) -> None:
+    run_artifact.file_data = file_data
+    await session.flush()
 
 
 async def update_run_with_runartifact_and_finalise(
@@ -234,6 +241,13 @@ async def update_run_with_runartifact_and_finalise(
     run.run_status = run_status
     run.all_criteria_met = all_criteria_met
     await session.flush()
+
+
+async def create_run_report_generation_record(session: AsyncSession, run_artifact_id: int) -> RunReportGeneration:
+    run_report_generation_record = RunReportGeneration(run_artifact_id=run_artifact_id)
+    session.add(run_report_generation_record)
+    await session.flush()
+    return run_report_generation_record
 
 
 async def select_user_run(session: AsyncSession, user_id: int, run_id: int) -> Run:
