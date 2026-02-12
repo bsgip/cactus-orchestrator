@@ -285,8 +285,9 @@ async def spawn_teststack_and_init_run(
 
     try:
         # duplicate resources
-        await clone_statefulset(template_resource_names, run_resource_names)
-        await clone_service(template_resource_names, run_resource_names)
+        user_identifier = user.user_name or user.subject_id
+        await clone_statefulset(template_resource_names, run_resource_names, user_identifier)
+        await clone_service(template_resource_names, run_resource_names, user_identifier)
 
         # wait for statefulset's pod
         await wait_for_pod(run_resource_names)
@@ -358,7 +359,7 @@ async def spawn_teststack_and_init_run(
             init_result = await RunnerClient.initialise(**init_kwargs)
 
         # finally, include new service in ingress rule
-        await add_ingress_rule(run_resource_names)
+        await add_ingress_rule(run_resource_names, user_identifier)
 
     except (CactusOrchestratorException, RunnerClientException) as exc:
         logger.info("Failure to initialise runner. Will teardown any resources.", exc_info=exc)
