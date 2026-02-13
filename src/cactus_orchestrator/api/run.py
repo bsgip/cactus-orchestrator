@@ -929,7 +929,7 @@ async def get_run_request_data(
             )
 
 
-@router.get(uri.Proceed, status_code=HTTPStatus.OK)
+@router.get(uri.RunProceed, status_code=HTTPStatus.OK)
 async def proceed_proxy(
     run_id: int,
     user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.user_all}))],
