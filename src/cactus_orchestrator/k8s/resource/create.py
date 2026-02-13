@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 
 @async_k8s_api_retry()
-async def clone_service(template_names: TemplateResourceNames, run_names: RunResourceNames) -> None:
+async def clone_service(template_names: TemplateResourceNames, run_names: RunResourceNames, user_name: str) -> None:
     res: ApplyResult = v1_core_api.read_namespaced_service(
         name=template_names.service,
         namespace=template_names.namespace,
@@ -44,11 +44,11 @@ async def clone_service(template_names: TemplateResourceNames, run_names: RunRes
         namespace=get_current_settings().test_execution_namespace, body=new_service, async_req=True
     )  # type: ignore
     await asyncio.to_thread(res.get)
-    logger.info(f"New service {run_names.service} created successfully!")
+    logger.info(f"New service {run_names.service} created successfully for user {user_name}!")
 
 
 @async_k8s_api_retry()
-async def clone_statefulset(template_names: TemplateResourceNames, run_names: RunResourceNames) -> None:
+async def clone_statefulset(template_names: TemplateResourceNames, run_names: RunResourceNames, user_name: str) -> None:
     res: ApplyResult = v1_app_api.read_namespaced_stateful_set(
         name=template_names.stateful_set,
         namespace=template_names.namespace,
@@ -106,7 +106,7 @@ async def clone_statefulset(template_names: TemplateResourceNames, run_names: Ru
         body=new_set, namespace=get_current_settings().test_execution_namespace, async_req=True
     )  # type: ignore
     await asyncio.to_thread(res.get)
-    logger.info(f"New StatefulSet {run_names.stateful_set} created successfully!")
+    logger.info(f"New StatefulSet {run_names.stateful_set} created successfully for user {user_name}!")
 
 
 async def is_pod_ready(run_names: RunResourceNames) -> bool:
@@ -142,7 +142,7 @@ async def wait_for_pod(run_names: RunResourceNames, max_retries: int = 20, wait_
 
 
 @async_k8s_api_retry()
-async def add_ingress_rule(run_names: RunResourceNames) -> None:
+async def add_ingress_rule(run_names: RunResourceNames, user_name: str) -> None:
     """Updates the Ingress definition to include new path to to service (svc_name)."""
 
     res: ApplyResult = v1_net_api.read_namespaced_ingress(
@@ -173,4 +173,4 @@ async def add_ingress_rule(run_names: RunResourceNames) -> None:
     )  # type: ignore
     await asyncio.to_thread(res.get)
 
-    logger.info(f"Ingress rule added for {run_names.service}.")
+    logger.info(f"Ingress rule added for {run_names.service} for user {user_name}.")
