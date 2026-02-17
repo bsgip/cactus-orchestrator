@@ -18,8 +18,10 @@ from cactus_schema.orchestrator import (
     HEADER_USER_NAME,
     InitRunRequest,
     InitRunResponse,
+    ProceedResponse,
     RunResponse,
     StartRunResponse,
+    uri,
 )
 from cactus_schema.runner import (
     CriteriaEntry,
@@ -1407,3 +1409,37 @@ async def test_start_run_rejects_out_of_order_playlist_run(
     # Should be rejected with CONFLICT
     assert response.status_code == HTTPStatus.CONFLICT
     assert str(first_run_id) in response.text
+
+
+@pytest.mark.parametrize(
+    "run_id, handled, expected_status",
+    [
+        (1, True, HTTPStatus.OK),
+        (1, False, HTTPStatus.OK),
+        (5, True, HTTPStatus.OK),
+        (5, False, HTTPStatus.OK),
+        (2, None, HTTPStatus.GONE),
+        (6, None, HTTPStatus.NOT_FOUND),
+        (99, None, HTTPStatus.NOT_FOUND),
+    ],
+)
+@pytest.mark.asyncio
+async def test_proceed_proxy(
+    client, k8s_mock: MockedK8s, pg_base_config, valid_jwt_user1, run_id, handled, expected_status
+):
+    """Does fetching the run request list work under common conditions"""
+
+    # Act
+    expected_proceed_data = ProceedResponse(handled=handled)
+    k8s_mock.proceed.return_value = expected_proceed_data
+
+    res = await client.get(f"/run/{run_id}/proceed", headers={"Authorization": f"Bearer {valid_jwt_user1}"})
+
+    # Assert
+    assert res.status_code == expected_status
+    if expected_status == HTTPStatus.OK:
+        actual_proceed_data = ProceedResponse.from_json(res.text)
+        assert actual_proceed_data == expected_proceed_data
+        k8s_mock.proceed.assert_called_once()
+    else:
+        k8s_mock.proceed.assert_not_called()
