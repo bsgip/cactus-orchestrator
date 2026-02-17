@@ -35,7 +35,7 @@ from sqlalchemy.exc import NoResultFound
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from cactus_orchestrator.api.common import select_user_or_raise, select_user_run_group_or_raise
-from cactus_orchestrator.artifact import regenerate_pdf_report_new
+from cactus_orchestrator.artifact import regenerate_pdf_report
 from cactus_orchestrator.auth import AuthPerm, UserContext, jwt_validator
 from cactus_orchestrator.crud import (
     ACTIVE_RUN_STATUSES,
@@ -523,7 +523,7 @@ async def finalise_run(
         # Note: all other files in the run artifact remain unaffected.
         if reporting_data:
             try:
-                file_data = await regenerate_pdf_report_new(file_data=file_data, raw_reporting_data=reporting_data)
+                file_data = await regenerate_pdf_report(file_data=file_data, raw_reporting_data=reporting_data)
             except ValueError:
                 msg = f"Unable to update the run artifact {run.run_artifact.run_artifact_id} with a regenerated run report."
                 logger.error(msg)

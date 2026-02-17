@@ -89,94 +89,15 @@ async def replace_pdf_in_zip_data(pdf_data: bytes, zip_data: bytes, pdf_filename
     return updated_zip_data
 
 
-async def regenerate_pdf_report(run_artifact: RunArtifact) -> bytes:
-    """Updates the run artifact to include a regenerated pdf test procedure report.
+async def regenerate_pdf_report(file_data: bytes, raw_reporting_data: str) -> bytes:
+    """A pdf run report is generated from `reporting_data`, and replaces the existing
+    pdf stored in the `file_data` zip.
 
-    The pdf report is generated from `run_artifiact.reporting_data`, and replaces
-    the existing pdf stored in the `run_artifact.file_data` zip.
-
-    All other values (e.g. run_artifact_id remain unchanged).
+    All other files in the file_data zip archive remain unchanged.
 
     Args:
-        run_artifact (RunArtifact): The RunArtifact to be updated. Note: this value is mutated.
-    Returns:
-        bytes: the updated zip file data.
-    Raises:
-        ValueError if regeneration of artifact fails for any reason.
-    """
-    if run_artifact.reporting_data is None:
-        msg = "No reporting data found in run artifact."
-        raise ValueError(f"Artifact regeneration error: {msg}")
-
-    try:
-        reporting_data: ReportingData = ReportingData.from_json(run_artifact.reporting_data)  # type: ignore
-    except Exception as exc:
-        msg = "Failed to convert json to ReportingData instance."
-        logger.error(msg, exc_info=exc)
-        raise ValueError(f"Artifact regeneration error: {msg}")
-
-    msg = "Failed to generate pdf report from reporting data."
-    try:
-        pdf_data = await generate_pdf_report_from_run_artifact(reporting_data=reporting_data)
-    except Exception as exc:
-        logger.error(msg, exc_info=exc)
-        raise ValueError(f"Artifact regeneration error: {msg}")
-
-    if not pdf_data:
-        logger.error(msg)
-        raise ValueError(f"Artifact regeneration error: {msg}")
-
-    try:
-        CACTUS_TEST_PROCEDURE_REPORT_PREFIX = "CactusTestProcedureReport"
-        updated_zip_data = await replace_pdf_in_zip_data(
-            pdf_data=pdf_data, zip_data=run_artifact.file_data, pdf_filename_prefix=CACTUS_TEST_PROCEDURE_REPORT_PREFIX
-        )
-    except Exception as exc:
-        msg = "Failed to replace pdf in archive."
-        logger.error(msg, exc_info=exc)
-        raise ValueError(f"Artifact regeneration error: {msg}")
-
-    return updated_zip_data
-
-
-async def regenerate_run_artifact(session: AsyncSession, run_artifact: RunArtifact) -> RunArtifact:
-    """Regenerates the RunArtifact.
-
-    - Uses the reporting data to (re)generate the run report.
-    - Replaces the run report in the file data of `run_artifact`.
-    - Updates the run artifact in the orchestrator database (to reflect the new file data).
-    - Adds an entry to the RunReportGeneration table to record the fact the report was regenerated.
-
-    Args:
-        session: A database session.
-        run_artifact (RunArtifact): The RunArtifact to update.
-    Returns:
-        RunArtifact: the updated RunArtifact
-    Raises:
-        ValueError: if regeneration of pdf report fails
-    """
-
-    updated_zip_data = await regenerate_pdf_report(run_artifact=run_artifact)
-
-    # Update the file data
-    await update_runartifact_with_file_data(session=session, run_artifact=run_artifact, file_data=updated_zip_data)
-
-    # Record the successful regeneration
-    await create_run_report_generation_record(session=session, run_artifact_id=run_artifact.run_artifact_id)
-
-    return run_artifact
-
-
-async def regenerate_pdf_report_new(file_data: bytes, raw_reporting_data: str) -> bytes:
-    """Updates the run artifact to include a regenerated pdf test procedure report.
-
-    The pdf report is generated from `run_artifiact.reporting_data`, and replaces
-    the existing pdf stored in the `run_artifact.file_data` zip.
-
-    All other values (e.g. run_artifact_id remain unchanged).
-
-    Args:
-        run_artifact (RunArtifact): The RunArtifact to be updated. Note: this value is mutated.
+        file_data (bytes): a zip archive containing a pdf run report (to be replaced)
+        raw_reporting_data (str): ReportingData as a json encoded string
     Returns:
         bytes: the updated zip file data.
     Raises:
@@ -211,3 +132,33 @@ async def regenerate_pdf_report_new(file_data: bytes, raw_reporting_data: str) -
         raise ValueError(f"Artifact regeneration error: {msg}")
 
     return updated_zip_data
+
+
+async def regenerate_run_artifact(session: AsyncSession, run_artifact: RunArtifact) -> RunArtifact:
+    """Regenerates the RunArtifact.
+
+    - Uses the reporting data to (re)generate the run report.
+    - Replaces the run report in the file data of `run_artifact`.
+    - Updates the run artifact in the orchestrator database (to reflect the new file data).
+    - Adds an entry to the RunReportGeneration table to record the fact the report was regenerated.
+
+    Args:
+        session: A database session.
+        run_artifact (RunArtifact): The RunArtifact to update.
+    Returns:
+        RunArtifact: the updated RunArtifact
+    Raises:
+        ValueError: if regeneration of pdf report fails
+    """
+
+    updated_zip_data = await regenerate_pdf_report(
+        file_data=run_artifact.file_data, raw_reporting_data=run_artifact.reporting_data
+    )
+
+    # Update the file data
+    await update_runartifact_with_file_data(session=session, run_artifact=run_artifact, file_data=updated_zip_data)
+
+    # Record the successful regeneration
+    await create_run_report_generation_record(session=session, run_artifact_id=run_artifact.run_artifact_id)
+
+    return run_artifact

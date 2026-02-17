@@ -10,12 +10,7 @@ from cactus_test_definitions.client import TestProcedureId, get_test_procedure
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from cactus_orchestrator.artifact import (
-    regenerate_pdf_report,
-    regenerate_pdf_report_new,
-    regenerate_run_artifact,
-    replace_pdf_in_zip_data,
-)
+from cactus_orchestrator.artifact import regenerate_pdf_report, regenerate_run_artifact, replace_pdf_in_zip_data
 from cactus_orchestrator.crud import select_user_run_with_artifact
 from cactus_orchestrator.model import RunArtifact, RunReportGeneration
 
@@ -91,17 +86,7 @@ def run_artifact() -> RunArtifact:
 async def test_regenerate_pdf_report(run_artifact: RunArtifact):
 
     # Act
-    updated_zip_file_data = await regenerate_pdf_report(run_artifact=run_artifact)
-
-    # Assert
-    assert isinstance(updated_zip_file_data, bytes)
-
-
-@pytest.mark.asyncio
-async def test_regenerate_pdf_report_new(run_artifact: RunArtifact):
-
-    # Act
-    updated_zip_file_data = await regenerate_pdf_report_new(
+    updated_zip_file_data = await regenerate_pdf_report(
         file_data=run_artifact.file_data, raw_reporting_data=run_artifact.reporting_data
     )
 
@@ -110,43 +95,22 @@ async def test_regenerate_pdf_report_new(run_artifact: RunArtifact):
 
 
 @pytest.mark.asyncio
-async def test_regenerate_pdf_report_new_raises_exception(run_artifact: RunArtifact):
-    original_reporting_data = run_artifact.reporting_data
-
-    with pytest.raises(ValueError) as excinfo:
-        run_artifact.reporting_data = "{}"  # not valid reporting data json
-        await regenerate_pdf_report_new(
-            file_data=run_artifact.file_data, raw_reporting_data=run_artifact.reporting_data
-        )
-    assert "Failed to convert json" in str(excinfo.value)
-
-    with pytest.raises(ValueError) as excinfo:
-        run_artifact.reporting_data = original_reporting_data
-        run_artifact.file_data = b""  # not valid zip file
-        await regenerate_pdf_report_new(
-            file_data=run_artifact.file_data, raw_reporting_data=run_artifact.reporting_data
-        )
-    assert "Failed to replace pdf in archive" in str(excinfo.value)
-
-
-@pytest.mark.asyncio
 async def test_regenerate_pdf_report_raises_exception(run_artifact: RunArtifact):
     original_reporting_data = run_artifact.reporting_data
 
     with pytest.raises(ValueError) as excinfo:
-        run_artifact.reporting_data = None
-        await regenerate_pdf_report(run_artifact=run_artifact)
-    assert "No reporting data" in str(excinfo.value)
+        await regenerate_pdf_report(file_data=run_artifact.file_data, raw_reporting_data=None)
+    assert "Failed to convert json" in str(excinfo.value)
 
     with pytest.raises(ValueError) as excinfo:
         run_artifact.reporting_data = "{}"  # not valid reporting data json
-        await regenerate_pdf_report(run_artifact=run_artifact)
+        await regenerate_pdf_report(file_data=run_artifact.file_data, raw_reporting_data=run_artifact.reporting_data)
     assert "Failed to convert json" in str(excinfo.value)
 
     with pytest.raises(ValueError) as excinfo:
         run_artifact.reporting_data = original_reporting_data
         run_artifact.file_data = b""  # not valid zip file
-        await regenerate_pdf_report(run_artifact=run_artifact)
+        await regenerate_pdf_report(file_data=run_artifact.file_data, raw_reporting_data=run_artifact.reporting_data)
     assert "Failed to replace pdf in archive" in str(excinfo.value)
 
 
