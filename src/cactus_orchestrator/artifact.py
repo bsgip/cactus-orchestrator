@@ -165,3 +165,49 @@ async def regenerate_run_artifact(session: AsyncSession, run_artifact: RunArtifa
     await create_run_report_generation_record(session=session, run_artifact_id=run_artifact.run_artifact_id)
 
     return run_artifact
+
+
+async def regenerate_pdf_report_new(file_data: bytes, raw_reporting_data: str) -> bytes:
+    """Updates the run artifact to include a regenerated pdf test procedure report.
+
+    The pdf report is generated from `run_artifiact.reporting_data`, and replaces
+    the existing pdf stored in the `run_artifact.file_data` zip.
+
+    All other values (e.g. run_artifact_id remain unchanged).
+
+    Args:
+        run_artifact (RunArtifact): The RunArtifact to be updated. Note: this value is mutated.
+    Returns:
+        bytes: the updated zip file data.
+    Raises:
+        ValueError if regeneration of artifact fails for any reason.
+    """
+    try:
+        reporting_data: ReportingData = ReportingData.from_json(raw_reporting_data)  # type: ignore
+    except Exception as exc:
+        msg = "Failed to convert json to ReportingData instance."
+        logger.error(msg, exc_info=exc)
+        raise ValueError(f"Artifact regeneration error: {msg}")
+
+    msg = "Failed to generate pdf report from reporting data."
+    try:
+        pdf_data = await generate_pdf_report_from_run_artifact(reporting_data=reporting_data)
+    except Exception as exc:
+        logger.error(msg, exc_info=exc)
+        raise ValueError(f"Artifact regeneration error: {msg}")
+
+    if not pdf_data:
+        logger.error(msg)
+        raise ValueError(f"Artifact regeneration error: {msg}")
+
+    try:
+        CACTUS_TEST_PROCEDURE_REPORT_PREFIX = "CactusTestProcedureReport"
+        updated_zip_data = await replace_pdf_in_zip_data(
+            pdf_data=pdf_data, zip_data=file_data, pdf_filename_prefix=CACTUS_TEST_PROCEDURE_REPORT_PREFIX
+        )
+    except Exception as exc:
+        msg = "Failed to replace pdf in archive."
+        logger.error(msg, exc_info=exc)
+        raise ValueError(f"Artifact regeneration error: {msg}")
+
+    return updated_zip_data

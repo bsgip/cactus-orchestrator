@@ -1110,7 +1110,7 @@ def pg_regeneration_config(pg_base_config, reporting_data_json, file_data):
 async def test_get_run_artifact_data(
     k8s_mock: MockedK8s,
     client,
-    pg_regeneration_config,
+    pg_base_config,
     valid_jwt_user1,
     run_id,
     expected_status,
@@ -1120,19 +1120,16 @@ async def test_get_run_artifact_data(
     expected_group_name,
     expected_group_id,
 ):
-    """Does fetching the run artifact data work under common conditions
-
-    Also tests file_data gets regenerated for run_artifact(id=1)
-    """
+    """Does fetching the run artifact data work under common conditions"""
 
     # Arrange
-    original_artifact_data = None
-    async with generate_async_session(pg_regeneration_config) as session:
+    expected_artifact_data = None
+    async with generate_async_session(pg_base_config) as session:
         artifact = (
             await session.execute(select(RunArtifact).where(RunArtifact.run_artifact_id == expected_artifact_id))
         ).scalar_one_or_none()
         if artifact:
-            original_artifact_data = artifact.file_data
+            expected_artifact_data = artifact.file_data
 
     # Act
     res = await client.get(f"run/{run_id}/artifact", headers={"Authorization": f"Bearer {valid_jwt_user1}"})
@@ -1141,12 +1138,7 @@ async def test_get_run_artifact_data(
     assert res.status_code == expected_status
     if expected_status == HTTPStatus.OK:
 
-        if artifact.reporting_data is None:
-            assert original_artifact_data == res.read()
-        else:
-            # the file_data was regenerated from the artifacts reporting_data
-            # the new file data shouldn't match the previous (original) artifact data
-            assert original_artifact_data != res.read()
+        assert expected_artifact_data == res.read()
 
         assert res.headers[HEADER_USER_NAME] == expected_user
         assert res.headers[HEADER_TEST_ID] == expected_test_id
