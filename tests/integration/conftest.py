@@ -28,6 +28,7 @@ def k8s_mock() -> Generator[MockedK8s, None, None]:
         patch("cactus_orchestrator.api.run.RunnerClient.health") as health,
         patch("cactus_orchestrator.api.run.RunnerClient.list_requests") as list_requests,
         patch("cactus_orchestrator.api.run.RunnerClient.get_request") as get_request,
+        patch("cactus_orchestrator.api.run.RunnerClient.proceed") as proceed,
     ):
         yield MockedK8s(
             add_ingress_rule=add_ingress_rule,
@@ -45,6 +46,7 @@ def k8s_mock() -> Generator[MockedK8s, None, None]:
             health=health,
             list_requests=list_requests,
             get_request=get_request,
+            proceed=proceed,
         )
 
 

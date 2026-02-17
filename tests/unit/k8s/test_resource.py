@@ -39,7 +39,7 @@ async def test_clone_service(mock_v1_core_api, mock_thread_cls):
     mock_v1_core_api.create_namespaced_service.return_value = mock_thread_cls(None)
 
     # Act
-    await clone_service(template_resource_names, run_resource_names)
+    await clone_service(template_resource_names, run_resource_names, "test-user")
 
     # Assert
     mock_v1_core_api.read_namespaced_service.assert_called_once()
@@ -75,7 +75,7 @@ async def test_clone_statefulset(mock_v1_app_api, mock_thread_cls):
     mock_v1_app_api.read_namespaced_stateful_set.return_value = mock_thread_cls(mock_statefulset)
     mock_v1_app_api.create_namespaced_stateful_set.return_value = mock_thread_cls(None)
 
-    await clone_statefulset(template_resource_names, run_resource_names)
+    await clone_statefulset(template_resource_names, run_resource_names, "test-user")
 
     mock_v1_app_api.read_namespaced_stateful_set.assert_called_once()
     mock_v1_app_api.create_namespaced_stateful_set.assert_called_once()
@@ -146,7 +146,7 @@ async def test_add_ingress_rule(mock_v1_net_api, mock_thread_cls):
     mock_v1_net_api.patch_namespaced_ingress.return_value = mock_thread_cls(None)
 
     # Act
-    await add_ingress_rule(run_resource_names)
+    await add_ingress_rule(run_resource_names, "test-user")
 
     # Assert
     mock_v1_net_api.read_namespaced_ingress.assert_called_once()

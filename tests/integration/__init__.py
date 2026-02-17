@@ -24,3 +24,4 @@ class MockedK8s:
     last_interaction: Mock
     list_requests: Mock
     get_request: Mock
+    proceed: Mock
