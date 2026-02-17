@@ -654,10 +654,8 @@ async def finalise_run_and_teardown_teststack(
                                 )
                             else:
                                 # Test is initialized but not started - leave status as initialised
-                                logger.info(
-                                    f"""Playlist advanced: run {run.run_id} finalized,
-                                     next run {next_run.run_id} initialized (awaiting start)"""
-                                )
+                                logger.info(f"""Playlist advanced: run {run.run_id} finalized,
+                                     next run {next_run.run_id} initialized (awaiting start)""")
                             await db.session.commit()
                             should_teardown = False
                         elif runner_status.test_procedure_name == "-":
@@ -961,5 +959,5 @@ async def proceed_proxy(
             return await RunnerClient.proceed(s)
         except Exception as exc:
             msg = f"Error sending proceed to run {run.run_id}."
-            logger.error(msg)
+            logger.error(msg, exc_info=exc)
             raise HTTPException(status_code=HTTPStatus.INTERNAL_SERVER_ERROR, detail=msg)
