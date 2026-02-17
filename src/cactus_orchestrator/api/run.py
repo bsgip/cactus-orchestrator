@@ -17,6 +17,7 @@ from cactus_schema.orchestrator import (
     InitRunRequest,
     InitRunResponse,
     PlaylistRunInfo,
+    ProceedResponse,
     RunArtifactMultipleRequest,
     RunResponse,
     RunStatusResponse,
@@ -924,3 +925,39 @@ async def get_run_request_data(
                 status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
                 detail=f"Unable to connect to run {run.run_id}'s pod to fetch request {request_id}.",
             )
+
+
+@router.get(uri.RunProceed, status_code=HTTPStatus.OK)
+async def proceed_proxy(
+    run_id: int,
+    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.user_all}))],
+) -> ProceedResponse:
+    """Forwards the proceed request to the appropriate runner instance and returns the runners response back
+    to the client.
+    """
+    user = await select_user_or_raise(db.session, user_context)
+
+    # get the run - make sure it's still "running"
+    try:
+        run = await select_user_run(db.session, user.user_id, run_id)
+    except NoResultFound as exc:
+        logger.debug(exc)
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Run does not exist.")
+
+    if run.run_status not in ACTIVE_RUN_STATUSES:
+        raise HTTPException(
+            status_code=HTTPStatus.GONE, detail="Run {run_id} has terminated. Unable to send proceed signal."
+        )
+
+    run_resource_names = get_resource_names(run.teststack_id)
+    settings = get_current_settings()
+    async with ClientSession(
+        base_url=run_resource_names.runner_base_url,
+        timeout=ClientTimeout(settings.test_execution_comms_timeout_seconds),
+    ) as s:
+        try:
+            return await RunnerClient.proceed(s)
+        except Exception as exc:
+            msg = f"Error sending proceed to run {run.run_id}."
+            logger.error(msg, exc_info=exc)
+            raise HTTPException(status_code=HTTPStatus.INTERNAL_SERVER_ERROR, detail=msg)
