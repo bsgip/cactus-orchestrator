@@ -20,7 +20,6 @@ from fastapi_pagination import Page, paginate
 from sqlalchemy.exc import NoResultFound
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from cactus_orchestrator import artifact
 from cactus_orchestrator.api.procedure import test_procedures_by_id
 from cactus_orchestrator.api.run import (
     get_run_artifact_response_for_user,
@@ -29,6 +28,7 @@ from cactus_orchestrator.api.run import (
     select_user_run_group_or_raise,
 )
 from cactus_orchestrator.api.run_group import map_group_to_group_response
+from cactus_orchestrator.artifact import regenerate_run_artifact
 from cactus_orchestrator.auth import AuthPerm, UserContext, jwt_validator
 from cactus_orchestrator.crud import (
     ACTIVE_RUN_STATUSES,
@@ -42,6 +42,7 @@ from cactus_orchestrator.crud import (
     select_user_from_run,
     select_user_from_run_group,
     select_user_run,
+    select_user_run_with_artifact,
     select_users,
     update_compliance_generation_record_with_file_data,
 )
@@ -271,6 +272,49 @@ async def admin_get_run_artifact(
             )
         )
     user = await select_user_or_raise(db.session, user_context)
+
+    # Get the download data
+    return await get_run_artifact_response_for_user(user, run_id)
+
+
+@router.get(uri.AdminRunRegenerateReport, status_code=HTTPStatus.OK)
+async def admin_regenerate_report_and_get_run_artifact(
+    run_id: int,
+    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.admin_all}))],
+) -> Response:
+
+    # get user
+    user_context, original_user_context = await assume_user_context_from_run(
+        session=db.session, user_context=user_context, run_id=run_id
+    )
+    if user_context == original_user_context:
+        logger.error(
+            (
+                f"Failed to assume new user context ({run_id=},"
+                f" assumed_user_context={user_context}, {original_user_context=})"
+            )
+        )
+    user = await select_user_or_raise(db.session, user_context)
+
+    try:
+        run = await select_user_run_with_artifact(db.session, user.user_id, run_id)
+    except NoResultFound as exc:
+        logger.debug(exc)
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Run does not exist.")
+
+    if run.run_artifact is None:
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="RunArtifact does not exist.")
+
+    if run.run_artifact.reporting_data is None:
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="RunArtifact has no reporting data.")
+
+    try:
+        await regenerate_run_artifact(session=db.session, run_artifact=run.run_artifact)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=HTTPStatus.INTERNAL_SERVER_ERROR, detail="Unable to regenerate pdf run report ({exc})"
+        )
+    await db.session.commit()
 
     # Get the download data
     return await get_run_artifact_response_for_user(user, run_id)
