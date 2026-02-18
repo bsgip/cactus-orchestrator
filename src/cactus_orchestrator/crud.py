@@ -525,9 +525,7 @@ async def select_admin_stats(
 
     # 4. Runs per ISO week
     iso_week = func.to_char(Run.created_at, 'IYYY-"W"IW').label("iso_week")
-    week_result = await session.execute(
-        select(iso_week, func.count()).group_by(iso_week)
-    )
+    week_result = await session.execute(select(iso_week, func.count()).group_by(iso_week))
     runs_per_week = dict(week_result.tuples().all())
 
     # 5. Runs per user (join through run_group)
