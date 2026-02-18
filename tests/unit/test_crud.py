@@ -743,20 +743,18 @@ async def test_playlist_backward_compatibility_single_runs(pg_base_config):
 
 @pytest.mark.asyncio
 async def test_select_admin_stats_base_config(pg_base_config):
-    """Test select_admin_stats against the base_config fixture data.
-
-    base_config has:
+    """base_config has:
       3 users, 3 run groups (rg1: user1/v1.2, rg2: user1/v1.3-beta/storage, rg3: user2/v1.2)
       8 runs across 5 procedures
 
     Latest run per (run_group, procedure):
-      (rg1, ALL-01) -> run2: True   = passed
-      (rg1, ALL-02) -> run3: True   = passed
-      (rg1, ALL-03) -> run4: False  = failed
-      (rg1, ALL-04) -> run7: False  = failed
-      (rg1, ALL-05) -> run8: None   = inconclusive
-      (rg2, ALL-01) -> run5: None   = inconclusive
-      (rg3, GEN-02) -> run6: None   = inconclusive
+      (rg1, ALL-01) -> run2: True
+      (rg1, ALL-02) -> run3: True
+      (rg1, ALL-03) -> run4: False
+      (rg1, ALL-04) -> run7: False
+      (rg1, ALL-05) -> run8: None
+      (rg2, ALL-01) -> run5: None
+      (rg3, GEN-02) -> run6: None
     """
 
     test_procedures_by_id = get_all_test_procedures()
