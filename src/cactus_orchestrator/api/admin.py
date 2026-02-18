@@ -5,6 +5,7 @@ from typing import Annotated
 
 from cactus_runner.client import ClientSession, ClientTimeout, RunnerClient
 from cactus_schema.orchestrator import (
+    AdminStatsResponse,
     RunGroupResponse,
     RunResponse,
     TestProcedureRunSummaryResponse,
@@ -33,6 +34,7 @@ from cactus_orchestrator.auth import AuthPerm, UserContext, jwt_validator
 from cactus_orchestrator.crud import (
     ACTIVE_RUN_STATUSES,
     insert_compliance_generation_record,
+    select_admin_stats,
     select_group_runs_aggregated_by_procedure,
     select_group_runs_for_procedure,
     select_run_group_counts_for_user,
@@ -170,6 +172,13 @@ async def admin_get_users(
         for user in users
     ]
     return resp
+
+
+@router.get(uri.AdminStats, status_code=HTTPStatus.OK)
+async def admin_get_stats(
+    _: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.admin_all}))],
+) -> AdminStatsResponse:
+    return await select_admin_stats(db.session, test_procedures_by_id)
 
 
 @router.get(uri.AdminRunGroupProceduresList, status_code=HTTPStatus.OK)

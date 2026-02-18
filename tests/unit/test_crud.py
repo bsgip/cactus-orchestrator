@@ -9,6 +9,7 @@ from cactus_test_definitions.client import TestProcedureId
 from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError, NoResultFound
 from uuid import uuid4
+from cactus_test_definitions.client import get_all_test_procedures
 
 from cactus_orchestrator.auth import UserContext
 from cactus_orchestrator.crud import (
@@ -20,6 +21,7 @@ from cactus_orchestrator.crud import (
     insert_run_group,
     insert_user,
     select_active_runs_for_user,
+    select_admin_stats,
     select_group_runs_aggregated_by_procedure,
     select_group_runs_for_procedure,
     select_next_playlist_run,
@@ -737,3 +739,101 @@ async def test_playlist_backward_compatibility_single_runs(pg_base_config):
         assert run.playlist_execution_id is None
         assert run.playlist_order is None
         assert run.testprocedure_id == "ALL-01"
+
+
+@pytest.mark.asyncio
+async def test_select_admin_stats_base_config(pg_base_config):
+    """base_config has:
+      3 users, 3 run groups (rg1: user1/v1.2, rg2: user1/v1.3-beta/storage, rg3: user2/v1.2)
+      8 runs across 5 procedures
+
+    Latest run per (run_group, procedure):
+      (rg1, ALL-01) -> run2: True
+      (rg1, ALL-02) -> run3: True
+      (rg1, ALL-03) -> run4: False
+      (rg1, ALL-04) -> run7: False
+      (rg1, ALL-05) -> run8: None
+      (rg2, ALL-01) -> run5: None
+      (rg3, GEN-02) -> run6: None
+    """
+
+    test_procedures_by_id = get_all_test_procedures()
+
+    async with generate_async_session(pg_base_config) as session:
+        stats = await select_admin_stats(session, test_procedures_by_id)
+
+    # Top-level counts
+    assert stats.total_runs == 8
+    assert stats.max_run_id == 8
+    assert stats.total_users == 3
+    assert stats.total_run_groups == 3
+
+    # Pass/fail based on latest run per procedure per run group
+    assert stats.total_passed == 2
+    assert stats.total_failed == 2
+
+    # version
+    assert stats.version_counts == {"v1.2": 2, "v1.3-beta/storage": 1}
+
+    # All runs are on 2024-01-01
+    assert stats.runs_per_week == {"2024-W01": 8}
+
+    # Runs per user
+    assert stats.runs_per_user == {"user1@cactus.example.com": 7, "user2@cactus.example.com": 1}
+
+    # Procedures list should contain all test definitions
+    assert len(stats.procedures) == len(test_procedures_by_id)
+
+    # Check specific procedures with runs
+    procs_by_id = {p["test_procedure_id"]: p for p in stats.procedures}
+
+    # All pass
+    all_01 = procs_by_id["ALL-01"]
+    assert all_01["total_runs"] == 3  # 1,2,5
+    assert all_01["passed"] == 1  # 2
+    assert all_01["failed"] == 0
+    assert all_01["latest_passed"] == 1
+    assert all_01["latest_failed"] == 0
+
+    # One fail
+    all_03 = procs_by_id["ALL-03"]
+    assert all_03["total_runs"] == 1
+    assert all_03["passed"] == 0
+    assert all_03["failed"] == 1  # 4
+    assert all_03["latest_passed"] == 0
+    assert all_03["latest_failed"] == 1
+
+    # One none
+    gen_02 = procs_by_id["GEN-02"]
+    assert gen_02["total_runs"] == 1
+    assert gen_02["passed"] == 0
+    assert gen_02["failed"] == 0
+    assert gen_02["latest_passed"] == 0
+    assert gen_02["latest_failed"] == 0  # run6 has criteria=None
+
+    # Every procedure should have metadata even if no runs
+    for proc in stats.procedures:
+        assert "classes" in proc and isinstance(proc["classes"], list), f"{proc['test_procedure_id']} missing classes"
+
+
+@pytest.mark.asyncio
+async def test_select_admin_stats_empty(pg_empty_config):
+    """Test select_admin_stats on an empty database."""
+    from cactus_test_definitions.client import get_all_test_procedures
+
+    test_procedures_by_id = get_all_test_procedures()
+
+    async with generate_async_session(pg_empty_config) as session:
+        stats = await select_admin_stats(session, test_procedures_by_id)
+
+    assert stats.total_runs == 0
+    assert stats.max_run_id == 0
+    assert stats.total_passed == 0
+    assert stats.total_failed == 0
+    assert stats.total_users == 0
+    assert stats.total_run_groups == 0
+    assert stats.version_counts == {}
+    assert stats.runs_per_week == {}
+    assert stats.runs_per_user == {}
+    assert len(stats.procedures) == len(test_procedures_by_id)
+    assert all(p["total_runs"] == 0 for p in stats.procedures)

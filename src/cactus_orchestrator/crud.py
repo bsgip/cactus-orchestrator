@@ -1,11 +1,12 @@
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Sequence
+from typing import Any, Sequence
 
+from cactus_schema.orchestrator import AdminStatsResponse
 from cactus_test_definitions import CSIPAusVersion
 from cactus_test_definitions.client import TestProcedureId
-from sqlalchemy import and_, delete, func, select, update
+from sqlalchemy import String, and_, case, cast, delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload, selectinload, undefer
 
@@ -488,3 +489,120 @@ async def select_playlist_runs_with_status(
     stmt = select(Run).where(Run.playlist_execution_id == playlist_execution_id).order_by(Run.playlist_order)
     result = await session.execute(stmt)
     return result.scalars().all()
+
+
+async def select_admin_stats(
+    session: AsyncSession,
+    test_procedures_by_id: dict[TestProcedureId, Any],
+) -> AdminStatsResponse:
+    """
+    Aggregates platform-wide stats for the admin stats page.
+
+    total_passed/total_failed are based on the latest run per procedure per run group
+    (i.e. the current pass/fail state, not historical retry counts).
+
+    I nearly combined some of these queries to reduce the total number (some hit the same table twice), but I dont think
+    the small performance benefit is worth the complexity of the queries needed.
+    """
+
+    # 1. Scalar totals from run table
+    run_totals = await session.execute(select(func.count(Run.run_id), func.coalesce(func.max(Run.run_id), 0)))
+    total_runs, max_run_id = run_totals.one()
+
+    # 2. User count
+    user_count_result = await session.execute(select(func.count(User.user_id)))
+    total_users = user_count_result.scalar_one()
+
+    # 3. Version counts (from run_group) — also derive total_run_groups
+    version_result = await session.execute(
+        select(RunGroup.csip_aus_version, func.count()).group_by(RunGroup.csip_aus_version)
+    )
+    version_counts: dict[str, int] = {}
+    total_run_groups = 0
+    for version, count in version_result.tuples().all():
+        version_counts[version] = count
+        total_run_groups += count
+
+    # 4. Runs per ISO week
+    iso_week = func.to_char(Run.created_at, 'IYYY-"W"IW').label("iso_week")
+    week_result = await session.execute(select(iso_week, func.count()).group_by(iso_week))
+    runs_per_week = dict(week_result.tuples().all())
+
+    # 5. Runs per user (join through run_group)
+    user_run_result = await session.execute(
+        select(
+            func.coalesce(User.user_name, cast(User.user_id, String)),
+            func.count(Run.run_id),
+        )
+        .select_from(Run)
+        .join(RunGroup, Run.run_group_id == RunGroup.run_group_id)
+        .join(User, RunGroup.user_id == User.user_id)
+        .group_by(User.user_id, User.user_name)
+    )
+    runs_per_user = dict(user_run_result.tuples().all())
+
+    # 6. Per-procedure historical totals (pass/fail across all runs)
+    proc_result = await session.execute(
+        select(
+            Run.testprocedure_id,
+            func.count(),
+            func.count(case((Run.all_criteria_met == True, 1))),  # noqa: E712
+            func.count(case((Run.all_criteria_met == False, 1))),  # noqa: E712
+        ).group_by(Run.testprocedure_id)
+    )
+    proc_totals = {row[0]: (row[1], row[2], row[3]) for row in proc_result.all()}
+
+    # 7. Latest run per (run_group, procedure) — current pass/fail state
+    #    Uses run_group_id_testprocedure_id_run_id_idx for the DISTINCT ON
+    #    Grouped by procedure; top-level total_passed/total_failed derived in Python
+    latest_by_proc = (
+        select(Run.testprocedure_id, Run.all_criteria_met)
+        .distinct(Run.run_group_id, Run.testprocedure_id)
+        .order_by(Run.run_group_id, Run.testprocedure_id, Run.run_id.desc())
+    ).subquery()
+    latest_proc_result = await session.execute(
+        select(
+            latest_by_proc.c.testprocedure_id,
+            func.count(case((latest_by_proc.c.all_criteria_met == True, 1))),  # noqa: E712
+            func.count(case((latest_by_proc.c.all_criteria_met == False, 1))),  # noqa: E712
+        )
+        .select_from(latest_by_proc)
+        .group_by(latest_by_proc.c.testprocedure_id)
+    )
+    proc_latest: dict[str, tuple[int, int]] = {}
+    total_passed = 0
+    total_failed = 0
+    for row in latest_proc_result.all():
+        proc_latest[row[0]] = (row[1], row[2])
+        total_passed += row[1]
+        total_failed += row[2]
+
+    # Build procedure list from test definitions, merging in DB stats
+    procedures = []
+    for tp_id, definition in test_procedures_by_id.items():
+        run_count, passed, failed = proc_totals.get(tp_id.value, (0, 0, 0))
+        latest_passed, latest_failed = proc_latest.get(tp_id.value, (0, 0))
+        procedures.append(
+            {
+                "test_procedure_id": tp_id.value,
+                "classes": definition.classes,
+                "total_runs": run_count,
+                "passed": passed,
+                "failed": failed,
+                "latest_passed": latest_passed,
+                "latest_failed": latest_failed,
+            }
+        )
+
+    return AdminStatsResponse(
+        total_runs=total_runs,
+        max_run_id=max_run_id,
+        total_passed=total_passed,
+        total_failed=total_failed,
+        total_users=total_users,
+        total_run_groups=total_run_groups,
+        version_counts=version_counts,
+        runs_per_week=runs_per_week,
+        runs_per_user=runs_per_user,
+        procedures=procedures,
+    )
