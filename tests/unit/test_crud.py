@@ -815,8 +815,6 @@ async def test_select_admin_stats_base_config(pg_base_config):
 
     # Every procedure should have metadata even if no runs
     for proc in stats.procedures:
-        assert "description" in proc and proc["description"], f"{proc['test_procedure_id']} missing description"
-        assert "category" in proc and proc["category"], f"{proc['test_procedure_id']} missing category"
         assert "classes" in proc and isinstance(proc["classes"], list), f"{proc['test_procedure_id']} missing classes"
 
 

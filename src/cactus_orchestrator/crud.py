@@ -587,8 +587,6 @@ async def select_admin_stats(
         procedures.append(
             {
                 "test_procedure_id": tp_id.value,
-                "description": definition.description,
-                "category": definition.category,
                 "classes": definition.classes,
                 "total_runs": run_count,
                 "passed": passed,
