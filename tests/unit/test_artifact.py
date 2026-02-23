@@ -5,7 +5,14 @@ import pytest
 from assertical.asserts.time import assert_nowish
 from assertical.fake.generator import generate_class_instance
 from assertical.fixtures.postgres import generate_async_session
-from cactus_runner.models import ActiveTestProcedure, CheckResult, ReportingData, ResourceAnnotations, RunnerState
+from cactus_runner.models import (
+    ActiveTestProcedure,
+    CheckResult,
+    ReportingData,
+    ReportingData_v1,
+    ResourceAnnotations,
+    RunnerState,
+)
 from cactus_test_definitions.client import TestProcedureId, get_test_procedure
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -75,7 +82,7 @@ def run_artifact() -> RunArtifact:
         ),
     )
     reporting_data = generate_class_instance(
-        ReportingData, check_results={"key": generate_class_instance(CheckResult)}, runner_state=runner_state
+        ReportingData_v1, check_results={"key": generate_class_instance(CheckResult)}, runner_state=runner_state
     )
     reporting_data_json = reporting_data.to_json()
     artifact = RunArtifact(compression="gzip", file_data=zip_data, reporting_data=reporting_data_json)
@@ -86,8 +93,9 @@ def run_artifact() -> RunArtifact:
 async def test_regenerate_pdf_report(run_artifact: RunArtifact):
 
     # Act
+    version = 1
     updated_zip_file_data = await regenerate_pdf_report(
-        file_data=run_artifact.file_data, raw_reporting_data=run_artifact.reporting_data
+        file_data=run_artifact.file_data, raw_reporting_data=run_artifact.reporting_data, version=version
     )
 
     # Assert
@@ -98,19 +106,24 @@ async def test_regenerate_pdf_report(run_artifact: RunArtifact):
 async def test_regenerate_pdf_report_raises_exception(run_artifact: RunArtifact):
     original_reporting_data = run_artifact.reporting_data
 
+    version = 1
     with pytest.raises(ValueError) as excinfo:
-        await regenerate_pdf_report(file_data=run_artifact.file_data, raw_reporting_data=None)
+        await regenerate_pdf_report(file_data=run_artifact.file_data, raw_reporting_data=None, version=version)
     assert "Failed to convert json" in str(excinfo.value)
 
     with pytest.raises(ValueError) as excinfo:
         run_artifact.reporting_data = "{}"  # not valid reporting data json
-        await regenerate_pdf_report(file_data=run_artifact.file_data, raw_reporting_data=run_artifact.reporting_data)
+        await regenerate_pdf_report(
+            file_data=run_artifact.file_data, raw_reporting_data=run_artifact.reporting_data, version=version
+        )
     assert "Failed to convert json" in str(excinfo.value)
 
     with pytest.raises(ValueError) as excinfo:
         run_artifact.reporting_data = original_reporting_data
         run_artifact.file_data = b""  # not valid zip file
-        await regenerate_pdf_report(file_data=run_artifact.file_data, raw_reporting_data=run_artifact.reporting_data)
+        await regenerate_pdf_report(
+            file_data=run_artifact.file_data, raw_reporting_data=run_artifact.reporting_data, version=version
+        )
     assert "Failed to replace pdf in archive" in str(excinfo.value)
 
 

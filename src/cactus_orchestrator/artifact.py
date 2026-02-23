@@ -15,7 +15,7 @@ from cactus_orchestrator.crud import (
 from cactus_orchestrator.model import ComplianceRecord, RunArtifact, User
 from cactus_orchestrator.reporting.compliance import get_compliance_for_run_group, get_procedure_mapping
 from cactus_orchestrator.reporting.compliance_reporting import pdf_report_as_bytes
-from cactus_orchestrator.reporting.generate import generate_pdf_report_from_run_artifact
+from cactus_orchestrator.reporting.generate import generate_pdf_report_v1
 
 logger = logging.getLogger(__name__)
 
@@ -89,7 +89,7 @@ async def replace_pdf_in_zip_data(pdf_data: bytes, zip_data: bytes, pdf_filename
     return updated_zip_data
 
 
-async def regenerate_pdf_report(file_data: bytes, raw_reporting_data: str) -> bytes:
+async def regenerate_pdf_report(file_data: bytes, raw_reporting_data: str, version: int) -> bytes:
     """A pdf run report is generated from `reporting_data`, and replaces the existing
     pdf stored in the `file_data` zip.
 
@@ -98,13 +98,14 @@ async def regenerate_pdf_report(file_data: bytes, raw_reporting_data: str) -> by
     Args:
         file_data (bytes): a zip archive containing a pdf run report (to be replaced)
         raw_reporting_data (str): ReportingData as a json encoded string
+        version (int): the version of the reporting data in `raw_reporting_data`.
     Returns:
         bytes: the updated zip file data.
     Raises:
         ValueError if regeneration of artifact fails for any reason.
     """
     try:
-        reporting_data: ReportingData = ReportingData.from_json(raw_reporting_data)  # type: ignore
+        reporting_data = ReportingData.from_json(version, raw_reporting_data)  # type: ignore
     except Exception as exc:
         msg = "Failed to convert json to ReportingData instance."
         logger.error(msg, exc_info=exc)
@@ -112,7 +113,10 @@ async def regenerate_pdf_report(file_data: bytes, raw_reporting_data: str) -> by
 
     msg = "Failed to generate pdf report from reporting data."
     try:
-        pdf_data = await generate_pdf_report_from_run_artifact(reporting_data=reporting_data)
+        if version == 1:
+            pdf_data = await generate_pdf_report_v1(reporting_data=reporting_data)
+        else:
+            raise ValueError(f"Artifact regneration error: Unknown version of reporting data ({version})")
     except Exception as exc:
         logger.error(msg, exc_info=exc)
         raise ValueError(f"Artifact regeneration error: {msg}")
@@ -151,8 +155,9 @@ async def regenerate_run_artifact(session: AsyncSession, run_artifact: RunArtifa
         ValueError: if regeneration of pdf report fails
     """
 
+    version = 1
     updated_zip_data = await regenerate_pdf_report(
-        file_data=run_artifact.file_data, raw_reporting_data=run_artifact.reporting_data
+        file_data=run_artifact.file_data, raw_reporting_data=run_artifact.reporting_data, version=version
     )
 
     # Update the file data

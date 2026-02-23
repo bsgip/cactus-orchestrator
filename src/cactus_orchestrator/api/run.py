@@ -532,8 +532,11 @@ async def finalise_run(
         # Only attempt regeneration if there is reporting data
         # Note: all other files in the run artifact remain unaffected.
         if reporting_data:
+            version = 1
             try:
-                file_data = await regenerate_pdf_report(file_data=file_data, raw_reporting_data=reporting_data)
+                file_data = await regenerate_pdf_report(
+                    file_data=file_data, raw_reporting_data=reporting_data, version=version
+                )
             except ValueError:
                 msg = f"Unable to update the run artifact {run.run_artifact.run_artifact_id} with a regenerated run report."
                 logger.error(msg)

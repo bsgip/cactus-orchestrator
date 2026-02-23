@@ -1,13 +1,13 @@
 import pytest
 from assertical.fake.generator import generate_class_instance
-from cactus_runner.models import ActiveTestProcedure, CheckResult, ReportingData, ResourceAnnotations, RunnerState
+from cactus_runner.models import ActiveTestProcedure, CheckResult, ReportingData_v1, ResourceAnnotations, RunnerState
 from cactus_test_definitions.client import TestProcedureId, get_test_procedure
 
-from cactus_orchestrator.reporting.generate import generate_pdf_report_from_run_artifact
+from cactus_orchestrator.reporting.generate import generate_pdf_report_v1
 
 
 @pytest.mark.asyncio
-async def test_generate_pdf_report():
+async def test_generate_pdf_report_v1():
     # Arrange
     runner_state = generate_class_instance(
         RunnerState,
@@ -20,11 +20,11 @@ async def test_generate_pdf_report():
         ),
     )
     reporting_data = generate_class_instance(
-        ReportingData, check_results={"key": generate_class_instance(CheckResult)}, runner_state=runner_state
+        ReportingData_v1, check_results={"key": generate_class_instance(CheckResult)}, runner_state=runner_state
     )
 
     # Act
-    pdf_data = await generate_pdf_report_from_run_artifact(reporting_data=reporting_data)
+    pdf_data = await generate_pdf_report_v1(reporting_data=reporting_data)
 
     # Assert
     assert isinstance(pdf_data, bytes)
