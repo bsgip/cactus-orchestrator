@@ -391,10 +391,9 @@ async def test_regenerate_run_report_and_get_artifact_data(
         ).scalar_one_or_none()
         if artifact:
             if artifact.reporting_data:
-                version = 1
                 # We have reporting data so regeneration will update the file_data
                 await regenerate_pdf_report(
-                    file_data=artifact.file_data, raw_reporting_data=artifact.reporting_data, version=version
+                    file_data=artifact.file_data, raw_reporting_data=artifact.reporting_data, version=artifact.version
                 )
                 original_artifact_data = artifact.file_data
                 check_for_regeneration = True

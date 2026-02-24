@@ -1,5 +1,6 @@
 import asyncio
 import io
+import json
 import logging
 import zipfile
 from datetime import datetime, timezone
@@ -523,7 +524,7 @@ async def finalise_run(
         reporting_data = None
         for name in zip_file.namelist():
             # There should 0 or 1 file that starts with reporting data
-            if name.startswith("ReportingData"):
+            if name.startswith("ReportingData_v"):
                 reporting_data = zip_file.read(name).decode()
                 break
 
@@ -532,13 +533,13 @@ async def finalise_run(
         # Only attempt regeneration if there is reporting data
         # Note: all other files in the run artifact remain unaffected.
         if reporting_data:
-            version = 1
             try:
+                version = json.loads(reporting_data)["version"]
                 file_data = await regenerate_pdf_report(
                     file_data=file_data, raw_reporting_data=reporting_data, version=version
                 )
-            except ValueError:
-                msg = f"Unable to update the run artifact {run.run_artifact.run_artifact_id} with a regenerated run report."
+            except Exception as exc:
+                msg = f"Unable to update the run artifact {run.run_artifact.run_artifact_id} with a regenerated run report. Reason={exc}"
                 logger.error(msg)
 
         artifact = await create_runartifact(session, compression, file_data, reporting_data)

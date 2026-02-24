@@ -51,8 +51,8 @@ def k8s_mock() -> Generator[MockedK8s, None, None]:
 
 
 @pytest.fixture
-def zip_file_data() -> bytes:
-    json_reporting_data = ""
+def zip_file_data(reporting_data_json, reporting_data_version) -> bytes:
+    json_reporting_data = reporting_data_json
 
     # Work in a temporary directory
     with tempfile.TemporaryDirectory() as tempdirname:
@@ -64,7 +64,7 @@ def zip_file_data() -> bytes:
 
         # Create reporting data json file
         if json_reporting_data is not None:
-            file_path = archive_dir / f"ReportingData.json"
+            file_path = archive_dir / f"ReportingData_v{reporting_data_version}.json"
             with open(file_path, "w") as f:
                 f.write(json_reporting_data)
 

@@ -155,9 +155,8 @@ async def regenerate_run_artifact(session: AsyncSession, run_artifact: RunArtifa
         ValueError: if regeneration of pdf report fails
     """
 
-    version = 1
     updated_zip_data = await regenerate_pdf_report(
-        file_data=run_artifact.file_data, raw_reporting_data=run_artifact.reporting_data, version=version
+        file_data=run_artifact.file_data, raw_reporting_data=run_artifact.reporting_data, version=run_artifact.version
     )
 
     # Update the file data

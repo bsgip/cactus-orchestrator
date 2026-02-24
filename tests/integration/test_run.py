@@ -1,8 +1,10 @@
+import io
 import os
+import zipfile
 from datetime import datetime, timedelta, timezone
 from http import HTTPMethod, HTTPStatus
 from itertools import product
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import pytest
 from aiohttp import ClientConnectorDNSError
@@ -749,8 +751,9 @@ def test_is_all_criteria_met(runner_status: RunnerStatus | None, expected: bool 
     ],
 )
 @pytest.mark.asyncio
+@patch("cactus_orchestrator.api.run.regenerate_pdf_report")
 async def test_finalise_run_creates_run_artifact_and_updates_run(
-    pg_base_config, k8s_mock: MockedK8s, zip_file_data: bytes, runner_status, all_criteria_met
+    regenerate_mock, pg_base_config, k8s_mock: MockedK8s, zip_file_data: bytes, runner_status, all_criteria_met
 ):
     """Finalize correctly updates the DB with data requested from the runner"""
     # Arrange
@@ -760,6 +763,7 @@ async def test_finalise_run_creates_run_artifact_and_updates_run(
     k8s_mock.finalize.return_value = finalize_data
     finalise_time = datetime(2023, 4, 5, tzinfo=timezone.utc)
     timeout_seconds = 10
+    regenerate_mock.return_value = finalize_data
 
     # Act
     async with generate_async_session(pg_base_config) as session:
@@ -772,6 +776,8 @@ async def test_finalise_run_creates_run_artifact_and_updates_run(
     # Assert
     k8s_mock.status.assert_called_once()
     k8s_mock.finalize.assert_called_once()
+    regenerate_mock.assert_called_once()
+
     async with generate_async_session(pg_base_config) as session:
         run = (
             await session.execute(select(Run).where(Run.run_id == 1).options(selectinload(Run.run_artifact)))
@@ -784,7 +790,9 @@ async def test_finalise_run_creates_run_artifact_and_updates_run(
 
 
 @pytest.mark.asyncio
+@patch("cactus_orchestrator.api.run.regenerate_pdf_report")
 async def test_finalise_run_handles_runner_finalize_failure(
+    regenerate_mock,
     pg_base_config,
     k8s_mock: MockedK8s,
 ):
@@ -798,6 +806,7 @@ async def test_finalise_run_handles_runner_finalize_failure(
     k8s_mock.finalize.side_effect = Exception("mock exception")
     finalise_time = datetime(2023, 4, 5, tzinfo=timezone.utc)
     timeout_seconds = 10
+    regenerate_mock.return_value = b""
 
     # Act
     async with generate_async_session(pg_base_config) as session:
@@ -822,7 +831,9 @@ async def test_finalise_run_handles_runner_finalize_failure(
 
 
 @pytest.mark.asyncio
+@patch("cactus_orchestrator.api.run.regenerate_pdf_report")
 async def test_finalise_run_handles_runner_status_failure(
+    regenerate_mock,
     pg_base_config,
     k8s_mock: MockedK8s,
     zip_file_data: bytes,
@@ -835,6 +846,7 @@ async def test_finalise_run_handles_runner_status_failure(
     k8s_mock.finalize.return_value = finalize_data
     finalise_time = datetime(2023, 4, 5, tzinfo=timezone.utc)
     timeout_seconds = 10
+    regenerate_mock.return_value = finalize_data
 
     # Act
     async with generate_async_session(pg_base_config) as session:
@@ -859,13 +871,15 @@ async def test_finalise_run_handles_runner_status_failure(
 
 
 @pytest.mark.asyncio
+@patch("cactus_orchestrator.api.run.regenerate_pdf_report")
 async def test_finalise_run_and_teardown_teststack_success(
-    client, pg_base_config, k8s_mock, zip_file_data, valid_jwt_user1
+    regenerate_mock, client, pg_base_config, k8s_mock, zip_file_data, valid_jwt_user1
 ):
     # Arrange
     finalize_data = zip_file_data
     k8s_mock.finalize.return_value = finalize_data
     k8s_mock.status.return_value = generate_class_instance(RunnerStatus, step_status={})
+    regenerate_mock.return_value = finalize_data
 
     # Act
     response = await client.post("/run/1/finalise", headers={"Authorization": f"Bearer {valid_jwt_user1}"})
@@ -889,8 +903,9 @@ async def test_finalise_run_and_teardown_teststack_success(
 
 
 @pytest.mark.asyncio
+@patch("cactus_orchestrator.api.run.regenerate_pdf_report")
 async def test_finalise_run_and_teardown_teststack_idempotent(
-    client, pg_base_config, k8s_mock, zip_file_data, valid_jwt_user1
+    regenerate_mock, client, pg_base_config, k8s_mock, zip_file_data, valid_jwt_user1
 ):
     """Tests that finalising the same run multiple times will not cause any weird side effects"""
 
@@ -901,6 +916,7 @@ async def test_finalise_run_and_teardown_teststack_idempotent(
         generate_class_instance(RunnerStatus, step_status={}),
         Exception("Mock exception - shouldn't be raised"),
     ]
+    regenerate_mock.return_value = finalize_data
 
     # First request should perform normally and update the DB
     response1 = await client.post("/run/1/finalise", headers={"Authorization": f"Bearer {valid_jwt_user1}"})

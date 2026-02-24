@@ -354,15 +354,14 @@ async def client(pg_empty_config, patch_jwks_request):
 
 
 @pytest.fixture
-def reporting_data_json():
+def reporting_data_version():
+    return 1
 
-    from cactus_runner.models import (
-        ActiveTestProcedure,
-        CheckResult,
-        ReportingData_v1,
-        ResourceAnnotations,
-        RunnerState,
-    )
+
+@pytest.fixture
+def reporting_data_json(reporting_data_version):
+
+    from cactus_runner.models import ActiveTestProcedure, CheckResult, ReportingData, ResourceAnnotations, RunnerState
     from cactus_test_definitions.client import TestProcedureId, get_test_procedure
 
     runner_state = generate_class_instance(
@@ -376,7 +375,9 @@ def reporting_data_json():
         ),
     )
     reporting_data = generate_class_instance(
-        ReportingData_v1, check_results={"key": generate_class_instance(CheckResult)}, runner_state=runner_state
+        ReportingData.v(reporting_data_version),
+        check_results={"key": generate_class_instance(CheckResult)},
+        runner_state=runner_state,
     )
     reporting_data_json = reporting_data.to_json()
     return reporting_data_json
@@ -404,10 +405,10 @@ def file_data():
 
 
 @pytest.fixture
-def pg_regeneration_config(pg_base_config, reporting_data_json, file_data):
+def pg_regeneration_config(pg_base_config, reporting_data_json, reporting_data_version, file_data):
     """Adds zip file data and working reporting data to run artifact id 3 (run 5)"""
-    stmt = """UPDATE run_artifact SET reporting_data = %s, file_data = %s WHERE id = 3;"""
+    stmt = """UPDATE run_artifact SET reporting_data = %s, version = %s, file_data = %s WHERE id = 3;"""
     with pg_base_config.cursor() as cursor:
-        cursor.execute(stmt, (reporting_data_json, file_data))
+        cursor.execute(stmt, (reporting_data_json, reporting_data_version, file_data))
         pg_base_config.commit()
     yield pg_base_config
