@@ -20,6 +20,7 @@ from fastapi_pagination import Page, paginate
 from sqlalchemy.exc import NoResultFound
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from cactus_orchestrator import artifact
 from cactus_orchestrator.api.procedure import test_procedures_by_id
 from cactus_orchestrator.api.run import (
     get_run_artifact_response_for_user,
@@ -312,7 +313,7 @@ async def admin_regenerate_report_and_get_run_artifact(
         await regenerate_run_artifact(session=db.session, run_artifact=run.run_artifact)
     except ValueError as exc:
         raise HTTPException(
-            status_code=HTTPStatus.INTERNAL_SERVER_ERROR, detail="Unable to regenerate pdf run report ({exc})"
+            status_code=HTTPStatus.INTERNAL_SERVER_ERROR, detail=f"Unable to regenerate pdf run report ({exc})"
         )
     await db.session.commit()
 

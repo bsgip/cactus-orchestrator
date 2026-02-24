@@ -539,7 +539,10 @@ async def finalise_run(
                     file_data=file_data, raw_reporting_data=reporting_data, version=version
                 )
             except Exception as exc:
-                msg = f"Unable to update the run artifact {run.run_artifact.run_artifact_id} with a regenerated run report. Reason={exc}"
+                msg = (
+                    f"Unable to update the run artifact {run.run_artifact.run_artifact_id}"
+                    f" with a regenerated run report. Reason={exc}"
+                )
                 logger.error(msg)
 
         artifact = await create_runartifact(session, compression, file_data, reporting_data)
