@@ -71,7 +71,7 @@ class ConditionalSpacer(Spacer):
     the requested height of the spacer.
     """
 
-    def wrap(self, aW, aH):
+    def wrap(self, aW, aH):  # type: ignore
         height = min(self.height, aH - 1e-8)
         return (aW, height)
 
@@ -607,7 +607,7 @@ def generate_der_table_data(obj: object, attributes_to_include: list[str]) -> li
             return attribute.removesuffix(suffix)
         return attribute
 
-    def attribute_value(obj: object, attribute: str):
+    def attribute_value(obj: object, attribute: str) -> Paragraph | str:
         multiplier_suffix = "_multiplier"
         multiplier_attribute = attribute_short_form(attribute) + multiplier_suffix
         if hasattr(obj, multiplier_attribute):
@@ -1339,7 +1339,7 @@ def validate_cell(reading_type: ReadingType, col_idx: int, row_num: int) -> str 
     return None
 
 
-def format_cell_value(value, is_error: bool) -> str | Paragraph:
+def format_cell_value(value: str, is_error: bool) -> str | Paragraph:
     """
     Format a cell value, highlighting it with red background if there's an error.
 
@@ -1406,7 +1406,7 @@ def generate_reading_count_table(
     reading_counts: dict[ReadingType, int],
     stylesheet: StyleSheet,
     readings: dict[ReadingType, pd.DataFrame] | None = None,
-):
+) -> list[Flowable]:
     """
     Generate reading count table with validation and error highlighting.
     Errors are displayed as merged rows immediately below the affected data row.
