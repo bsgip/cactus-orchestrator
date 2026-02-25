@@ -43,6 +43,7 @@ dev = [
     "coverage",
     "kubernetes-stubs",
     "isort",
+    "pandas-stubs",
 ]
 test = [
     "pytest",
