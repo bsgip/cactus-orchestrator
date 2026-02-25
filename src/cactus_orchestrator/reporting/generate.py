@@ -21,6 +21,7 @@ async def generate_pdf_report_v1(reporting_data: ReportingData_v1) -> bytes | No
         reading_counts=reading_counts,
         sites=reporting_data.sites,
         timeline=reporting_data.timeline,
+        set_max_w_varied=reporting_data.set_max_w_varied,
     )
 
     return pdf_data
