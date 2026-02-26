@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import jwt
 import pytest
+from assertical.fake.generator import generate_class_instance
 from assertical.fixtures.environment import environment_snapshot
 from assertical.fixtures.fastapi import start_app_with_client
 from assertical.fixtures.postgres import generate_async_conn_str_from_connection
@@ -350,3 +351,64 @@ async def client(pg_empty_config, patch_jwks_request):
 
     async with start_app_with_client(generate_app(get_current_settings())) as c:
         yield c
+
+
+@pytest.fixture
+def reporting_data_version():
+    return 1
+
+
+@pytest.fixture
+def reporting_data_json(reporting_data_version):
+
+    from cactus_runner.models import ActiveTestProcedure, CheckResult, ReportingData, ResourceAnnotations, RunnerState
+    from cactus_test_definitions.client import TestProcedureId, get_test_procedure
+
+    runner_state = generate_class_instance(
+        RunnerState,
+        active_test_procedure=generate_class_instance(
+            ActiveTestProcedure,
+            definition=get_test_procedure(test_procedure_id=TestProcedureId.ALL_01),
+            step_status={},
+            finished_zip_data=None,
+            resource_annotations=ResourceAnnotations(der_control_ids_by_alias={"a": 1}),
+        ),
+    )
+    reporting_data = generate_class_instance(
+        ReportingData.v(reporting_data_version),
+        check_results={"key": generate_class_instance(CheckResult)},
+        runner_state=runner_state,
+    )
+    reporting_data_json = reporting_data.to_json()
+    return reporting_data_json
+
+
+@pytest.fixture
+def file_data():
+    import io
+    import zipfile
+
+    PDF_FILENAME = "CactusTestProcedureReport.pdf"
+    TXT_FILENAME = "other_file.txt"
+    PDF_DATA = b"before"
+    TXT_DATA = b"other"
+
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as archive:
+        with archive.open(PDF_FILENAME, "w") as file:
+            file.write(PDF_DATA)
+        with archive.open(TXT_FILENAME, "w") as file:
+            file.write(TXT_DATA)
+
+    zip_data = zip_buffer.getvalue()
+    return zip_data
+
+
+@pytest.fixture
+def pg_regeneration_config(pg_base_config, reporting_data_json, reporting_data_version, file_data):
+    """Adds zip file data and working reporting data to run artifact id 3 (run 5)"""
+    stmt = """UPDATE run_artifact SET reporting_data = %s, version = %s, file_data = %s WHERE id = 3;"""
+    with pg_base_config.cursor() as cursor:
+        cursor.execute(stmt, (reporting_data_json, reporting_data_version, file_data))
+        pg_base_config.commit()
+    yield pg_base_config

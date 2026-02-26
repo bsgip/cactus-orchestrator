@@ -1,8 +1,10 @@
+import io
 import os
+import zipfile
 from datetime import datetime, timedelta, timezone
 from http import HTTPMethod, HTTPStatus
 from itertools import product
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import pytest
 from aiohttp import ClientConnectorDNSError
@@ -749,17 +751,19 @@ def test_is_all_criteria_met(runner_status: RunnerStatus | None, expected: bool 
     ],
 )
 @pytest.mark.asyncio
+@patch("cactus_orchestrator.api.run.regenerate_pdf_report")
 async def test_finalise_run_creates_run_artifact_and_updates_run(
-    pg_base_config, k8s_mock: MockedK8s, runner_status, all_criteria_met
+    regenerate_mock, pg_base_config, k8s_mock: MockedK8s, zip_file_data: bytes, runner_status, all_criteria_met
 ):
     """Finalize correctly updates the DB with data requested from the runner"""
     # Arrange
-    finalize_data = b"file_data"
+    finalize_data = zip_file_data
 
     k8s_mock.status.return_value = runner_status
     k8s_mock.finalize.return_value = finalize_data
     finalise_time = datetime(2023, 4, 5, tzinfo=timezone.utc)
     timeout_seconds = 10
+    regenerate_mock.return_value = finalize_data
 
     # Act
     async with generate_async_session(pg_base_config) as session:
@@ -772,6 +776,8 @@ async def test_finalise_run_creates_run_artifact_and_updates_run(
     # Assert
     k8s_mock.status.assert_called_once()
     k8s_mock.finalize.assert_called_once()
+    regenerate_mock.assert_called_once()
+
     async with generate_async_session(pg_base_config) as session:
         run = (
             await session.execute(select(Run).where(Run.run_id == 1).options(selectinload(Run.run_artifact)))
@@ -784,7 +790,9 @@ async def test_finalise_run_creates_run_artifact_and_updates_run(
 
 
 @pytest.mark.asyncio
+@patch("cactus_orchestrator.api.run.regenerate_pdf_report")
 async def test_finalise_run_handles_runner_finalize_failure(
+    regenerate_mock,
     pg_base_config,
     k8s_mock: MockedK8s,
 ):
@@ -798,6 +806,7 @@ async def test_finalise_run_handles_runner_finalize_failure(
     k8s_mock.finalize.side_effect = Exception("mock exception")
     finalise_time = datetime(2023, 4, 5, tzinfo=timezone.utc)
     timeout_seconds = 10
+    regenerate_mock.return_value = b""
 
     # Act
     async with generate_async_session(pg_base_config) as session:
@@ -822,18 +831,22 @@ async def test_finalise_run_handles_runner_finalize_failure(
 
 
 @pytest.mark.asyncio
+@patch("cactus_orchestrator.api.run.regenerate_pdf_report")
 async def test_finalise_run_handles_runner_status_failure(
+    regenerate_mock,
     pg_base_config,
     k8s_mock: MockedK8s,
+    zip_file_data: bytes,
 ):
     """Finalize will still proceed even if the runner status cannot be determined"""
     # Arrange
-    finalize_data = b"file_data"
+    finalize_data = zip_file_data
 
     k8s_mock.status.side_effect = Exception("my mock exception")
     k8s_mock.finalize.return_value = finalize_data
     finalise_time = datetime(2023, 4, 5, tzinfo=timezone.utc)
     timeout_seconds = 10
+    regenerate_mock.return_value = finalize_data
 
     # Act
     async with generate_async_session(pg_base_config) as session:
@@ -858,11 +871,15 @@ async def test_finalise_run_handles_runner_status_failure(
 
 
 @pytest.mark.asyncio
-async def test_finalise_run_and_teardown_teststack_success(client, pg_base_config, k8s_mock, valid_jwt_user1):
+@patch("cactus_orchestrator.api.run.regenerate_pdf_report")
+async def test_finalise_run_and_teardown_teststack_success(
+    regenerate_mock, client, pg_base_config, k8s_mock, zip_file_data, valid_jwt_user1
+):
     # Arrange
-    finalize_data = b"\x1f\x8b\x08\x00I\xe9\xe4g\x02\xff\xcb,)N\xccM\xf5M,\xca\xcc\x07\x00\xcd\xcc5\xc5\x0b\x00\x00\x00"
+    finalize_data = zip_file_data
     k8s_mock.finalize.return_value = finalize_data
     k8s_mock.status.return_value = generate_class_instance(RunnerStatus, step_status={})
+    regenerate_mock.return_value = finalize_data
 
     # Act
     response = await client.post("/run/1/finalise", headers={"Authorization": f"Bearer {valid_jwt_user1}"})
@@ -886,16 +903,20 @@ async def test_finalise_run_and_teardown_teststack_success(client, pg_base_confi
 
 
 @pytest.mark.asyncio
-async def test_finalise_run_and_teardown_teststack_idempotent(client, pg_base_config, k8s_mock, valid_jwt_user1):
+@patch("cactus_orchestrator.api.run.regenerate_pdf_report")
+async def test_finalise_run_and_teardown_teststack_idempotent(
+    regenerate_mock, client, pg_base_config, k8s_mock, zip_file_data, valid_jwt_user1
+):
     """Tests that finalising the same run multiple times will not cause any weird side effects"""
 
     # Arrange
-    finalize_data = b"\x1f\x8b\x08\x00I\xe9\xe4g\x02\xff\xcb,)N\xccM\xf5M,\xca\xcc\x07\x00\xcd\xcc5\xc5\x0b\x00\x00\x00"
+    finalize_data = zip_file_data
     k8s_mock.finalize.side_effect = [finalize_data, Exception("Mock exception - shouldn't be raised")]
     k8s_mock.status.side_effect = [
         generate_class_instance(RunnerStatus, step_status={}),
         Exception("Mock exception - shouldn't be raised"),
     ]
+    regenerate_mock.return_value = finalize_data
 
     # First request should perform normally and update the DB
     response1 = await client.post("/run/1/finalise", headers={"Authorization": f"Bearer {valid_jwt_user1}"})
@@ -1237,7 +1258,7 @@ async def create_playlist_for_test(
 
 @pytest.mark.asyncio
 async def test_playlist_finalize_advances_to_next_test(
-    client, k8s_mock: MockedK8s, pg_base_config, client_cert_pem_bytes, valid_jwt_user1
+    client, k8s_mock: MockedK8s, zip_file_data, pg_base_config, client_cert_pem_bytes, valid_jwt_user1
 ):
     response_model = await create_playlist_for_test(
         client,
@@ -1256,7 +1277,7 @@ async def test_playlist_finalize_advances_to_next_test(
         await session.commit()
 
     # Mock runner status to report second test is now active (simulating advancement)
-    finalize_data = b"\x1f\x8b\x08\x00test_data"
+    finalize_data = zip_file_data
     k8s_mock.finalize.return_value = finalize_data
     k8s_mock.status.return_value = generate_class_instance(
         RunnerStatus,
@@ -1284,7 +1305,7 @@ async def test_playlist_finalize_advances_to_next_test(
 
 @pytest.mark.asyncio
 async def test_playlist_finalize_teardown_on_last_test(
-    client, k8s_mock: MockedK8s, pg_base_config, client_cert_pem_bytes, valid_jwt_user1
+    client, k8s_mock: MockedK8s, zip_file_data, pg_base_config, client_cert_pem_bytes, valid_jwt_user1
 ):
     response_model = await create_playlist_for_test(
         client,
@@ -1306,7 +1327,7 @@ async def test_playlist_finalize_teardown_on_last_test(
         await session.commit()
 
     # Mock runner status to report no active test (playlist complete)
-    finalize_data = b"\x1f\x8b\x08\x00test_data"
+    finalize_data = zip_file_data
     k8s_mock.finalize.return_value = finalize_data
     k8s_mock.status.return_value = generate_class_instance(
         RunnerStatus,

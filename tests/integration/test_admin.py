@@ -1,3 +1,5 @@
+import io
+import zipfile
 from http import HTTPStatus
 
 import pytest
@@ -19,6 +21,7 @@ from cactus_schema.runner import RunnerStatus
 from cactus_test_definitions.client import TestProcedureId
 from sqlalchemy import select
 
+from cactus_orchestrator.artifact import regenerate_pdf_report
 from cactus_orchestrator.main import generate_app
 from cactus_orchestrator.model import RunArtifact
 from cactus_orchestrator.settings import get_current_settings
@@ -346,6 +349,72 @@ async def test_get_run_artifact_data(
     if expected_status == HTTPStatus.OK:
 
         assert expected_artifact_data == res.read()
+
+        assert res.headers[HEADER_USER_NAME] == expected_user
+        assert res.headers[HEADER_TEST_ID] == expected_test_id
+        assert res.headers[HEADER_RUN_ID] == str(run_id)
+        assert res.headers[HEADER_GROUP_ID] == expected_group_id
+        assert res.headers[HEADER_GROUP_NAME] == expected_group_name
+
+
+@pytest.mark.parametrize(
+    "run_id,expected_status,expected_artifact_id,expected_user,expected_test_id,expected_group_name,expected_group_id",
+    [
+        (1, HTTPStatus.NOT_FOUND, None, None, None, None, None),  # no run artifact
+        (2, HTTPStatus.NOT_FOUND, None, None, None, None, None),  # run artifact has no reporting data
+        (5, HTTPStatus.OK, 3, "user1@cactus.example.com", "ALL-01", "name-2", "2"),  # triggers regeneration
+        (99, HTTPStatus.NOT_FOUND, None, None, None, None, None),  # run does not exist
+    ],
+)
+async def test_regenerate_run_report_and_get_artifact_data(
+    k8s_mock: MockedK8s,
+    client,
+    pg_regeneration_config,
+    valid_jwt_admin1,
+    run_id,
+    expected_status,
+    expected_artifact_id,
+    expected_user,
+    expected_test_id,
+    expected_group_name,
+    expected_group_id,
+):
+    """Does regenerating and fetching the run artifact data work under common conditions"""
+
+    # Arrange
+    expected_artifact_data = None
+    original_artifact_data = None
+    check_for_regeneration = False
+    async with generate_async_session(pg_regeneration_config) as session:
+        artifact = (
+            await session.execute(select(RunArtifact).where(RunArtifact.run_artifact_id == expected_artifact_id))
+        ).scalar_one_or_none()
+        if artifact:
+            if artifact.reporting_data:
+                # We have reporting data so regeneration will update the file_data
+                await regenerate_pdf_report(
+                    file_data=artifact.file_data, raw_reporting_data=artifact.reporting_data, version=artifact.version
+                )
+                original_artifact_data = artifact.file_data
+                check_for_regeneration = True
+            else:
+                expected_artifact_data = artifact.file_data
+
+    # Act
+    res = await client.get(f"admin/run/{run_id}/regenerate", headers={"Authorization": f"Bearer {valid_jwt_admin1}"})
+
+    # Assert
+    assert res.status_code == expected_status
+    if expected_status == HTTPStatus.OK:
+
+        if check_for_regeneration:
+            zip_data = res.read()
+            assert original_artifact_data != zip_data
+            with zipfile.ZipFile(io.BytesIO(zip_data)) as archive:
+                pdf_data = archive.read("CactusTestProcedureReport.pdf")
+                assert b"%PDF" == pdf_data[0:4]
+        else:
+            assert expected_artifact_data == res.read()
 
         assert res.headers[HEADER_USER_NAME] == expected_user
         assert res.headers[HEADER_TEST_ID] == expected_test_id

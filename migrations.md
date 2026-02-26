@@ -61,7 +61,7 @@ dotenv run -- alembic revision --autogenerate -m "INSERT YOUR MIGRATION DESCRIPT
 else run:
 
 ```sh
-dotenv run -- alembic revision --autogenerate -m "INSERT YOUR MIGRATION DESCRIPTION HERE"
+source .env && alembic revision --autogenerate -m "INSERT YOUR MIGRATION DESCRIPTION HERE"
 ```
 
 If successful you should find a new .py file in `alembic/versions` directory of the project.
