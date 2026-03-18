@@ -37,7 +37,11 @@ def map_from_definitions_to_responses(definitions: dict[TestProcedureId, TestPro
 
         responses.append(
             TestProcedureResponse(
-                test_procedure_id=TestProcedureId(k), description=v.description, category=v.category, classes=v.classes
+                test_procedure_id=TestProcedureId(k),
+                description=v.description,
+                category=v.category,
+                classes=v.classes,
+                target_versions=[version.value for version in v.target_versions],
             )
         )
     return responses

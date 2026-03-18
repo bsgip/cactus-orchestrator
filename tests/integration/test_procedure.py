@@ -34,6 +34,7 @@ async def test_get_test_procedure_list_populated(client, valid_jwt_user1):
     assert data["total"] > 1
     assert len(data["items"]) > 1
     assert data["items"][0]["test_procedure_id"] == "ALL-01"
+    assert CSIPAusVersion.RELEASE_1_2.value in data["items"][0]["target_versions"]
 
 
 @pytest.mark.parametrize(
