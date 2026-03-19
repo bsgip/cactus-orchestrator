@@ -72,8 +72,6 @@ async def replace_pdf_in_zip_data(pdf_data: bytes, zip_data: bytes, pdf_filename
         replaced
     """
 
-    original_zip = zipfile.ZipFile(io.BytesIO(zip_data))
-
     zip_buffer = io.BytesIO()
     with zipfile.ZipFile(zip_buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as updated_zip:
 
