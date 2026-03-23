@@ -370,7 +370,7 @@ def reporting_data_json(reporting_data_version):
             ActiveTestProcedure,
             definition=get_test_procedure(test_procedure_id=TestProcedureId.ALL_01),
             step_status={},
-            finished_zip_data=None,
+            finished_zip_path=None,
             resource_annotations=ResourceAnnotations(der_control_ids_by_alias={"a": 1}),
         ),
     )
