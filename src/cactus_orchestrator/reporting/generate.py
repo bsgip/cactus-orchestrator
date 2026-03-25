@@ -11,7 +11,11 @@ logger = logging.getLogger(__name__)
 async def generate_pdf_report_v1(reporting_data: ReportingData_v1) -> bytes | None:
 
     # Unpack the readings
-    readings = {r.reading_type: pd.read_json(r.readings_as_json) for r in reporting_data.readings}
+    readings = {
+        r.reading_type: pd.read_json(r.readings_as_json)
+        for r in reporting_data.readings
+        if r.readings_as_json is not None
+    }
     reading_counts = {r.reading_type: r.reading_counts for r in reporting_data.readings}
 
     pdf_data = pdf_report_as_bytes(

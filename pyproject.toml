@@ -23,7 +23,7 @@ dependencies = [
     "cactus-runner @ git+ssh://git@github.com/bsgip/cactus-runner.git@v1.7.7",
     "fastapi-pagination",
     "fastapi-utils",
-    "typing_inspect",                                                        # fastapi-utils missing dep?
+    "typing_inspect",                                                          # fastapi-utils missing dep?
     "pyasn1",
     "reportlab",
     "types-reportlab",
