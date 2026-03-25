@@ -462,6 +462,9 @@ async def start_run(
             # raising server error as default
             logger.error(f"Received an unexpected failure on start for user {user.user_id} run {run_id}", exc_info=exc)
             raise HTTPException(HTTPStatus.INTERNAL_SERVER_ERROR)
+        except Exception as exc:
+            logger.error(f"Unexpected connection error on start for user {user.user_id} run {run_id}", exc_info=exc)
+            raise HTTPException(HTTPStatus.INTERNAL_SERVER_ERROR)
 
     # update status
     await update_run_run_status(session=db.session, run_id=run.run_id, run_status=RunStatus.started)
