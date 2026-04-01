@@ -132,7 +132,7 @@ def generate_static_test_stack_id(user: User) -> str:
 
 def generate_dynamic_test_stack_id(user: User) -> str:
     """Calculate a suitable random "dynamic" value for test_stack_id that will be used if user.is_static_uri is False"""
-    return f"{user.user_id}-{shortuuid.uuid().lower()}"
+    return f"{shortuuid.uuid().lower()}-{user.user_id}"
 
 
 K8S_REPLACE_PATTERN = re.compile("[^a-z\\-0-9]")
