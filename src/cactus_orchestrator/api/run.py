@@ -523,8 +523,10 @@ async def finalise_run(
     if file_data:
         # We (potentially) passed the reporting data via the zip file.
         # Extract it from the zip and store it in the database.
-        zip_file = zipfile.ZipFile(io.BytesIO(file_data))
         reporting_data = None
+        reporting_data_version = None
+
+        zip_file = zipfile.ZipFile(io.BytesIO(file_data))
         for name in zip_file.namelist():
             # There should 0 or 1 file that starts with reporting data
             if name.startswith("ReportingData_v"):
@@ -537,15 +539,21 @@ async def finalise_run(
         # Note: all other files in the run artifact remain unaffected.
         if reporting_data:
             try:
-                version = json.loads(reporting_data)["version"]
+                reporting_data_version = json.loads(reporting_data)["version"]
                 file_data = await regenerate_pdf_report(
-                    file_data=file_data, raw_reporting_data=reporting_data, version=version
+                    file_data=file_data, raw_reporting_data=reporting_data, version=reporting_data_version
                 )
             except Exception as exc:
                 msg = f"Unable to regenerate run report for run {run.run_id}. Reason={exc}"
                 logger.error(msg)
 
-        artifact = await create_runartifact(session, compression, file_data, reporting_data)
+        artifact = await create_runartifact(
+            session=session,
+            compression=compression,
+            file_data=file_data,
+            reporting_data=reporting_data,
+            reporting_data_version=reporting_data_version,
+        )
     else:
         artifact = None
 
