@@ -1,3 +1,4 @@
+import io
 import logging
 
 import pandas as pd
@@ -10,12 +11,14 @@ logger = logging.getLogger(__name__)
 
 async def generate_pdf_report_v1(reporting_data: ReportingData_v1) -> bytes | None:
 
-    # Unpack the readings
-    readings = {
-        r.reading_type: pd.read_json(r.readings_as_json)
-        for r in reporting_data.readings
-        if r.readings_as_json is not None
-    }
+    # Unpack the readings: time_period_start is serialised as epoch ms integers by to_json(), so we explicitly convert
+    # it back to datetime; pd.read_json convert_dates heuristic doesn't match the column name and would leave it int64.
+    readings = {}
+    for r in reporting_data.readings:
+        if r.readings_as_json is not None:
+            df = pd.read_json(io.StringIO(r.readings_as_json))
+            df["time_period_start"] = pd.to_datetime(df["time_period_start"], unit="ms", utc=True)
+            readings[r.reading_type] = df
     reading_counts = {r.reading_type: r.reading_counts for r in reporting_data.readings}
 
     pdf_data = pdf_report_as_bytes(
