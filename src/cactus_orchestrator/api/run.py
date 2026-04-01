@@ -255,7 +255,7 @@ async def spawn_teststack_and_init_run(
             )
 
     else:
-        teststack_id = generate_dynamic_test_stack_id()
+        teststack_id = generate_dynamic_test_stack_id(user)
 
     run_resource_names = get_resource_names(teststack_id)
     template_resource_names = get_template_names(run_group.csip_aus_version)
