@@ -15,7 +15,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from cactus_orchestrator.api.run import finalise_run, teardown_teststack
 from cactus_orchestrator.crud import (
     ACTIVE_RUN_STATUSES,
-    count_playlist_runs,
     select_nonfinalised_runs,
     select_playlist_runs,
     update_run_run_status,
@@ -94,14 +93,7 @@ async def teardown_idle_teststack(
             logger.warning("Call to cactus-runner last request endpoint failed.")
             logger.debug("Exception", exc_info=exc)
 
-        # Apply the max timeout but scaled to the number of tests in the playlist (a little crude)
-        if run.playlist_execution_id:
-            playlist_count = await count_playlist_runs(session, run.playlist_execution_id)
-            effective_max_lifetime = teardowntask_max_lifetime_seconds * playlist_count
-        else:
-            effective_max_lifetime = teardowntask_max_lifetime_seconds
-
-        if idle or is_maxlive_overtime(now, run.created_at, effective_max_lifetime):
+        if idle or is_maxlive_overtime(now, run.created_at, teardowntask_max_lifetime_seconds):
             logger.info(f"(Idle/Overtime Task) Shutting down {run_resource_names.service}")
             if run.playlist_execution_id:
                 processed_playlists.add(run.playlist_execution_id)

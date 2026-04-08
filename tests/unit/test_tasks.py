@@ -124,13 +124,12 @@ async def test_teardown_idle_teststack(k8s_mock, pg_base_config, client):
 
 
 @pytest.mark.asyncio
-@patch("cactus_orchestrator.tasks.count_playlist_runs", spec=AsyncMock)
 @patch("cactus_orchestrator.tasks.select_nonfinalised_runs", spec=AsyncMock)
 @patch("cactus_orchestrator.tasks.is_idle", spec=AsyncMock)
 @patch("cactus_orchestrator.tasks.teardown_teststack", spec=AsyncMock)
 @patch("cactus_orchestrator.tasks.finalize_teststack_runs", spec=AsyncMock)
 async def test_teardown_idle_teststack_with_playlist(
-    mock_finalize_runs, mock_teardown, mock_is_idle, mock_select_runs, mock_count_playlist
+    mock_finalize_runs, mock_teardown, mock_is_idle, mock_select_runs
 ):
     """Test that when a playlist teststack goes idle, all sibling runs in a playlist are finalized together."""
 
@@ -157,7 +156,6 @@ async def test_teardown_idle_teststack_with_playlist(
 
     mock_select_runs.side_effect = lambda *args, **kwargs: async_return(mock_runs)
     mock_is_idle.side_effect = lambda *args, **kwargs: async_return(True)
-    mock_count_playlist.side_effect = lambda *args, **kwargs: async_return(3)
     mock_finalize_runs.side_effect = lambda *args, **kwargs: async_return(None)
     mock_teardown.side_effect = lambda *args, **kwargs: async_return(None)
 
