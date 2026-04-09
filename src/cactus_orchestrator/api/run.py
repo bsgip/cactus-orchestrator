@@ -123,7 +123,7 @@ async def wait_for_runner_health(s: ClientSession) -> None:
     attempts have passed). This is primarily to avoid situations where k8's says a pod is ready to go but the runner
     is either not fully up or networking isn't routing"""
 
-    MAX_ATTEMPTS = 5
+    MAX_ATTEMPTS = 15
 
     for attempt in range(MAX_ATTEMPTS):
         try:

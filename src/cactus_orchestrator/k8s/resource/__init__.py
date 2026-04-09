@@ -11,9 +11,7 @@ from kubernetes.client.exceptions import ApiException
 
 from cactus_orchestrator.model import User
 from cactus_orchestrator.settings import (
-    POD_FQDN_FORMAT,
-    POD_HARNESS_RUNNER_MANAGEMENT_PORT,
-    RUNNER_POD_URL,
+    RUNNER_SVC_URL,
     STATEFULSET_POD_NAME_FORMAT,
     TEST_EXECUTION_URL_FORMAT,
     CactusOrchestratorException,
@@ -41,7 +39,6 @@ class RunResourceNames:
     service: str  # Name of the k8's service for the associated run (when running)
     stateful_set: str  # Name of the k8's stateful set for the associated run (when running)
     pod: str  # Name of the k8's pod for the associated run (when running)
-    pod_fqdn: str  # Fully qualified domain name of the pod
     app_label: str  # Name of the "app" within the run execution spec
     ingress: str  # Name of the ingress resource
 
@@ -101,9 +98,10 @@ def get_resource_names(uuid: str) -> RunResourceNames:
     statefulset_name = settings.template_statefulset_name_prefix + uuid
     app_label = settings.template_app_name_prefix + uuid
     pod_name = STATEFULSET_POD_NAME_FORMAT.format(statefulset_name=statefulset_name)
-    pod_fqdn = POD_FQDN_FORMAT.format(pod_name=pod_name, svc_name=svc_name, namespace=settings.test_execution_namespace)
 
-    runner_base_url = RUNNER_POD_URL.format(pod_fqdn=pod_fqdn, pod_port=POD_HARNESS_RUNNER_MANAGEMENT_PORT)
+    runner_base_url = RUNNER_SVC_URL.format(
+        svc_name=svc_name, namespace=settings.test_execution_namespace, svc_port=settings.teststack_service_port
+    )
     envoy_base_url = TEST_EXECUTION_URL_FORMAT.format(fqdn=settings.test_execution_fqdn, svc_name=svc_name)
 
     return RunResourceNames(
@@ -112,7 +110,6 @@ def get_resource_names(uuid: str) -> RunResourceNames:
         stateful_set=statefulset_name,
         app_label=app_label,
         pod=pod_name,
-        pod_fqdn=pod_fqdn,
         ingress=settings.test_execution_ingress_name,
         runner_base_url=runner_base_url,
         envoy_base_url=envoy_base_url,
