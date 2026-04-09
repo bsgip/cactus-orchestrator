@@ -5,8 +5,6 @@ from kubernetes import client, config
 from pydantic import PostgresDsn
 from pydantic_settings import BaseSettings
 
-POD_FQDN_FORMAT = "{pod_name}.{svc_name}.{namespace}.svc.cluster.local"  # TODO: use svc instead.
-POD_HARNESS_RUNNER_MANAGEMENT_PORT = 8080  # TODO: tbd
 TLS_SERVER_SECRET_NAME_FORMAT = "tls-server-{domain}"  # nosec: Not a password
 TLS_CA_SECRET_NAME_FORMAT = "tls-ca-{ingress_name}"  # nosec: Not a password
 # NOTE: follwing two must be kept similar
@@ -16,7 +14,7 @@ TEST_EXECUTION_URL_FORMAT = "https://{fqdn}/{svc_name}"
 STATEFULSET_POD_NAME_FORMAT = (
     "{statefulset_name}-0"  # TODO: this is the k8s naming scheme of a statefulsets pod, how to better handle?
 )
-RUNNER_POD_URL = "http://{pod_fqdn}:{pod_port}"  # TODO: use service instead
+RUNNER_SVC_URL = "http://{svc_name}.{namespace}.svc.cluster.local:{svc_port}"
 
 
 logger = logging.getLogger(__name__)
