@@ -39,6 +39,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from cactus_orchestrator.api.common import select_user_or_raise, select_user_run_group_or_raise
 from cactus_orchestrator.artifact import regenerate_pdf_report
+from cactus_orchestrator.chart import generate_power_limit_chart
 from cactus_orchestrator.auth import AuthPerm, UserContext, jwt_validator
 from cactus_orchestrator.crud import (
     ACTIVE_RUN_STATUSES,
@@ -794,6 +795,36 @@ async def get_run_artifact(
 
     user = await select_user_or_raise(db.session, user_context)
     return await get_run_artifact_response_for_user(user, run_id)
+
+
+@router.get(uri.RunPowerLimitChart, status_code=HTTPStatus.OK)
+async def get_run_power_limit_chart(
+    run_id: int,
+    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.user_all}))],
+) -> Response:
+    """Generates and returns a standalone HTML power limit chart for the run's envoy DB artifact."""
+    user = await select_user_or_raise(db.session, user_context)
+
+    try:
+        run = await select_user_run_with_artifact(db.session, user.user_id, run_id)
+    except NoResultFound:
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Run does not exist.")
+
+    if run.run_artifact is None:
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="RunArtifact does not exist.")
+
+    try:
+        html = await generate_power_limit_chart(run.run_artifact)
+    except ValueError as exc:
+        raise HTTPException(status_code=HTTPStatus.CONFLICT, detail=str(exc))
+
+    if html is None:
+        raise HTTPException(
+            status_code=HTTPStatus.NOT_FOUND,
+            detail="Chart unavailable: insufficient DER data in artifact.",
+        )
+
+    return Response(content=html, media_type="text/html")
 
 
 @router.post(uri.RunArtifactMultiple, status_code=HTTPStatus.OK)

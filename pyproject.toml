@@ -27,6 +27,8 @@ dependencies = [
     "pyasn1",
     "reportlab",
     "types-reportlab",
+    "plotly",
+    "testing.postgresql",
 ]
 name = "cactus-orchestrator"
 dynamic = ["version"]
@@ -89,7 +91,7 @@ namespace_packages = true
 warn_redundant_casts = true
 
 [[tool.mypy.overrides]] # temporary until these libs are typed.
-module = ["cactus_runner", "cactus_test_definitions", "cactus_runner.client"]
+module = ["cactus_runner", "cactus_test_definitions", "cactus_runner.client", "testing", "testing.postgresql"]
 ignore_missing_imports = true
 
 [tool.setuptools.dynamic]
