@@ -11,6 +11,7 @@ from assertical.fake.generator import generate_class_instance
 from assertical.fixtures.environment import environment_snapshot
 from assertical.fixtures.fastapi import start_app_with_client
 from assertical.fixtures.postgres import generate_async_conn_str_from_connection
+from envoy.server.alembic import upgrade as envoy_upgrade
 from cryptography import x509
 from cryptography.hazmat.primitives import asymmetric, hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
@@ -331,6 +332,15 @@ def pg_base_config(pg_empty_config):
     execute_test_sql_file(pg_empty_config, "tests/data/base_config.sql")
 
     yield pg_empty_config
+
+
+@pytest.fixture
+def pg_envoy_base_config(postgresql, preserved_environment) -> Generator[Connection, None, None]:
+    """Sets up a temporary envoy DB with migrations and minimal seed data for power_limit_chart tests."""
+    os.environ["DATABASE_URL"] = generate_async_conn_str_from_connection(postgresql)
+    envoy_upgrade()
+    execute_test_sql_file(postgresql, "tests/data/envoy_base_config.sql")
+    yield postgresql
 
 
 @pytest.fixture
