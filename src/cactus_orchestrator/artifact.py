@@ -57,22 +57,23 @@ async def generate_run_group_artifact(
 
 
 async def replace_pdf_in_zip_data(pdf_data: bytes, zip_data: bytes, pdf_filename_prefix: str) -> bytes:
-    """Replaces the existing pdfs in `zip_data` with the pdf bytes from `pdf_data`
+    """Replaces existing PDFs in `zip_data` with `pdf_data`, or adds the PDF if none is present.
 
-    Since there could be more than one pdf in the existing archive, replacements will happen
-    to any pdf file whose name starts with `pdf_filename_prefix`.
+    Any file whose name starts with `pdf_filename_prefix` and ends with `.pdf` is replaced.
+    If no such file exists (e.g. the runner no longer generates a PDF), the PDF is added as
+    `{pdf_filename_prefix}.pdf`.
 
     Args:
-        pdf_data (bytes): the replacement pdf data
-        zip_data (bytes): a zip file as bytes containing the pdf you want to replace
-        pdf_filename_prefix (): Use to identify which pdf files get replaced
+        pdf_data (bytes): the pdf data to inject
+        zip_data (bytes): a zip file as bytes
+        pdf_filename_prefix: prefix used to identify existing pdf files to replace
 
     Returns:
-        bytes: a zip file as bytes containing all the previous files but with matching pdf files
-        replaced
+        bytes: a zip file as bytes with the pdf injected or replaced
     """
 
     zip_buffer = io.BytesIO()
+    pdf_was_written = False
     with zipfile.ZipFile(zip_buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as updated_zip:
 
         with zipfile.ZipFile(io.BytesIO(zip_data)) as original_zip:
@@ -80,8 +81,13 @@ async def replace_pdf_in_zip_data(pdf_data: bytes, zip_data: bytes, pdf_filename
                 with updated_zip.open(member, "w") as member_handle:
                     if member.startswith(pdf_filename_prefix) and member.endswith("pdf"):
                         member_handle.write(pdf_data)
+                        pdf_was_written = True
                     else:
                         member_handle.write(original_zip.read(member))
+
+        if not pdf_was_written:
+            with updated_zip.open(f"{pdf_filename_prefix}.pdf", "w") as member_handle:
+                member_handle.write(pdf_data)
 
     updated_zip_data: bytes = zip_buffer.getvalue()
     return updated_zip_data
