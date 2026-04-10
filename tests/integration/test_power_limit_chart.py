@@ -5,7 +5,7 @@ Each test builds a realistic DB scenario, generates the HTML chart, and writes i
 to /tmp/cactus_charts/ so it can be opened in a browser for visual inspection.
 
 Run with:
-    pytest tests/integration/app/test_power_limit_chart.py -v -s
+    pytest tests/integration/test_power_limit_chart.py -v -s
 """
 
 from datetime import datetime, timedelta, timezone
@@ -108,7 +108,7 @@ def _make_der_site(aggregator_id: int, max_w: int = 10000, grad_w: int = 28) -> 
 
 
 @pytest.mark.anyio
-async def test_chart_single_program_export_curtailment(pg_base_config):
+async def test_chart_single_program_export_curtailment(pg_envoy_base_config):
     """
     One DERProgram (primacy 1). Export is stepped down and back up over 40 minutes.
     Device polls 60 seconds after each control is created. AS4777 ramp rate (grad_w=28).
@@ -124,7 +124,7 @@ async def test_chart_single_program_export_curtailment(pg_base_config):
 
     created_times: list[datetime] = []
 
-    async with generate_async_session(pg_base_config) as session:
+    async with generate_async_session(pg_envoy_base_config) as session:
         site = _make_der_site(aggregator_id=1)
         session.add(site)
         group = generate_class_instance(SiteControlGroup, seed=1, site_control_group_id=1, primacy=1)
@@ -142,11 +142,11 @@ async def test_chart_single_program_export_curtailment(pg_base_config):
 
     polls = [_poll(1, t + timedelta(seconds=60), req_id=i) for i, t in enumerate(created_times)]
 
-    async with generate_async_session(pg_base_config) as session:
+    async with generate_async_session(pg_envoy_base_config) as session:
         html = await generate_power_limit_chart_html(session, T0, test_end, polls)
 
     assert html is not None, "Chart generation returned None"
-    out = _out("scenario_A_single_program_export.html")
+    out = _out("scenario_A_single_program_export0.html")
     out.write_text(html)
     print(f"\n  ✓ Scenario A → {out}")
 
@@ -155,7 +155,7 @@ async def test_chart_single_program_export_curtailment(pg_base_config):
 
 
 @pytest.mark.anyio
-async def test_chart_multi_program_primacy(pg_base_config):
+async def test_chart_multi_program_primacy(pg_envoy_base_config):
     """
     Two DERPrograms operating simultaneously on different limit types:
       - Program 1 (primacy 1): sets IMPORT limits (lower trace)
@@ -168,7 +168,7 @@ async def test_chart_multi_program_primacy(pg_base_config):
     test_end = T0 + timedelta(minutes=50)
     created_times: dict[str, datetime] = {}
 
-    async with generate_async_session(pg_base_config) as session:
+    async with generate_async_session(pg_envoy_base_config) as session:
         site = _make_der_site(aggregator_id=1)
         session.add(site)
         grp1 = generate_class_instance(SiteControlGroup, seed=1, site_control_group_id=1, primacy=1)
@@ -199,11 +199,11 @@ async def test_chart_multi_program_primacy(pg_base_config):
         _poll(2, created_times["exp2"] + timedelta(seconds=90), req_id=4),
     ]
 
-    async with generate_async_session(pg_base_config) as session:
+    async with generate_async_session(pg_envoy_base_config) as session:
         html = await generate_power_limit_chart_html(session, T0, test_end, polls)
 
     assert html is not None
-    out = _out("scenario_B_multi_program_primacy.html")
+    out = _out("scenario_B_multi_program_primacy0.html")
     out.write_text(html)
     print(f"\n  ✓ Scenario B → {out}")
 
@@ -212,7 +212,7 @@ async def test_chart_multi_program_primacy(pg_base_config):
 
 
 @pytest.mark.anyio
-async def test_chart_ramptms_and_defaults(pg_base_config):
+async def test_chart_ramptms_and_defaults(pg_envoy_base_config):
     """
     Demonstrates rampTms (explicit 120s ramp) and a default control baseline.
 
@@ -231,7 +231,7 @@ async def test_chart_ramptms_and_defaults(pg_base_config):
     test_end = T0 + timedelta(minutes=40)
     created_times: dict[str, datetime] = {}
 
-    async with generate_async_session(pg_base_config) as session:
+    async with generate_async_session(pg_envoy_base_config) as session:
         site = _make_der_site(aggregator_id=1)
         session.add(site)
         grp1 = generate_class_instance(SiteControlGroup, seed=1, site_control_group_id=1, primacy=1)
@@ -274,11 +274,11 @@ async def test_chart_ramptms_and_defaults(pg_base_config):
         _poll(1, created_times["ctrl2"] + timedelta(seconds=1), req_id=2),
     ]
 
-    async with generate_async_session(pg_base_config) as session:
+    async with generate_async_session(pg_envoy_base_config) as session:
         html = await generate_power_limit_chart_html(session, T0, test_end, polls)
 
     assert html is not None
-    out = _out("scenario_C_ramptms_and_defaults.html")
+    out = _out("scenario_C_ramptms_and_defaults0.html")
     out.write_text(html)
     print(f"\n  ✓ Scenario C → {out}")
 
@@ -287,7 +287,7 @@ async def test_chart_ramptms_and_defaults(pg_base_config):
 
 
 @pytest.mark.anyio
-async def test_chart_op_mod_connect(pg_base_config):
+async def test_chart_op_mod_connect(pg_envoy_base_config):
     """
     Demonstrates opModConnect=False disconnect (power=0) and 1-minute grace after explicit
     True-control reconnect.
@@ -307,7 +307,7 @@ async def test_chart_op_mod_connect(pg_base_config):
     test_end = T0 + timedelta(minutes=35)
     created_times: dict[str, datetime] = {}
 
-    async with generate_async_session(pg_base_config) as session:
+    async with generate_async_session(pg_envoy_base_config) as session:
         site = _make_der_site(aggregator_id=1)
         session.add(site)
         grp1 = generate_class_instance(SiteControlGroup, seed=1, site_control_group_id=1, primacy=1)
@@ -345,11 +345,11 @@ async def test_chart_op_mod_connect(pg_base_config):
         _poll(1, created_times["reconnect"] + timedelta(seconds=60), req_id=3),
     ]
 
-    async with generate_async_session(pg_base_config) as session:
+    async with generate_async_session(pg_envoy_base_config) as session:
         html = await generate_power_limit_chart_html(session, T0, test_end, polls)
 
     assert html is not None
-    out = _out("scenario_D_op_mod_connect.html")
+    out = _out("scenario_D_op_mod_connect0.html")
     out.write_text(html)
     print(f"\n  ✓ Scenario D → {out}")
 
@@ -358,7 +358,7 @@ async def test_chart_op_mod_connect(pg_base_config):
 
 
 @pytest.mark.anyio
-async def test_chart_op_mod_connect_expiry(pg_base_config):
+async def test_chart_op_mod_connect_expiry(pg_envoy_base_config):
     """
     opModConnect=False control expires with no subsequent True control.
     Reconnection is triggered purely by expiry.
@@ -377,7 +377,7 @@ async def test_chart_op_mod_connect_expiry(pg_base_config):
     test_end = T0 + timedelta(minutes=35)
     created_times: dict[str, datetime] = {}
 
-    async with generate_async_session(pg_base_config) as session:
+    async with generate_async_session(pg_envoy_base_config) as session:
         site = _make_der_site(aggregator_id=1)
         session.add(site)
         grp1 = generate_class_instance(SiteControlGroup, seed=1, site_control_group_id=1, primacy=1)
@@ -413,11 +413,11 @@ async def test_chart_op_mod_connect_expiry(pg_base_config):
         _poll(1, created_times["disconnect"] + timedelta(seconds=60), req_id=2),
     ]
 
-    async with generate_async_session(pg_base_config) as session:
+    async with generate_async_session(pg_envoy_base_config) as session:
         html = await generate_power_limit_chart_html(session, T0, test_end, polls)
 
     assert html is not None
-    out = _out("scenario_D2_op_mod_connect_expiry.html")
+    out = _out("scenario_D2_op_mod_connect_expiry0.html")
     out.write_text(html)
     print(f"\n  ✓ Scenario D2 → {out}")
 
@@ -426,17 +426,17 @@ async def test_chart_op_mod_connect_expiry(pg_base_config):
 
 
 @pytest.mark.anyio
-async def test_chart_gen10_derc456(pg_base_config):
+async def test_chart_gen10_derc456(pg_envoy_base_config):
     """
     Approximates the GEN-10 DERC4/5/6 phase (primacy validation for generators).
 
     Two groups mirror GEN-10's FSA1 (primacy 1) and FSA2 (primacy 2):
 
-      DERC4 — group 1, primacy 1, T+0 to T+5m:
+      DERC4 — group 1, primacy 1, T+1m to T+5m:
         opModConnect=False + genLim=0.  Device is disconnected (power→0) from its
         receipt at T+1m until 1-min after expiry at T+6m.
 
-      DERC5 — group 2, primacy 2, T+0 to T+8m:
+      DERC5 — group 2, primacy 2, T+1m to T+8m:
         opModExpLimW=200% (20000 W — shown above setMaxW reference line).
         Effective once DERC4 grace ends at T+6m; group 1 has no export default
         so group 2's control wins.
@@ -464,7 +464,7 @@ async def test_chart_gen10_derc456(pg_base_config):
     """
     test_end = T0 + timedelta(minutes=20)
 
-    async with generate_async_session(pg_base_config) as session:
+    async with generate_async_session(pg_envoy_base_config) as session:
         site = _make_der_site(aggregator_id=1, max_w=10000, grad_w=200)
         session.add(site)
         # Group 1 = FSA1 / DERP1, high priority. No export default → group 2 can win after DERC4.
@@ -473,12 +473,14 @@ async def test_chart_gen10_derc456(pg_base_config):
         grp2 = generate_class_instance(SiteControlGroup, seed=2, site_control_group_id=2, primacy=2)
         session.add_all([grp1, grp2])
 
-        # DERC4: opModConnect=False + genLim=0 on group 1 (5 min)
+        # DERC4: opModConnect=False + genLim=0 on group 1 (T+1m to T+5m)
+        # offset=1 so created_time=T0+30s (after test_start); 4min duration keeps end at T+5m.
         derc4 = _make_doe(
-            site, grp1, offset_minutes=0, duration_minutes=5, gen_limit=Decimal("0"), set_connected=False, seed=40
+            site, grp1, offset_minutes=1, duration_minutes=4, gen_limit=Decimal("0"), set_connected=False, seed=40
         )
-        # DERC5: export 200% on group 2 (8 min — ends just before DERC6 starts)
-        derc5 = _make_doe(site, grp2, offset_minutes=0, duration_minutes=8, export_limit=Decimal("20000"), seed=50)
+        # DERC5: export 200% on group 2 (T+1m to T+8m — ends just before DERC6 starts)
+        # offset=1 so created_time=T0+30s; 7min duration keeps end at T+8m.
+        derc5 = _make_doe(site, grp2, offset_minutes=1, duration_minutes=7, export_limit=Decimal("20000"), seed=50)
         # DERC6: export 50% on group 2 (5 min — non-overlapping with DERC5)
         derc6 = _make_doe(site, grp2, offset_minutes=8, duration_minutes=5, export_limit=Decimal("5000"), seed=60)
         session.add_all([derc4, derc5, derc6])
@@ -488,9 +490,11 @@ async def test_chart_gen10_derc456(pg_base_config):
 
     polls = [
         # T+1m: device polls /derp/1/derc — DERC4 received (triggers disconnect)
-        _poll(1, ct4 + timedelta(minutes=1, seconds=30), req_id=1, step_name="GET-DERC-4"),
+        # ct4 = T0+30s, so ct4+30s = T0+1m (= DERC4 start_time → effective_start = T0+1m)
+        _poll(1, ct4 + timedelta(seconds=30), req_id=1, step_name="GET-DERC-4"),
         # T+1m30s: device polls /derp/2/derc — DERC5 received (masked by disconnect until T+6m)
-        _poll(2, ct5 + timedelta(minutes=2), req_id=2, step_name="GET-DERC-5"),
+        # ct5 = T0+30s, so ct5+60s = T0+1m30s
+        _poll(2, ct5 + timedelta(minutes=1), req_id=2, step_name="GET-DERC-5"),
         # T+7m: re-poll during wait step — device should now be following DERC5 (200%)
         _poll(2, T0 + timedelta(minutes=7), req_id=3, step_name="WAIT-OBSERVE-DERC-5"),
         # T+9m: device polls /derp/2/derc — DERC6 received (DERC5 already expired at T+8m)
@@ -501,11 +505,11 @@ async def test_chart_gen10_derc456(pg_base_config):
         _poll(1, T0 + timedelta(minutes=15), req_id=6, step_name="WAIT-OBSERVE-DERP-1-6-DEFAULTS"),
     ]
 
-    async with generate_async_session(pg_base_config) as session:
+    async with generate_async_session(pg_envoy_base_config) as session:
         html = await generate_power_limit_chart_html(session, T0, test_end, polls)
 
     assert html is not None
-    out = _out("scenario_E_gen10_derc456.html")
+    out = _out("scenario_E_gen10_derc4560.html")
     out.write_text(html)
     print(f"\n  ✓ Scenario E → {out}")
 
@@ -514,7 +518,7 @@ async def test_chart_gen10_derc456(pg_base_config):
 
 
 @pytest.mark.anyio
-async def test_chart_op_mod_energise(pg_base_config):
+async def test_chart_op_mod_energise(pg_envoy_base_config):
     """
     Demonstrates opModEnergise=False de-energise (power=0) and 1-minute grace after
     explicit True-control re-energise, mirroring the opModConnect behaviour.
@@ -534,7 +538,7 @@ async def test_chart_op_mod_energise(pg_base_config):
     test_end = T0 + timedelta(minutes=35)
     created_times: dict[str, datetime] = {}
 
-    async with generate_async_session(pg_base_config) as session:
+    async with generate_async_session(pg_envoy_base_config) as session:
         site = _make_der_site(aggregator_id=1)
         session.add(site)
         grp1 = generate_class_instance(SiteControlGroup, seed=1, site_control_group_id=1, primacy=1)
@@ -572,11 +576,11 @@ async def test_chart_op_mod_energise(pg_base_config):
         _poll(1, created_times["re-energise"] + timedelta(seconds=60), req_id=3),
     ]
 
-    async with generate_async_session(pg_base_config) as session:
+    async with generate_async_session(pg_envoy_base_config) as session:
         html = await generate_power_limit_chart_html(session, T0, test_end, polls)
 
     assert html is not None
-    out = _out("scenario_F_op_mod_energise.html")
+    out = _out("scenario_F_op_mod_energise0.html")
     out.write_text(html)
     print(f"\n  ✓ Scenario F → {out}")
     print(f"\n  Open all charts: ls {OUTPUT_DIR}/")

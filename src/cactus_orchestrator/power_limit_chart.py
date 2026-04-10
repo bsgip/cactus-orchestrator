@@ -89,6 +89,7 @@ class _EnrichedControl:
     receipt_time: datetime
     effective_start: datetime  # max(doe.start_time, receipt_time)
     effective_end: datetime
+    step_name: str  # step active when the device received this control
 
     @property
     def export_limit(self) -> float | None:
@@ -131,6 +132,7 @@ class _LimitEvent:
     time: datetime
     target: float  # Watts (positive = export ceiling, negative = import floor)
     source: object | None  # _EnrichedControl | _DefaultLike | None (unconstrained)
+    instant: bool = False  # True for disconnect/energise boundaries (ramp = 0s)
 
 
 @dataclass
@@ -173,36 +175,63 @@ async def _get_subscribed_group_ids(session: AsyncSession) -> set[int]:
     return {sub.resource_id for sub in result.scalars().all()}
 
 
-# ─── Step-interval and receipt-marker helpers ─────────────────────────────────
+# ─── Control-interval and receipt-marker helpers ──────────────────────────────
 
 
-def _compute_step_intervals(
-    request_history: list[RequestEntry],
-    test_start: datetime,
+def _compute_active_control_intervals(
+    event_times: list[datetime],
+    sorted_groups: list[SiteControlGroup],
+    enriched: list[_EnrichedControl],
+    defaults_by_group: dict[int, list[_DefaultLike]],
     test_end: datetime,
 ) -> list[tuple[str, datetime, datetime]]:
-    """Return (step_name, start, end) intervals derived from sequential step_name changes.
+    """Return (label, start, end) intervals showing the effective controller at each moment.
 
-    Each step is active from its first request until the first request of the next step.
-    Blank step names are skipped. Steps may repeat."""
-    sorted_reqs = sorted(request_history, key=lambda r: r.timestamp)
+    Active DOEs are labelled with the step name at receipt (falling back to 'Grp{gid} DOE#{id}').
+    When no DOE is active, the highest-priority active default is labelled 'Default-DERP{gid}'.
+    Periods with neither are omitted."""
+    # Each segment is (key, label, start) where key uniquely identifies the active entity.
+    segments: list[tuple[tuple | None, str, datetime]] = []
+    last_key: tuple | None = ()  # sentinel — not a valid key
+
+    for T in event_times:
+        # Find highest-priority active DOE across all groups
+        winning_doe: _EnrichedControl | None = None
+        for group in sorted_groups:
+            ctrl = _find_active_control_at(T, group.site_control_group_id, enriched)
+            if ctrl is not None:
+                winning_doe = ctrl
+                break
+
+        # If no DOE, find highest-priority active default
+        winning_default_gid: int | None = None
+        if winning_doe is None:
+            for group in sorted_groups:
+                if _find_active_default_at(T, group.site_control_group_id, defaults_by_group) is not None:
+                    winning_default_gid = group.site_control_group_id
+                    break
+
+        if winning_doe is not None:
+            doe_id = winning_doe.doe.dynamic_operating_envelope_id
+            key: tuple | None = ("doe", doe_id)
+            label = winning_doe.step_name or f"Grp{winning_doe.site_control_group_id} DOE#{doe_id}"
+        elif winning_default_gid is not None:
+            key = ("default", winning_default_gid)
+            label = f"Default-DERP{winning_default_gid}"
+        else:
+            key = None
+            label = ""
+
+        if key != last_key:
+            segments.append((key, label, T))
+            last_key = key
+
     intervals: list[tuple[str, datetime, datetime]] = []
-    current: str | None = None
-    step_start: datetime = test_start
-
-    for req in sorted_reqs:
-        name = (req.step_name or "").strip()
-        if not name:
+    for i, (key, label, seg_start) in enumerate(segments):
+        if key is None:
             continue
-        if name != current:
-            if current is not None:
-                intervals.append((current, step_start, req.timestamp))
-            current = name
-            step_start = req.timestamp
-
-    if current is not None:
-        intervals.append((current, step_start, test_end))
-
+        seg_end = segments[i + 1][2] if i + 1 < len(segments) else test_end
+        intervals.append((label, seg_start, seg_end))
     return intervals
 
 
@@ -230,36 +259,44 @@ def _build_receipt_markers(
 # ─── Receipt time computation ─────────────────────────────────────────────────
 
 
-def _compute_receipt_time(
+def _compute_receipt_time_and_step(
     doe: DynamicOperatingEnvelope | ArchiveDynamicOperatingEnvelope,
     group_id: int,
     subscribed_group_ids: set[int],
-    request_history: list[RequestEntry],
-) -> datetime:
-    """Returns when the device received this control.
+    sorted_requests: list[RequestEntry],
+) -> tuple[datetime, str]:
+    """Returns (receipt_time, step_name) for this control.
 
-    For subscribed groups: created_time (notifications assumed delivered).
-    For polled groups: first GET to /edev/*/derp/{group_id}/derc after created_time.
-    Fallback: doe.start_time (if no poll found in history).
+    For subscribed groups: receipt is created_time; step_name is the last non-empty
+    step seen in sorted_requests at or before created_time.
+    For polled groups: receipt is the first GET to /edev/*/derp/{group_id}/derc after
+    created_time; step_name comes from that request. Fallback: (doe.start_time, "").
     """
     if group_id in subscribed_group_ids:
-        return doe.created_time
+        step = ""
+        for req in sorted_requests:
+            if req.timestamp > doe.created_time:
+                break
+            name = (req.step_name or "").strip()
+            if name:
+                step = name
+        return doe.created_time, step
 
-    for req in request_history:
-        if req.method != "GET":
-            continue
+    for req in sorted_requests:
         if req.timestamp <= doe.created_time:
+            continue
+        if req.method != "GET":
             continue
         m = _DERC_PATH_RE.search(req.path)
         if m and int(m.group(1)) == group_id:
-            return req.timestamp
+            return req.timestamp, (req.step_name or "").strip()
 
     logger.debug(
-        "power_limit_chart: no DERControl poll found for group %d after %r; " "falling back to start_time",
+        "power_limit_chart: no DERControl poll found for group %d after %r; falling back to start_time",
         group_id,
         doe.created_time,
     )
-    return doe.start_time
+    return doe.start_time, ""
 
 
 # ─── Control enrichment ───────────────────────────────────────────────────────
@@ -286,6 +323,7 @@ def _build_enriched_controls(
     subscribed_group_ids: set[int],
     request_history: list[RequestEntry],
 ) -> list[_EnrichedControl]:
+    sorted_requests = sorted(request_history, key=lambda r: r.timestamp)
     enriched: list[_EnrichedControl] = []
     for doe in all_does:
         # Skip superseded non-archive controls (their effective history is in archive)
@@ -304,7 +342,9 @@ def _build_enriched_controls(
         if group is None:
             continue
 
-        receipt = _compute_receipt_time(doe, doe.site_control_group_id, subscribed_group_ids, request_history)
+        receipt, step_name = _compute_receipt_time_and_step(
+            doe, doe.site_control_group_id, subscribed_group_ids, sorted_requests
+        )
         effective_start = max(doe.start_time, receipt)
 
         if effective_start >= effective_end:
@@ -318,6 +358,7 @@ def _build_enriched_controls(
                 receipt_time=receipt,
                 effective_start=effective_start,
                 effective_end=effective_end,
+                step_name=step_name,
             )
         )
     return enriched
@@ -615,6 +656,7 @@ def _build_limit_events(
     """Build list of limit target changes over the test timeline."""
     events: list[_LimitEvent] = []
     prev_target: float | None = None
+    disconnect_starts = {ds for ds, _ in disconnect_intervals}
 
     for T in event_times:
         is_disconnected = any(ds <= T < de for ds, de in disconnect_intervals)
@@ -624,13 +666,14 @@ def _build_limit_events(
             source = None
         elif is_upper:
             raw, source = _get_effective_upper_at(T, sorted_groups, enriched, defaults_by_group)
-            target = raw if raw is not None else set_max_w
+            target = min(raw if raw is not None else set_max_w, set_max_w)
         else:
             raw, source = _get_effective_lower_at(T, sorted_groups, enriched, defaults_by_group)
-            target = -(raw if raw is not None else set_max_w)
+            target = max(-(raw if raw is not None else set_max_w), -set_max_w)
 
         if prev_target is None or abs(target - prev_target) > 0.1:
-            events.append(_LimitEvent(time=T, target=target, source=source))
+            instant = T in disconnect_starts
+            events.append(_LimitEvent(time=T, target=target, source=source, instant=instant))
             prev_target = target
 
     return events
@@ -679,8 +722,12 @@ def _build_trace(
             continue
 
         delta_w = abs(ev.target - current_v)
-        ramp_secs = _compute_ramp_seconds(ev.source, der_grad_w, delta_w, set_max_w)
-        desc = _ramp_description(ev.source, der_grad_w, ramp_secs)
+        if ev.instant:
+            ramp_secs = 0.0
+            desc = "instant (disconnect)"
+        else:
+            ramp_secs = _compute_ramp_seconds(ev.source, der_grad_w, delta_w, set_max_w)
+            desc = _ramp_description(ev.source, der_grad_w, ramp_secs)
         hover = f"<br>→ {ev.target:.0f} W  ({desc})"
 
         points.append((ev.time, current_v, hover))
@@ -894,7 +941,7 @@ def _render_html_chart(
             yref="paper",
             x=-0.04,
             y=-0.32,
-            text="<b>Steps</b>",
+            text="<b>Controls</b>",
             showarrow=False,
             font=dict(size=9, color="#555"),
             xanchor="right",
@@ -1066,7 +1113,9 @@ async def generate_power_limit_chart_html(
     upper_trace = _build_trace(upper_events, test_start, test_end, set_max_w, der_grad_w, set_max_w)
     lower_trace = _build_trace(lower_events, test_start, test_end, -set_max_w, der_grad_w, set_max_w)
 
-    step_intervals = _compute_step_intervals(request_history, test_start, test_end)
+    step_intervals = _compute_active_control_intervals(
+        event_times, sorted_groups, enriched, defaults_by_group, test_end
+    )
     receipt_markers = _build_receipt_markers(enriched, subscribed_group_ids)
 
     return _render_html_chart(
