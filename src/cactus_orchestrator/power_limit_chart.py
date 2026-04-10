@@ -142,6 +142,7 @@ class _ReceiptMarker:
     time: datetime
     group_id: int
     is_subscribed: bool  # True = notification delivered; False = polled
+    step_name: str  # step active at receipt time (empty string if unknown)
 
 
 # ─── DB queries ───────────────────────────────────────────────────────────────
@@ -251,6 +252,7 @@ def _build_receipt_markers(
                     time=ctrl.receipt_time,
                     group_id=ctrl.site_control_group_id,
                     is_subscribed=ctrl.site_control_group_id in subscribed_group_ids,
+                    step_name=ctrl.step_name,
                 )
             )
     return sorted(markers, key=lambda m: m.time)
@@ -268,7 +270,7 @@ def _compute_receipt_time_and_step(
     """Returns (receipt_time, step_name) for this control.
 
     For subscribed groups: receipt is created_time; step_name is the last non-empty
-    step seen in sorted_requests at or before created_time.
+    step seen in requests to /edev/*/derp/{group_id}/derc at or before created_time.
     For polled groups: receipt is the first GET to /edev/*/derp/{group_id}/derc after
     created_time; step_name comes from that request. Fallback: (doe.start_time, "").
     """
@@ -277,9 +279,11 @@ def _compute_receipt_time_and_step(
         for req in sorted_requests:
             if req.timestamp > doe.created_time:
                 break
-            name = (req.step_name or "").strip()
-            if name:
-                step = name
+            m = _DERC_PATH_RE.search(req.path)
+            if m and int(m.group(1)) == group_id:
+                name = (req.step_name or "").strip()
+                if name:
+                    step = name
         return doe.created_time, step
 
     for req in sorted_requests:
@@ -927,24 +931,27 @@ def _render_html_chart(
                     color=["#27ae60" if m.is_subscribed else "#e67e22" for m in receipt_markers],
                     opacity=0.85,
                 ),
-                customdata=[["Notification" if m.is_subscribed else "Poll", m.group_id] for m in receipt_markers],
-                hovertemplate="%{customdata[0]} receipt — Group %{customdata[1]}<extra>Receipt</extra>",
+                customdata=[
+                    ["Notification" if m.is_subscribed else "Poll", m.step_name or f"Group {m.group_id}"]
+                    for m in receipt_markers
+                ],
+                hovertemplate="%{customdata[0]} receipt — %{customdata[1]}<extra>Receipt</extra>",
                 showlegend=False,
             )
         )
 
     # ── Step name strips at the bottom (paper coordinates) ───────────────────
     if has_steps:
-        # "Steps" axis label, left of the strip
+        # "Controls" axis label, anchored to the left edge of the plot
         fig.add_annotation(
             xref="paper",
             yref="paper",
-            x=-0.04,
+            x=0.0,
             y=-0.32,
             text="<b>Controls</b>",
             showarrow=False,
             font=dict(size=9, color="#555"),
-            xanchor="right",
+            xanchor="left",
             yanchor="middle",
         )
         for i, (name, start, end) in enumerate(step_intervals):

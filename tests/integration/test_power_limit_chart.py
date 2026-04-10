@@ -19,6 +19,7 @@ from assertical.fixtures.postgres import generate_async_session
 from cactus_schema.runner.schema import HTTPMethod, RequestEntry
 from envoy.server.model.doe import DynamicOperatingEnvelope, SiteControlGroup, SiteControlGroupDefault
 from envoy.server.model.site import Site, SiteDER, SiteDERSetting
+from envoy.server.model.subscription import Subscription, SubscriptionResource
 from cactus_orchestrator.power_limit_chart import generate_power_limit_chart_html
 
 OUTPUT_DIR = Path("/tmp/cactus_charts")
@@ -512,6 +513,92 @@ async def test_chart_gen10_derc456(pg_envoy_base_config):
     out = _out("scenario_E_gen10_derc4560.html")
     out.write_text(html)
     print(f"\n  ✓ Scenario E → {out}")
+
+
+# ─── Scenario E2: GEN-10 DERC4/5/6 — subscription variant (no gap) ───────────
+
+
+@pytest.mark.anyio
+async def test_chart_gen10_derc456_subscribed(pg_envoy_base_config):
+    """
+    Subscription variant of test_chart_gen10_derc456.
+
+    Identical DERC4/5/6 setup but both groups are subscribed — controls are received
+    at created_time (notification delivery assumed instant):
+
+      DERC4 effective_start = T+1m  (created_time T+0m30s < start_time T+1m)
+      DERC5 effective_start = T+1m  (same created_time as DERC4)
+      DERC6 effective_start = T+8m  (created_time T+7m30s < start_time T+8m)
+
+    Key difference from the polled scenario: DERC6 is effective from T+8m (its
+    start_time) so there is NO gap between DERC5 and DERC6 in the Controls strip.
+
+    Expected visual:
+      Upper trace:
+        T+0→T+1m    unconstrained (10000 W)
+        T+1m        DERC4 received (notification) → instant to 0 W (disconnect)
+        T+1m→T+6m   0 W (disconnected + grace)
+        T+6m        grace ends → ramp up to 10000 W (DERC5 capped at setMaxW, 50 s)
+        T+8m        DERC5 expires / DERC6 starts → ramp to 5000 W (25 s, contiguous)
+        T+13m       DERC6 expires → ramp back to 10000 W (25 s)
+      Controls strip: GET-DERC-4 (T+1m→T+5m) / GET-DERC-5 (T+5m→T+8m) / GET-DERC-6 (no gap between DERC5→6)
+      Green receipt markers at T+0m30s (grp 1 + grp 2) and T+7m30s (grp 2).
+    """
+    test_end = T0 + timedelta(minutes=20)
+
+    async with generate_async_session(pg_envoy_base_config) as session:
+        site = _make_der_site(aggregator_id=1, max_w=10000, grad_w=200)
+        session.add(site)
+        grp1 = generate_class_instance(SiteControlGroup, seed=1, site_control_group_id=1, primacy=1)
+        grp2 = generate_class_instance(SiteControlGroup, seed=2, site_control_group_id=2, primacy=2)
+        session.add_all([grp1, grp2])
+
+        derc4 = _make_doe(
+            site, grp1, offset_minutes=1, duration_minutes=4, gen_limit=Decimal("0"), set_connected=False, seed=40
+        )
+        derc5 = _make_doe(site, grp2, offset_minutes=1, duration_minutes=7, export_limit=Decimal("20000"), seed=50)
+        derc6 = _make_doe(site, grp2, offset_minutes=8, duration_minutes=5, export_limit=Decimal("5000"), seed=60)
+        session.add_all([derc4, derc5, derc6])
+
+        # Both groups subscribed — receipt = created_time for all controls
+        def _make_sub(resource_id: int) -> Subscription:
+            sub = Subscription()
+            sub.aggregator_id = 1
+            sub.changed_time = T0
+            sub.resource_type = SubscriptionResource.DYNAMIC_OPERATING_ENVELOPE
+            sub.resource_id = resource_id
+            sub.scoped_site_id = None
+            sub.notification_uri = "https://example.com/notify"
+            sub.entity_limit = 100
+            return sub
+
+        session.add_all([_make_sub(1), _make_sub(2)])
+
+        await session.flush()
+        ct4, ct6 = derc4.created_time, derc6.created_time
+        await session.commit()
+
+    # No DERC polls needed (subscribed). Requests carry step names for strip labelling:
+    # step_name for each DOE = last request to that group's DERC path at or before created_time.
+    polls = [
+        # ct4 = T0+30s: DERC4 (grp1) and DERC5 (grp2) both created here.
+        # Each group gets step_name from its own DERC-path request.
+        _poll(1, ct4, req_id=1, step_name="GET-DERC-4"),
+        _poll(2, ct4, req_id=2, step_name="GET-DERC-5"),
+        _poll(2, T0 + timedelta(minutes=7), req_id=3, step_name="WAIT-OBSERVE-DERC-5"),
+        # ct6 = T0+7m30s: DERC6 created here → gets "GET-DERC-6"
+        _poll(2, ct6, req_id=4, step_name="GET-DERC-6"),
+        _poll(2, T0 + timedelta(minutes=11), req_id=5, step_name="WAIT-OBSERVE-DERC-6"),
+        _poll(1, T0 + timedelta(minutes=15), req_id=6, step_name="WAIT-OBSERVE-DERP-1-6-DEFAULTS"),
+    ]
+
+    async with generate_async_session(pg_envoy_base_config) as session:
+        html = await generate_power_limit_chart_html(session, T0, test_end, polls)
+
+    assert html is not None
+    out = _out("scenario_E2_gen10_derc456_subscribed0.html")
+    out.write_text(html)
+    print(f"\n  ✓ Scenario E2 → {out}")
 
 
 # ─── Scenario F: opModEnergise — de-energise and re-energise grace period ─────
