@@ -31,6 +31,7 @@ from cactus_orchestrator.api.run import (
 )
 from cactus_orchestrator.api.run_group import map_group_to_group_response
 from cactus_orchestrator.artifact import regenerate_run_artifact
+from cactus_orchestrator.chart import generate_power_limit_chart
 from cactus_orchestrator.auth import AuthPerm, UserContext, jwt_validator
 from cactus_orchestrator.crud import (
     ACTIVE_RUN_STATUSES,
@@ -328,6 +329,47 @@ async def admin_regenerate_report_and_get_run_artifact(
 
     # Get the download data
     return await get_run_artifact_response_for_user(user, run_id)
+
+
+@router.get(uri.AdminRunPowerLimitChart, status_code=HTTPStatus.OK)
+async def admin_get_run_power_limit_chart(
+    run_id: int,
+    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.admin_all}))],
+) -> Response:
+    """Generates and returns a standalone HTML power limit chart for the run's envoy DB artifact (admin access)."""
+    user_context, original_user_context = await assume_user_context_from_run(
+        session=db.session, user_context=user_context, run_id=run_id
+    )
+    if user_context == original_user_context:
+        logger.error(
+            (
+                f"Failed to assume new user context ({run_id=},"
+                f" assumed_user_context={user_context}, {original_user_context=})"
+            )
+        )
+    user = await select_user_or_raise(db.session, user_context)
+
+    try:
+        run = await select_user_run_with_artifact(db.session, user.user_id, run_id)
+    except NoResultFound as exc:
+        logger.debug(exc)
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Run does not exist.")
+
+    if run.run_artifact is None:
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="RunArtifact does not exist.")
+
+    try:
+        html = await generate_power_limit_chart(run.run_artifact)
+    except ValueError as exc:
+        raise HTTPException(status_code=HTTPStatus.CONFLICT, detail=str(exc))
+
+    if html is None:
+        raise HTTPException(
+            status_code=HTTPStatus.NOT_FOUND,
+            detail="Chart unavailable: insufficient DER data in artifact.",
+        )
+
+    return Response(content=html, media_type="text/html")
 
 
 @router.get(uri.AdminRunGroupProcedureRunList, status_code=HTTPStatus.OK)
