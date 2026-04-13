@@ -305,7 +305,7 @@ async def spawn_teststack_and_init_run(
 
             await wait_for_runner_health(session)
             pod_startup_seconds = (datetime.now(timezone.utc) - pod_start_time).total_seconds()
-            logger.info(f"Pod {run_resource_names.statefulset_name} ready in {pod_startup_seconds:.1f}s")
+            logger.info(f"Pod {run_resource_names.stateful_set} ready in {pod_startup_seconds:.1f}s")
 
             # Build RunRequest objects for all tests
             run_requests: list[RunRequest] = []
