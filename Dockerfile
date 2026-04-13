@@ -1,7 +1,7 @@
 FROM python:3.12-slim
 WORKDIR /app/
 
-RUN apt update && apt install --no-install-recommends -y git && rm -rf /var/lib/apt/lists/*
+RUN apt update && apt install --no-install-recommends -y git postgresql && rm -rf /var/lib/apt/lists/*
 
 # Setup the git config for private repos
 RUN --mount=type=secret,id=github_pat,uid=50000 git config --global url."https://ssh:$(cat /run/secrets/github_pat)@github.com/".insteadOf "ssh://git@github.com/"

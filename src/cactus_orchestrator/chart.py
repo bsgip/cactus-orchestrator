@@ -100,11 +100,15 @@ async def generate_power_limit_chart(run_artifact: RunArtifact) -> str | None:
 
     test_start: datetime | None = reporting_data.runner_state.active_test_procedure.started_at
     if test_start is None:
+        logger.warning("power_limit_chart: test procedure has no started_at - skipping chart")
         return None
     test_end: datetime = reporting_data.created_at
     request_history = reporting_data.runner_state.request_history
 
-    pg: testing.postgresql.Postgresql = await asyncio.to_thread(testing.postgresql.Postgresql)  # type: ignore
+    try:
+        pg: testing.postgresql.Postgresql = await asyncio.to_thread(testing.postgresql.Postgresql)  # type: ignore
+    except RuntimeError as exc:
+        raise ValueError(f"Postgres unavailable (is initdb installed?): {exc}") from exc
     try:
         pg_url: str = pg.url()
         async_pg_url = pg_url.replace("postgresql://", "postgresql+asyncpg://")
