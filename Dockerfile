@@ -19,6 +19,9 @@ COPY ./pyproject.toml /app/pyproject.toml
 
 RUN pip install --no-cache-dir -e /app && pip install --no-cache-dir uvicorn
 
+RUN useradd -ms /bin/bash appuser && chown -R appuser:appuser /app
+USER appuser
+
 WORKDIR /app
 
 # logging configuration
