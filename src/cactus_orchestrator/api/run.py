@@ -290,6 +290,7 @@ async def spawn_teststack_and_init_run(
     try:
         # duplicate resources
         user_identifier = user.user_name or user.subject_id
+        pod_start_time = datetime.now(timezone.utc)
         await clone_statefulset(template_resource_names, run_resource_names, user_identifier)
         await clone_service(template_resource_names, run_resource_names, user_identifier)
 
@@ -303,6 +304,8 @@ async def spawn_teststack_and_init_run(
         ) as session:
 
             await wait_for_runner_health(session)
+            pod_startup_seconds = (datetime.now(timezone.utc) - pod_start_time).total_seconds()
+            logger.info(f"Pod {run_resource_names.statefulset_name} ready in {pod_startup_seconds:.1f}s")
 
             # Build RunRequest objects for all tests
             run_requests: list[RunRequest] = []
@@ -612,16 +615,21 @@ async def delete_individual_run(
         logger.debug(exc)
         raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Not Found")
 
+    logger.info(f"Delete requested for run {run_id} by user {user.user_id} ({user.user_name or user.subject_id})")
+
     # For playlist runs, delete all siblings
     if run.playlist_execution_id:
         playlist_runs = await select_playlist_runs(db.session, run.playlist_execution_id)
+        run_ids = [r.run_id for r in playlist_runs]
         # Teardown shared teststack (only need once)
         await prepare_run_for_delete(run)
         # Delete all runs in the playlist
         await delete_runs(db.session, list(playlist_runs))
+        logger.info(f"Deleted playlist runs {run_ids} for user {user.user_id}")
     else:
         await prepare_run_for_delete(run)
         await delete_runs(db.session, [run])
+        logger.info(f"Deleted run {run_id} for user {user.user_id}")
 
     await db.session.commit()
 
