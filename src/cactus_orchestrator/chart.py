@@ -84,15 +84,15 @@ async def generate_power_limit_chart(run_artifact: RunArtifact, video_start_seco
 
         for sql in (schema_sql, data_sql):
             # psql is the canonical restore tool for plain-SQL pg_dump output; nosec B603 B607
-            await asyncio.to_thread(
-                subprocess.run, ["psql", pg_url], input=sql.encode(), check=True
-            )
+            await asyncio.to_thread(subprocess.run, ["psql", pg_url], input=sql.encode(), check=True)
 
         engine = create_async_engine(async_pg_url)
         try:
             session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
             async with session_factory() as session:
-                return await generate_power_limit_chart_html(session, test_start, test_end, request_history, video_start_seconds=video_start_seconds)
+                return await generate_power_limit_chart_html(
+                    session, test_start, test_end, request_history, video_start_seconds=video_start_seconds
+                )
         finally:
             await engine.dispose()
     finally:

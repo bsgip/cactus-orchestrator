@@ -530,12 +530,18 @@ def _get_effective_upper_at(
     defaults → unconstrained) and then combined with min so the most restrictive
     applies. The source returned is that of the binding (minimum) type."""
     exp_val, exp_src = _resolve_type_limit(
-        T, sorted_groups, enriched, defaults_by_group,
+        T,
+        sorted_groups,
+        enriched,
+        defaults_by_group,
         lambda c: c.export_limit,
         lambda d: float(d.export_limit_active_watts) if d.export_limit_active_watts is not None else None,
     )
     gen_val, gen_src = _resolve_type_limit(
-        T, sorted_groups, enriched, defaults_by_group,
+        T,
+        sorted_groups,
+        enriched,
+        defaults_by_group,
         lambda c: c.gen_limit,
         lambda d: float(d.generation_limit_active_watts) if d.generation_limit_active_watts is not None else None,
     )
@@ -561,12 +567,18 @@ def _get_effective_lower_at(
     defaults → unconstrained) and then combined with min so the most restrictive
     applies. The source returned is that of the binding (minimum) type."""
     imp_val, imp_src = _resolve_type_limit(
-        T, sorted_groups, enriched, defaults_by_group,
+        T,
+        sorted_groups,
+        enriched,
+        defaults_by_group,
         lambda c: c.import_limit,
         lambda d: float(d.import_limit_active_watts) if d.import_limit_active_watts is not None else None,
     )
     load_val, load_src = _resolve_type_limit(
-        T, sorted_groups, enriched, defaults_by_group,
+        T,
+        sorted_groups,
+        enriched,
+        defaults_by_group,
         lambda c: c.load_limit,
         lambda d: float(d.load_limit_active_watts) if d.load_limit_active_watts is not None else None,
     )
@@ -1176,6 +1188,12 @@ async def generate_power_limit_chart_html(
     receipt_markers = _build_receipt_markers(enriched, subscribed_group_ids)
 
     return _render_html_chart(
-        upper_trace, lower_trace, test_start, test_end, set_max_w, step_intervals, receipt_markers,
+        upper_trace,
+        lower_trace,
+        test_start,
+        test_end,
+        set_max_w,
+        step_intervals,
+        receipt_markers,
         video_start_seconds=video_start_seconds,
     )
