@@ -784,6 +784,17 @@ def _duration_label(seconds: float) -> str:
     return f"{hours}h{rem}m" if rem else f"{hours}h"
 
 
+def _fmt_video_time(seconds: float) -> str:
+    """Format a seconds offset as a video timestamp: 'M:SS' or 'H:MM:SS'."""
+    s = int(max(0, seconds))
+    hh = s // 3600
+    mm = (s % 3600) // 60
+    ss = s % 60
+    if hh > 0:
+        return f"{hh}:{mm:02d}:{ss:02d}"
+    return f"{mm}:{ss:02d}"
+
+
 def _choose_tick_interval_seconds(duration_secs: float) -> int:
     """Pick a sensible tick interval so there are roughly 8-20 ticks."""
     for interval in [60, 120, 300, 600, 900, 1800, 3600, 7200]:
@@ -800,6 +811,7 @@ def _render_html_chart(
     set_max_w: float,
     step_intervals: list[tuple[str, datetime, datetime]],
     receipt_markers: list[_ReceiptMarker],
+    video_start_seconds: float | None = None,
 ) -> str:
     duration_secs = (test_end - test_start).total_seconds()
     tick_interval = _choose_tick_interval_seconds(duration_secs)
@@ -812,7 +824,11 @@ def _render_html_chart(
     while t_secs <= duration_secs + 1:
         T = test_start + timedelta(seconds=t_secs)
         tick_vals.append(t_secs)
-        bottom_labels.append(f"{_duration_label(t_secs)}<br>{T.strftime('%H:%M')} UTC")
+        if video_start_seconds is not None:
+            rel_label = _fmt_video_time(t_secs + video_start_seconds)
+        else:
+            rel_label = _duration_label(t_secs)
+        bottom_labels.append(f"{rel_label}<br>{T.strftime('%H:%M')} UTC")
         top_labels.append(T.astimezone(_CANBERRA_TZ).strftime("%H:%M %Z"))
         t_secs += tick_interval
 
@@ -1075,6 +1091,7 @@ async def generate_power_limit_chart_html(
     test_start: datetime,
     test_end: datetime,
     request_history: list[RequestEntry],
+    video_start_seconds: float | None = None,
 ) -> str | None:
     """Generate a standalone HTML chart of expected device power limits.
 
@@ -1128,5 +1145,6 @@ async def generate_power_limit_chart_html(
     receipt_markers = _build_receipt_markers(enriched, subscribed_group_ids)
 
     return _render_html_chart(
-        upper_trace, lower_trace, test_start, test_end, set_max_w, step_intervals, receipt_markers
+        upper_trace, lower_trace, test_start, test_end, set_max_w, step_intervals, receipt_markers,
+        video_start_seconds=video_start_seconds,
     )

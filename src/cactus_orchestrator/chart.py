@@ -48,7 +48,7 @@ def extract_envoy_dumps(zip_data: bytes) -> tuple[str, str]:
         return zf.read(schema_name).decode(), zf.read(data_name).decode()
 
 
-async def generate_power_limit_chart(run_artifact: RunArtifact) -> str | None:
+async def generate_power_limit_chart(run_artifact: RunArtifact, video_start_seconds: float | None = None) -> str | None:
     """Generate a standalone power limit HTML chart from the dumps stored in a RunArtifact.
 
     Spins up an ephemeral local postgres process (via testing.postgresql), restores the
@@ -92,7 +92,7 @@ async def generate_power_limit_chart(run_artifact: RunArtifact) -> str | None:
         try:
             session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
             async with session_factory() as session:
-                return await generate_power_limit_chart_html(session, test_start, test_end, request_history)
+                return await generate_power_limit_chart_html(session, test_start, test_end, request_history, video_start_seconds=video_start_seconds)
         finally:
             await engine.dispose()
     finally:

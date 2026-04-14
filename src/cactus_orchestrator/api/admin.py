@@ -335,6 +335,7 @@ async def admin_regenerate_report_and_get_run_artifact(
 async def admin_get_run_power_limit_chart(
     run_id: int,
     user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.admin_all}))],
+    video_start_seconds: float | None = Query(None),
 ) -> Response:
     """Generates and returns a standalone HTML power limit chart for the run's envoy DB artifact (admin access)."""
     user_context, original_user_context = await assume_user_context_from_run(
@@ -359,7 +360,7 @@ async def admin_get_run_power_limit_chart(
         raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="RunArtifact does not exist.")
 
     try:
-        html = await generate_power_limit_chart(run.run_artifact)
+        html = await generate_power_limit_chart(run.run_artifact, video_start_seconds=video_start_seconds)
     except ValueError as exc:
         raise HTTPException(status_code=HTTPStatus.CONFLICT, detail=str(exc))
 
