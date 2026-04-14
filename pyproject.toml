@@ -26,7 +26,8 @@ dependencies = [
     "typing_inspect",                                                          # fastapi-utils missing dep?
     "pyasn1",
     "reportlab",
-    "types-reportlab",
+    "plotly",
+    "kaleido",
 ]
 name = "cactus-orchestrator"
 dynamic = ["version"]
@@ -44,6 +45,7 @@ dev = [
     "kubernetes-stubs",
     "isort",
     "pandas-stubs",
+    "types-reportlab",
 ]
 test = [
     "pytest",
