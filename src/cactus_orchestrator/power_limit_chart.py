@@ -1053,16 +1053,18 @@ def _render_html_chart(
     )
 
     html = fig.to_html(full_html=True, include_plotlyjs=True)
-    disclaimer = (
-        '<div style="max-width:900px;margin:8px auto 24px;padding:6px 14px;'
-        "border:1px solid #d0a800;border-radius:4px;background:#fffbe6;"
-        'font-size:12px;color:#555;font-family:sans-serif;">'
-        "<b>Disclaimer:</b> This report represents a best guess for what site active power should "
-        "look like based on DERControls and their primacy, it should not be used where it conflicts "
-        "with the test definitions or TS5573 standards."
+    header = (
+        '<div style="max-width:900px;margin:24px auto 0;padding:10px 14px 4px;font-family:sans-serif;">'
+        '<h2 style="margin:0 0 6px;font-size:20px;color:#222;">Device Power Chart</h2>'
+        '<p style="margin:0;font-size:13px;color:#444;">'
+        "This chart is an estimation of what device active power should look like during the witness test. "
+        "It is based on active and default controls, polling and subscription timing, primacy, and expected "
+        "ramp behaviour. It is intended to align with the TS5573 test definitions, but should not be used "
+        "instead of these test procedures for client development."
+        "</p>"
         "</div>"
     )
-    return html.replace("</body>", disclaimer + "</body>")
+    return html.replace("<body>", "<body>" + header)
 
 
 # ─── Public entry point ───────────────────────────────────────────────────────

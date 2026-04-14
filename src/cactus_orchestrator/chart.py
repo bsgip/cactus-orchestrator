@@ -1,10 +1,10 @@
 import asyncio
 import io
 import logging
+import subprocess  # nosec B404
 import zipfile
 from datetime import datetime
 
-import asyncpg
 import testing.postgresql
 from cactus_runner.models import ReportingData
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -17,17 +17,6 @@ logger = logging.getLogger(__name__)
 _ENVOY_SCHEMA_DUMP_PREFIX = "EnvoyDBSchema"
 _ENVOY_DATA_DUMP_PREFIX = "EnvoyDB"
 _DUMP_SUFFIX = ".dump"
-
-# pg_dump statements that may fail due to missing roles in a fresh temporary DB.
-# These are non-critical (ownership/privileges) and can be safely skipped.
-_IGNORABLE_STMT_PREFIXES = (
-    "ALTER TABLE",
-    "ALTER SEQUENCE",
-    "ALTER TYPE",
-    "GRANT",
-    "REVOKE",
-    "COMMENT ON",
-)
 
 
 def extract_envoy_dumps(zip_data: bytes) -> tuple[str, str]:
@@ -57,26 +46,6 @@ def extract_envoy_dumps(zip_data: bytes) -> tuple[str, str]:
                 "Artifact does not contain envoy DB dumps (generated before power limit chart support was added)"
             )
         return zf.read(schema_name).decode(), zf.read(data_name).decode()
-
-
-async def _restore_sql(conn: asyncpg.Connection, sql: str) -> None:  # type: ignore[type-arg]
-    """Execute SQL statements from a pg_dump file against conn.
-
-    Ownership and privilege statements that fail due to missing roles in the fresh temporary
-    DB are logged as warnings and skipped. All other errors are re-raised.
-    """
-    for raw in sql.split(";\n"):
-        stmt = raw.strip()
-        if not stmt or stmt.startswith("--"):
-            continue
-        try:
-            await conn.execute(stmt)
-        except asyncpg.PostgresError as exc:
-            stmt_upper = stmt.lstrip().upper()
-            if any(stmt_upper.startswith(p) for p in _IGNORABLE_STMT_PREFIXES):
-                logger.warning("Skipping non-critical SQL restore statement: %s", exc)
-            else:
-                raise
 
 
 async def generate_power_limit_chart(run_artifact: RunArtifact) -> str | None:
@@ -113,12 +82,11 @@ async def generate_power_limit_chart(run_artifact: RunArtifact) -> str | None:
         pg_url: str = pg.url()
         async_pg_url = pg_url.replace("postgresql://", "postgresql+asyncpg://")
 
-        conn: asyncpg.Connection = await asyncpg.connect(pg_url)  # type: ignore[type-arg]
-        try:
-            await _restore_sql(conn, schema_sql)
-            await _restore_sql(conn, data_sql)
-        finally:
-            await conn.close()
+        for sql in (schema_sql, data_sql):
+            # psql is the canonical restore tool for plain-SQL pg_dump output; nosec B603 B607
+            await asyncio.to_thread(
+                subprocess.run, ["psql", pg_url], input=sql.encode(), check=True
+            )
 
         engine = create_async_engine(async_pg_url)
         try:
