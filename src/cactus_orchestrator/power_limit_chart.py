@@ -8,7 +8,7 @@ The chart shows two traces:
 
 Limits are derived from DERControls across all DERPrograms (resolved by primacy),
 with default controls as fallback. Transitions are rendered as linear ramps using
-rampTms, setGradW, or AS4777 wGra as appropriate.
+rampTms (DERControl), DefaultDERControl setGradW, or AS4777 wGra as appropriate.
 
 Receipt timing:
   - Subscribed programs: device receives controls at created_time (notifications assumed delivered).
@@ -326,6 +326,7 @@ def _build_enriched_controls(
     groups_by_id: dict[int, SiteControlGroup],
     subscribed_group_ids: set[int],
     request_history: list[RequestEntry],
+    doe_tags: dict[int, str],
 ) -> list[_EnrichedControl]:
     sorted_requests = sorted(request_history, key=lambda r: r.timestamp)
     enriched: list[_EnrichedControl] = []
@@ -346,9 +347,13 @@ def _build_enriched_controls(
         if group is None:
             continue
 
-        receipt, step_name = _compute_receipt_time_and_step(
+        receipt, inferred_step = _compute_receipt_time_and_step(
             doe, doe.site_control_group_id, subscribed_group_ids, sorted_requests
         )
+        # Prefer the tag recorded at control-creation time; fall back to the step name
+        # inferred from request timestamps (less reliable when creation occurs during
+        # the same request that polls the DERC list).
+        step_name = doe_tags.get(doe.dynamic_operating_envelope_id, inferred_step)
         effective_start = max(doe.start_time, receipt)
 
         if effective_start >= effective_end:
@@ -604,57 +609,44 @@ def _rate_based_duration(grad_w_hundredths: float, delta_w: float, set_max_w: fl
 
 def _compute_ramp_seconds(
     source: object | None,
-    der_grad_w: int,
     delta_w: float,
     set_max_w: float,
 ) -> float:
     """Compute ramp duration in seconds for a transition to source.
 
     Rules:
-      To DER control:    rampTms → setGradW (DERSettings) → 15s fixed
-      To default:        DefaultDERControl.setGradW → setGradW (DERSettings) → AS4777 wGra rate
-      To unconstrained:  setGradW (DERSettings) → AS4777 wGra rate
+      To DER control:    rampTms → 15s fixed
+      To default:        DefaultDERControl.setGradW → AS4777 wGra rate
+      To unconstrained:  AS4777 wGra rate
     """
     if isinstance(source, _EnrichedControl):
         ramp_t = source.ramp_time_seconds
         if ramp_t is not None and ramp_t > 0.0:
             return ramp_t
-        if der_grad_w > 0:
-            return _rate_based_duration(float(der_grad_w), delta_w, set_max_w)
         return _AS4777_SOFT_RAMP_SECONDS
 
     if source is not None:
         default_grad = getattr(source, "ramp_rate_percent_per_second", None)
         if default_grad is not None and default_grad > 0:
             return _rate_based_duration(float(default_grad), delta_w, set_max_w)
-        if der_grad_w > 0:
-            return _rate_based_duration(float(der_grad_w), delta_w, set_max_w)
         return _rate_based_duration(_AS4777_WGRA_HUNDREDTHS, delta_w, set_max_w)
 
     # Unconstrained
-    if der_grad_w > 0:
-        return _rate_based_duration(float(der_grad_w), delta_w, set_max_w)
     return _rate_based_duration(_AS4777_WGRA_HUNDREDTHS, delta_w, set_max_w)
 
 
-def _ramp_description(source: object | None, der_grad_w: int, ramp_secs: float) -> str:
+def _ramp_description(source: object | None, ramp_secs: float) -> str:
     """Human-readable string describing which ramp rule was applied."""
     dur = f"{ramp_secs:.0f}s"
     if isinstance(source, _EnrichedControl):
         if source.ramp_time_seconds and source.ramp_time_seconds > 0:
             return f"rampTms={source.ramp_time_seconds:.0f}s"
-        if der_grad_w > 0:
-            return f"setGradW={der_grad_w} ({dur})"
         return "AS4777 soft-start (15s)"
     if source is not None:
         default_grad = getattr(source, "ramp_rate_percent_per_second", None)
         if default_grad and default_grad > 0:
             return f"Default setGradW={default_grad} ({dur})"
-        if der_grad_w > 0:
-            return f"setGradW={der_grad_w} ({dur})"
         return f"AS4777 wGra ({dur})"
-    if der_grad_w > 0:
-        return f"setGradW={der_grad_w} ({dur})"
     return f"AS4777 wGra ({dur})"
 
 
@@ -734,7 +726,6 @@ def _build_trace(
     test_start: datetime,
     test_end: datetime,
     initial_value: float,
-    der_grad_w: int,
     set_max_w: float,
 ) -> list[tuple[datetime, float, str]]:
     """Convert limit events into a piecewise-linear trace with ramps.
@@ -773,8 +764,8 @@ def _build_trace(
             ramp_secs = 0.0
             desc = "instant (disconnect)"
         else:
-            ramp_secs = _compute_ramp_seconds(ev.source, der_grad_w, delta_w, set_max_w)
-            desc = _ramp_description(ev.source, der_grad_w, ramp_secs)
+            ramp_secs = _compute_ramp_seconds(ev.source, delta_w, set_max_w)
+            desc = _ramp_description(ev.source, ramp_secs)
         hover = f"<br>→ {ev.target:.0f} W  ({desc})"
 
         points.append((ev.time, current_v, hover))
@@ -1134,6 +1125,7 @@ async def generate_power_limit_chart_html(
     test_start: datetime,
     test_end: datetime,
     request_history: list[RequestEntry],
+    doe_tags: dict[int, str] | None = None,
     video_start_seconds: float | None = None,
 ) -> str | None:
     """Generate a standalone HTML chart of expected device power limits.
@@ -1164,13 +1156,13 @@ async def generate_power_limit_chart_html(
 
     subscribed_group_ids = await _get_subscribed_group_ids(session)
 
-    enriched = _build_enriched_controls(all_does, test_start, groups_by_id, subscribed_group_ids, request_history)
+    enriched = _build_enriched_controls(
+        all_does, test_start, groups_by_id, subscribed_group_ids, request_history, doe_tags or {}
+    )
 
     disconnect_intervals = _compute_disconnect_intervals(enriched, test_end)
 
     event_times = _collect_event_times(enriched, defaults_by_group, disconnect_intervals, test_start, test_end)
-
-    der_grad_w = der_setting.grad_w
 
     upper_events = _build_limit_events(
         True, event_times, sorted_groups, enriched, defaults_by_group, disconnect_intervals, set_max_w
@@ -1179,8 +1171,8 @@ async def generate_power_limit_chart_html(
         False, event_times, sorted_groups, enriched, defaults_by_group, disconnect_intervals, set_max_w
     )
 
-    upper_trace = _build_trace(upper_events, test_start, test_end, set_max_w, der_grad_w, set_max_w)
-    lower_trace = _build_trace(lower_events, test_start, test_end, -set_max_w, der_grad_w, set_max_w)
+    upper_trace = _build_trace(upper_events, test_start, test_end, set_max_w, set_max_w)
+    lower_trace = _build_trace(lower_events, test_start, test_end, -set_max_w, set_max_w)
 
     step_intervals = _compute_active_control_intervals(
         event_times, sorted_groups, enriched, defaults_by_group, test_end

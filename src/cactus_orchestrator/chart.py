@@ -74,6 +74,13 @@ async def generate_power_limit_chart(run_artifact: RunArtifact, video_start_seco
     test_end: datetime = reporting_data.created_at
     request_history = reporting_data.runner_state.request_history
 
+    # Build doe_id → tag from the runner's tag → doe_id annotation map (inverted).
+    # This allows the chart to label each control by its YAML tag rather than inferring
+    # a step name from request timestamps (which is fragile when controls are created
+    # during the same request that polls the DERC list).
+    tag_by_alias = reporting_data.runner_state.active_test_procedure.resource_annotations.der_control_ids_by_alias
+    doe_tags: dict[int, str] = {doe_id: tag for tag, doe_id in tag_by_alias.items()}
+
     try:
         pg: testing.postgresql.Postgresql = await asyncio.to_thread(testing.postgresql.Postgresql)  # type: ignore
     except RuntimeError as exc:
@@ -91,7 +98,7 @@ async def generate_power_limit_chart(run_artifact: RunArtifact, video_start_seco
             session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
             async with session_factory() as session:
                 return await generate_power_limit_chart_html(
-                    session, test_start, test_end, request_history, video_start_seconds=video_start_seconds
+                    session, test_start, test_end, request_history, doe_tags=doe_tags, video_start_seconds=video_start_seconds
                 )
         finally:
             await engine.dispose()
