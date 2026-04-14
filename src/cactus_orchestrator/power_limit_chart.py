@@ -21,7 +21,7 @@ import logging
 import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Callable, Optional
 from zoneinfo import ZoneInfo
 
 import plotly.graph_objects as go
@@ -483,36 +483,68 @@ def _min_notnone(*vals: Optional[float]) -> float | None:
     return min(valid) if valid else None
 
 
+def _resolve_type_limit(
+    T: datetime,
+    sorted_groups: list[SiteControlGroup],
+    enriched: list[_EnrichedControl],
+    defaults_by_group: dict[int, list[_DefaultLike]],
+    get_ctrl_val: Callable[[_EnrichedControl], float | None],
+    get_default_val: Callable[[_DefaultLike], float | None],
+) -> tuple[float | None, object | None]:
+    """Resolve the effective limit for a single control type independently.
+
+    Phase 1 — active controls in primacy order: the first group whose active control
+    sets this type wins.
+    Phase 2 — defaults in primacy order: the first group whose active default sets
+    this type wins.
+    Phase 3 — unconstrained: returns (None, None).
+
+    Keeping the two phases separate means an active control that does not set a
+    particular type does not shadow a default that does."""
+    for group in sorted_groups:
+        ctrl = _find_active_control_at(T, group.site_control_group_id, enriched)
+        if ctrl is not None:
+            val = get_ctrl_val(ctrl)
+            if val is not None:
+                return val, ctrl
+
+    for group in sorted_groups:
+        default = _find_active_default_at(T, group.site_control_group_id, defaults_by_group)
+        if default is not None:
+            val = get_default_val(default)
+            if val is not None:
+                return val, default
+
+    return None, None
+
+
 def _get_effective_upper_at(
     T: datetime,
     sorted_groups: list[SiteControlGroup],
     enriched: list[_EnrichedControl],
     defaults_by_group: dict[int, list[_DefaultLike]],
 ) -> tuple[float | None, object | None]:
-    """Returns (effective_limit_watts, source) for the upper bound (export/gen) at time T.
-    Returns (None, None) if unconstrained."""
-    for group in sorted_groups:
-        gid = group.site_control_group_id
+    """Returns (effective_limit_watts, source) for the upper bound at time T.
 
-        ctrl = _find_active_control_at(T, gid, enriched)
-        if ctrl is not None:
-            limit = _min_notnone(ctrl.export_limit, ctrl.gen_limit)
-            if limit is not None:
-                return limit, ctrl
-            # Active control for this group but no export/gen limit set → skip to next group
-            continue
-
-        default = _find_active_default_at(T, gid, defaults_by_group)
-        if default is not None:
-            exp = default.export_limit_active_watts
-            gen = default.generation_limit_active_watts
-            limit = _min_notnone(
-                float(exp) if exp is not None else None,
-                float(gen) if gen is not None else None,
-            )
-            if limit is not None:
-                return limit, default
-
+    Export and generation limits are each resolved independently (active controls →
+    defaults → unconstrained) and then combined with min so the most restrictive
+    applies. The source returned is that of the binding (minimum) type."""
+    exp_val, exp_src = _resolve_type_limit(
+        T, sorted_groups, enriched, defaults_by_group,
+        lambda c: c.export_limit,
+        lambda d: float(d.export_limit_active_watts) if d.export_limit_active_watts is not None else None,
+    )
+    gen_val, gen_src = _resolve_type_limit(
+        T, sorted_groups, enriched, defaults_by_group,
+        lambda c: c.gen_limit,
+        lambda d: float(d.generation_limit_active_watts) if d.generation_limit_active_watts is not None else None,
+    )
+    if exp_val is not None and gen_val is not None:
+        return (exp_val, exp_src) if exp_val <= gen_val else (gen_val, gen_src)
+    if exp_val is not None:
+        return exp_val, exp_src
+    if gen_val is not None:
+        return gen_val, gen_src
     return None, None
 
 
@@ -522,29 +554,28 @@ def _get_effective_lower_at(
     enriched: list[_EnrichedControl],
     defaults_by_group: dict[int, list[_DefaultLike]],
 ) -> tuple[float | None, object | None]:
-    """Returns (effective_limit_watts, source) for the lower bound (import/load) at time T.
-    Returns a positive magnitude value - caller negates it for display."""
-    for group in sorted_groups:
-        gid = group.site_control_group_id
+    """Returns (effective_limit_watts, source) for the lower bound at time T.
+    Returns a positive magnitude value — caller negates it for display.
 
-        ctrl = _find_active_control_at(T, gid, enriched)
-        if ctrl is not None:
-            limit = _min_notnone(ctrl.import_limit, ctrl.load_limit)
-            if limit is not None:
-                return limit, ctrl
-            continue
-
-        default = _find_active_default_at(T, gid, defaults_by_group)
-        if default is not None:
-            imp = default.import_limit_active_watts
-            load = default.load_limit_active_watts
-            limit = _min_notnone(
-                float(imp) if imp is not None else None,
-                float(load) if load is not None else None,
-            )
-            if limit is not None:
-                return limit, default
-
+    Import and load limits are each resolved independently (active controls →
+    defaults → unconstrained) and then combined with min so the most restrictive
+    applies. The source returned is that of the binding (minimum) type."""
+    imp_val, imp_src = _resolve_type_limit(
+        T, sorted_groups, enriched, defaults_by_group,
+        lambda c: c.import_limit,
+        lambda d: float(d.import_limit_active_watts) if d.import_limit_active_watts is not None else None,
+    )
+    load_val, load_src = _resolve_type_limit(
+        T, sorted_groups, enriched, defaults_by_group,
+        lambda c: c.load_limit,
+        lambda d: float(d.load_limit_active_watts) if d.load_limit_active_watts is not None else None,
+    )
+    if imp_val is not None and load_val is not None:
+        return (imp_val, imp_src) if imp_val <= load_val else (load_val, load_src)
+    if imp_val is not None:
+        return imp_val, imp_src
+    if load_val is not None:
+        return load_val, load_src
     return None, None
 
 
