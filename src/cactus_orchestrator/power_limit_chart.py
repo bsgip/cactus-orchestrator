@@ -59,6 +59,9 @@ _AS4777_SOFT_RAMP_SECONDS: float = 15.0
 # Grace period after opModConnect:true before returning to normal control
 _OP_MOD_CONNECT_GRACE_SECONDS: float = 60.0
 
+# Post-reconnect window during which AS4777 wGra applies regardless of rampTms/setGradW
+_POST_DISCONNECT_WGRA_SECONDS: float = 6 * 60.0
+
 # Matches /edev/{n}/derp/{group_id}/derc (with optional query string)
 _DERC_PATH_RE = re.compile(r"/edev/\d+/derp/(\d+)/derc")
 
@@ -727,12 +730,16 @@ def _build_trace(
     test_end: datetime,
     initial_value: float,
     set_max_w: float,
+    disconnect_intervals: list[tuple[datetime, datetime]],
 ) -> list[tuple[datetime, float, str]]:
     """Convert limit events into a piecewise-linear trace with ramps.
 
     Returns a list of (time, watts, hover_text) tuples. hover_text is non-empty only
     at ramp-start points and describes the ramp rule applied (e.g. 'rampTms=120s').
     """
+    post_reconnect_windows = [
+        (de, de + timedelta(seconds=_POST_DISCONNECT_WGRA_SECONDS)) for _, de in disconnect_intervals
+    ]
     points: list[tuple[datetime, float, str]] = [(test_start, initial_value, "")]
 
     # Track the current ramp: from (ramp_start_t, ramp_start_v) to (ramp_end_t, ramp_end_v)
@@ -763,6 +770,9 @@ def _build_trace(
         if ev.instant:
             ramp_secs = 0.0
             desc = "instant (disconnect)"
+        elif any(ws <= ev.time < we for ws, we in post_reconnect_windows):
+            ramp_secs = _rate_based_duration(_AS4777_WGRA_HUNDREDTHS, delta_w, set_max_w)
+            desc = f"AS4777 wGra post-reconnect ({ramp_secs:.0f}s)"
         else:
             ramp_secs = _compute_ramp_seconds(ev.source, delta_w, set_max_w)
             desc = _ramp_description(ev.source, ramp_secs)
@@ -1171,8 +1181,8 @@ async def generate_power_limit_chart_html(
         False, event_times, sorted_groups, enriched, defaults_by_group, disconnect_intervals, set_max_w
     )
 
-    upper_trace = _build_trace(upper_events, test_start, test_end, set_max_w, set_max_w)
-    lower_trace = _build_trace(lower_events, test_start, test_end, -set_max_w, set_max_w)
+    upper_trace = _build_trace(upper_events, test_start, test_end, set_max_w, set_max_w, disconnect_intervals)
+    lower_trace = _build_trace(lower_events, test_start, test_end, -set_max_w, set_max_w, disconnect_intervals)
 
     step_intervals = _compute_active_control_intervals(
         event_times, sorted_groups, enriched, defaults_by_group, test_end
