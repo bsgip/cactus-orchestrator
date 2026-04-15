@@ -1031,7 +1031,7 @@ def _add_step_completion_markers(
     completed_steps = [
         (step_name, step_info.completed_at)
         for step_name, step_info in runner_state.active_test_procedure.step_status.items()
-        if step_info.get_step_status() == StepStatus.RESOLVED
+        if step_info.completed_at is not None
     ]
 
     if not completed_steps:

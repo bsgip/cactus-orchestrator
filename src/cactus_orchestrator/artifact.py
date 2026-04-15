@@ -153,15 +153,16 @@ async def regenerate_pdf_report(file_data: bytes, raw_reporting_data: str, versi
     if pdf_generation_error is not None:
         return _add_text_file_to_zip_data(file_data, PDF_GENERATION_ERRORS_FILE_NAME, pdf_generation_error)
 
-    try:
-        CACTUS_TEST_PROCEDURE_REPORT_PREFIX = "CactusTestProcedureReport"
-        updated_zip_data = await replace_pdf_in_zip_data(
-            pdf_data=pdf_data, zip_data=file_data, pdf_filename_prefix=CACTUS_TEST_PROCEDURE_REPORT_PREFIX
-        )
-    except Exception as exc:
-        msg = "Failed to replace pdf in archive."
-        logger.error(msg, exc_info=exc)
-        raise ValueError(f"Artifact regeneration error: {msg}")
+    if pdf_data is not None:
+        try:
+            CACTUS_TEST_PROCEDURE_REPORT_PREFIX = "CactusTestProcedureReport"
+            updated_zip_data = await replace_pdf_in_zip_data(
+                pdf_data=pdf_data, zip_data=file_data, pdf_filename_prefix=CACTUS_TEST_PROCEDURE_REPORT_PREFIX
+            )
+        except Exception as exc:
+            msg = "Failed to replace pdf in archive."
+            logger.error(msg, exc_info=exc)
+            raise ValueError(f"Artifact regeneration error: {msg}")
 
     return updated_zip_data
 
