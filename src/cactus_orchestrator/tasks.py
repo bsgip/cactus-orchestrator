@@ -1,5 +1,7 @@
 import asyncio
 import logging
+
+import kaleido
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any, AsyncIterator, Callable, Coroutine, Never
@@ -155,6 +157,8 @@ _task_references: set[asyncio.Task] = set()
 async def lifespan(app: FastAPI, settings: CactusOrchestratorSettings) -> AsyncIterator[Never]:
     """Lifespan event to start background tasks with fastapi app."""
 
+    kaleido.start_sync_server()
+
     if settings.idleteardowntask_enable:
         logger.info("Starting teardown_teststack_task")
         idleteardowntask = generate_idleteardowntask(
@@ -175,3 +179,5 @@ async def lifespan(app: FastAPI, settings: CactusOrchestratorSettings) -> AsyncI
             await task  # block until it cancels
         except asyncio.CancelledError:
             pass
+
+    kaleido.stop_sync_server()
