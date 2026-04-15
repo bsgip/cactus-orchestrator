@@ -27,6 +27,8 @@ dependencies = [
     "pyasn1",
     "reportlab",
     "types-reportlab",
+    "plotly",
+    "kaleido<1.0.0",
 ]
 name = "cactus-orchestrator"
 dynamic = ["version"]
