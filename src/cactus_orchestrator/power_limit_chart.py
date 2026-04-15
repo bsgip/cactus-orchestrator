@@ -748,11 +748,23 @@ def _build_trace(
     ramp_end_t = test_start
     ramp_end_v = initial_value
 
+    # Deferred ramp endpoint: only flushed to points once we know no event interrupts it.
+    # Stored as (time, value); None when there is no pending endpoint.
+    pending_ramp_end: tuple[datetime, float] | None = None
+
     for ev in limit_events:
         if ev.time <= test_start:
             continue
         if ev.time > test_end:
             break
+
+        # Flush the pending ramp endpoint if the ramp completes before this event.
+        # If the event arrives before the ramp end, drop the endpoint — the ramp was
+        # interrupted and should not continue past the interruption point.
+        if pending_ramp_end is not None:
+            if pending_ramp_end[0] <= ev.time:
+                points.append((pending_ramp_end[0], pending_ramp_end[1], ""))
+            pending_ramp_end = None
 
         # Determine the current value at ev.time (accounting for any active ramp)
         ramp_duration_secs = (ramp_end_t - ramp_start_t).total_seconds()
@@ -776,13 +788,15 @@ def _build_trace(
         else:
             ramp_secs = _compute_ramp_seconds(ev.source, delta_w, set_max_w)
             desc = _ramp_description(ev.source, ramp_secs)
-        hover = f"<br>→ {ev.target:.0f} W  ({desc})"
+        rel_time = _duration_label((ev.time - test_start).total_seconds())
+        hover = f"<br>T+{rel_time}  →  {ev.target:.0f} W  ({desc})"
 
         points.append((ev.time, current_v, hover))
 
         ramp_end_dt = ev.time + timedelta(seconds=ramp_secs)
         if ramp_end_dt <= test_end:
-            points.append((ramp_end_dt, ev.target, ""))
+            # Defer the endpoint — a later event may interrupt this ramp.
+            pending_ramp_end = (ramp_end_dt, ev.target)
         else:
             # Ramp extends past test end - clip and interpolate
             if ramp_secs > 0.0:
@@ -797,6 +811,10 @@ def _build_trace(
         ramp_start_v = current_v
         ramp_end_t = ramp_end_dt
         ramp_end_v = ev.target
+
+    # Flush any pending ramp endpoint that was not interrupted by a later event.
+    if pending_ramp_end is not None:
+        points.append((pending_ramp_end[0], pending_ramp_end[1], ""))
 
     # Ensure the trace reaches test_end
     if points[-1][0] < test_end:
@@ -1006,16 +1024,22 @@ def _render_html_chart(
         fig.add_annotation(
             xref="paper",
             yref="paper",
-            x=0.0,
+            x=-0.02,
             y=-0.32,
             text="<b>Controls</b>",
             showarrow=False,
             font=dict(size=9, color="#555"),
-            xanchor="left",
+            xanchor="right",
             yanchor="middle",
         )
-        for i, (name, start, end) in enumerate(step_intervals):
-            color = _STEP_PALETTE[i % len(_STEP_PALETTE)]
+        palette_idx = 0
+        for name, start, end in step_intervals:
+            is_default = name.startswith("Default")
+            if is_default:
+                color = "rgba(180,180,180,0.45)"
+            else:
+                color = _STEP_PALETTE[palette_idx % len(_STEP_PALETTE)]
+                palette_idx += 1
             x0 = to_rel(max(start, test_start))
             x1 = to_rel(min(end, test_end))
             if x1 <= x0:
@@ -1042,7 +1066,7 @@ def _render_html_chart(
                     y=-0.32,
                     text=label,
                     showarrow=False,
-                    font=dict(size=8),
+                    font=dict(size=8, color="#666" if is_default else "#000"),
                     xanchor="center",
                     yanchor="middle",
                 )
