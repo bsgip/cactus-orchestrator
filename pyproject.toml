@@ -18,9 +18,9 @@ dependencies = [
     "pyjwt",
     "fastapi-async-sqlalchemy",
     "asyncpg",
-    "cactus-test-definitions==1.10.5",
+    "cactus-test-definitions==1.10.7",
     "cactus-schema==0.0.16",
-    "cactus-runner @ git+ssh://git@github.com/bsgip/cactus-runner.git@v1.7.9",
+    "cactus-runner @ git+ssh://git@github.com/bsgip/cactus-runner.git@v1.8.0",
     "fastapi-pagination",
     "fastapi-utils",
     "typing_inspect",                                                          # fastapi-utils missing dep?
@@ -48,6 +48,7 @@ dev = [
     "kubernetes-stubs",
     "isort",
     "pandas-stubs",
+    "types-reportlab",
 ]
 test = [
     "pytest",
