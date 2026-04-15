@@ -18,7 +18,6 @@ COPY ./pyproject.toml /app/pyproject.toml
 # Install deps
 
 RUN pip install --no-cache-dir -e /app && pip install --no-cache-dir uvicorn
-RUN plotly_get_chrome
 
 WORKDIR /app
 
