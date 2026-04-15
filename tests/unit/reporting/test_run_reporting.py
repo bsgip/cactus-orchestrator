@@ -431,8 +431,11 @@ def test_pdf_report_everything_set():
     "col_idx,field_name,valid_value,enum_member",
     [
         (3, "uom", UomType.REAL_POWER_WATT.value, UomType.REAL_POWER_WATT),
+        (3, "uom", UomType.REAL_ENERGY_WATT_HOURS.value, UomType.REAL_ENERGY_WATT_HOURS),
         (4, "data_qualifier", DataQualifierType.AVERAGE.value, DataQualifierType.AVERAGE),
+        (4, "data_qualifier", DataQualifierType.NOT_APPLICABLE.value, DataQualifierType.NOT_APPLICABLE),
         (5, "kind", KindType.POWER.value, KindType.POWER),
+        (5, "kind", KindType.ENERGY.value, KindType.ENERGY),
         (6, "phase", PhaseCode.PHASE_ABC.value, PhaseCode.PHASE_ABC),
     ],
 )
