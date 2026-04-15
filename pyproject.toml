@@ -26,8 +26,11 @@ dependencies = [
     "typing_inspect",                                                          # fastapi-utils missing dep?
     "pyasn1",
     "reportlab",
-    "plotly",
-    "kaleido",
+    "types-reportlab",
+    # kaleido v1+ requires Chrome (and more...._to be installed (not available in the container image).
+    # plotly v6+ requires kaleido v1+. Keep both pinned until further consideration.
+    "plotly<6.0.0",
+    "kaleido<1.0.0",
 ]
 name = "cactus-orchestrator"
 dynamic = ["version"]
