@@ -612,13 +612,15 @@ def _rate_based_duration(grad_w_hundredths: float, delta_w: float, set_max_w: fl
 
 def _compute_ramp_seconds(
     source: object | None,
+    at_time: datetime,
     delta_w: float,
     set_max_w: float,
+    defaults_by_group: dict[int, list[_DefaultLike]],
 ) -> float:
     """Compute ramp duration in seconds for a transition to source.
 
     Rules:
-      To DER control:    rampTms → 15s fixed
+      To DER control:    rampTms → DefaultDERControl.setGradW → 15s fixed
       To default:        DefaultDERControl.setGradW → AS4777 wGra rate
       To unconstrained:  AS4777 wGra rate
     """
@@ -626,6 +628,10 @@ def _compute_ramp_seconds(
         ramp_t = source.ramp_time_seconds
         if ramp_t is not None and ramp_t > 0.0:
             return ramp_t
+        active_default = _find_active_default_at(at_time, source.site_control_group_id, defaults_by_group)
+        default_grad = getattr(active_default, "ramp_rate_percent_per_second", None)
+        if default_grad is not None and default_grad > 0:
+            return _rate_based_duration(float(default_grad), delta_w, set_max_w)
         return _AS4777_SOFT_RAMP_SECONDS
 
     if source is not None:
@@ -638,12 +644,21 @@ def _compute_ramp_seconds(
     return _rate_based_duration(_AS4777_WGRA_HUNDREDTHS, delta_w, set_max_w)
 
 
-def _ramp_description(source: object | None, ramp_secs: float) -> str:
+def _ramp_description(
+    source: object | None,
+    at_time: datetime,
+    ramp_secs: float,
+    defaults_by_group: dict[int, list[_DefaultLike]],
+) -> str:
     """Human-readable string describing which ramp rule was applied."""
     dur = f"{ramp_secs:.0f}s"
     if isinstance(source, _EnrichedControl):
         if source.ramp_time_seconds and source.ramp_time_seconds > 0:
             return f"rampTms={source.ramp_time_seconds:.0f}s"
+        active_default = _find_active_default_at(at_time, source.site_control_group_id, defaults_by_group)
+        default_grad = getattr(active_default, "ramp_rate_percent_per_second", None)
+        if default_grad and default_grad > 0:
+            return f"Default setGradW={default_grad} ({dur})"
         return "AS4777 soft-start (15s)"
     if source is not None:
         default_grad = getattr(source, "ramp_rate_percent_per_second", None)
@@ -731,6 +746,7 @@ def _build_trace(
     initial_value: float,
     set_max_w: float,
     disconnect_intervals: list[tuple[datetime, datetime]],
+    defaults_by_group: dict[int, list[_DefaultLike]],
 ) -> list[tuple[datetime, float, str]]:
     """Convert limit events into a piecewise-linear trace with ramps.
 
@@ -786,8 +802,8 @@ def _build_trace(
             ramp_secs = _rate_based_duration(_AS4777_WGRA_HUNDREDTHS, delta_w, set_max_w)
             desc = f"AS4777 wGra post-reconnect ({ramp_secs:.0f}s)"
         else:
-            ramp_secs = _compute_ramp_seconds(ev.source, delta_w, set_max_w)
-            desc = _ramp_description(ev.source, ramp_secs)
+            ramp_secs = _compute_ramp_seconds(ev.source, ev.time, delta_w, set_max_w, defaults_by_group)
+            desc = _ramp_description(ev.source, ev.time, ramp_secs, defaults_by_group)
         rel_time = _duration_label((ev.time - test_start).total_seconds())
         hover = f"<br>T+{rel_time}  →  {ev.target:.0f} W  ({desc})"
 
@@ -865,6 +881,32 @@ def _choose_tick_interval_seconds(duration_secs: float) -> int:
     return 3600
 
 
+def _assign_completion_lanes(completions: list[tuple[str, datetime]], to_rel: Callable[[datetime], float]) -> list[int]:
+    """Assign a vertical stagger lane (0, 1, 2) to each step completion to avoid label overlap.
+
+    Completions that fall within _COMPLETION_LABEL_MIN_GAP_SECS of the previous completion
+    in the same lane are bumped to the next lane (cycling through 3 lanes).
+    """
+    _COMPLETION_LABEL_MIN_GAP_SECS = 45.0
+    _NUM_LANES = 3
+    last_in_lane: list[float] = [-999999.0] * _NUM_LANES
+    lanes: list[int] = []
+    for _, t in completions:
+        rel = to_rel(t)
+        # Pick the first lane where the last label is far enough away
+        assigned = 0
+        for lane in range(_NUM_LANES):
+            if rel - last_in_lane[lane] >= _COMPLETION_LABEL_MIN_GAP_SECS:
+                assigned = lane
+                break
+        else:
+            # All lanes are crowded — just cycle
+            assigned = len(lanes) % _NUM_LANES
+        last_in_lane[assigned] = rel
+        lanes.append(assigned)
+    return lanes
+
+
 def _render_html_chart(
     upper_trace: list[tuple[datetime, float, str]],
     lower_trace: list[tuple[datetime, float, str]],
@@ -874,6 +916,7 @@ def _render_html_chart(
     step_intervals: list[tuple[str, datetime, datetime]],
     receipt_markers: list[_ReceiptMarker],
     video_start_seconds: float | None = None,
+    step_completions: list[tuple[str, datetime]] | None = None,
 ) -> str:
     duration_secs = (test_end - test_start).total_seconds()
     tick_interval = _choose_tick_interval_seconds(duration_secs)
@@ -901,6 +944,8 @@ def _render_html_chart(
     y_min = -set_max_w * 1.1
     has_steps = bool(step_intervals)
     bottom_margin = 230 if has_steps else 130
+    completions = sorted(step_completions or [], key=lambda x: x[1])
+    top_margin = 230 if completions else 150
 
     fig = go.Figure()
 
@@ -1018,6 +1063,56 @@ def _render_html_chart(
             )
         )
 
+    # ── Step completion markers ──────────────────────────────────────────────
+    # Vertical lines spanning the full chart height + staggered labels above the plot.
+    # Lane y positions sit below the legend (which is at y=1.16).
+    _COMPLETION_LANE_Y = [1.04, 1.10, 1.16]
+    _COMPLETION_COLOR = "#7c3aed"  # Indigo/purple — distinct from receipt markers
+    if completions:
+        lanes = _assign_completion_lanes(completions, to_rel)
+        for (name, t), lane in zip(completions, lanes):
+            rel = to_rel(t)
+            if rel < 0 or rel > duration_secs:
+                continue
+            fig.add_shape(
+                type="line",
+                xref="x",
+                yref="paper",
+                x0=rel,
+                x1=rel,
+                y0=0,
+                y1=1,
+                line=dict(color=_COMPLETION_COLOR, width=1.5, dash="dash"),
+                opacity=0.45,
+            )
+            label = name if len(name) <= 22 else name[:20] + "…"
+            fig.add_annotation(
+                xref="x",
+                yref="paper",
+                x=rel,
+                y=_COMPLETION_LANE_Y[lane],
+                text=label,
+                showarrow=True,
+                arrowhead=0,
+                arrowcolor=_COMPLETION_COLOR,
+                arrowwidth=1,
+                ax=0,
+                ay=12,
+                font=dict(size=8, color=_COMPLETION_COLOR),
+                xanchor="center",
+                yanchor="bottom",
+            )
+        # Legend dummy trace
+        fig.add_trace(
+            go.Scatter(
+                x=[None],
+                y=[None],
+                mode="lines",
+                line=dict(color=_COMPLETION_COLOR, width=1.5, dash="dash"),
+                name="Step complete",
+            )
+        )
+
     # ── Step name strips at the bottom (paper coordinates) ───────────────────
     if has_steps:
         # "Controls" axis label, anchored to the left edge of the plot
@@ -1102,10 +1197,10 @@ def _render_html_chart(
             gridcolor="rgba(0,0,0,0.08)",
             zeroline=False,
         ),
-        legend=dict(orientation="h", yanchor="bottom", y=1.16, xanchor="right", x=1),
+        legend=dict(orientation="h", yanchor="bottom", y=1.28 if completions else 1.16, xanchor="right", x=1),
         plot_bgcolor="white",
         paper_bgcolor="white",
-        margin=dict(t=150, b=bottom_margin, l=80, r=120),
+        margin=dict(t=top_margin, b=bottom_margin, l=80, r=120),
         hovermode="x unified",
         # ── Export / Import view toggle ──────────────────────────────────────
         updatemenus=[
@@ -1161,6 +1256,7 @@ async def generate_power_limit_chart_html(
     request_history: list[RequestEntry],
     doe_tags: dict[int, str] | None = None,
     video_start_seconds: float | None = None,
+    step_completions: list[tuple[str, datetime]] | None = None,
 ) -> str | None:
     """Generate a standalone HTML chart of expected device power limits.
 
@@ -1205,8 +1301,8 @@ async def generate_power_limit_chart_html(
         False, event_times, sorted_groups, enriched, defaults_by_group, disconnect_intervals, set_max_w
     )
 
-    upper_trace = _build_trace(upper_events, test_start, test_end, set_max_w, set_max_w, disconnect_intervals)
-    lower_trace = _build_trace(lower_events, test_start, test_end, -set_max_w, set_max_w, disconnect_intervals)
+    upper_trace = _build_trace(upper_events, test_start, test_end, set_max_w, set_max_w, disconnect_intervals, defaults_by_group)
+    lower_trace = _build_trace(lower_events, test_start, test_end, -set_max_w, set_max_w, disconnect_intervals, defaults_by_group)
 
     step_intervals = _compute_active_control_intervals(
         event_times, sorted_groups, enriched, defaults_by_group, test_end
@@ -1222,4 +1318,5 @@ async def generate_power_limit_chart_html(
         step_intervals,
         receipt_markers,
         video_start_seconds=video_start_seconds,
+        step_completions=step_completions or [],
     )

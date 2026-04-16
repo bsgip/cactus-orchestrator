@@ -81,6 +81,12 @@ async def generate_power_limit_chart(run_artifact: RunArtifact, video_start_seco
     tag_by_alias = reporting_data.runner_state.active_test_procedure.resource_annotations.der_control_ids_by_alias
     doe_tags: dict[int, str] = {doe_id: tag for tag, doe_id in tag_by_alias.items()}
 
+    step_completions: list[tuple[str, datetime]] = [
+        (name, info.completed_at)
+        for name, info in reporting_data.runner_state.active_test_procedure.step_status.items()
+        if info.completed_at is not None
+    ]
+
     try:
         pg: testing.postgresql.Postgresql = await asyncio.to_thread(testing.postgresql.Postgresql)  # type: ignore
     except RuntimeError as exc:
@@ -98,7 +104,13 @@ async def generate_power_limit_chart(run_artifact: RunArtifact, video_start_seco
             session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
             async with session_factory() as session:
                 return await generate_power_limit_chart_html(
-                    session, test_start, test_end, request_history, doe_tags=doe_tags, video_start_seconds=video_start_seconds
+                    session,
+                    test_start,
+                    test_end,
+                    request_history,
+                    doe_tags=doe_tags,
+                    video_start_seconds=video_start_seconds,
+                    step_completions=step_completions,
                 )
         finally:
             await engine.dispose()
