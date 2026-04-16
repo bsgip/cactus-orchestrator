@@ -906,6 +906,7 @@ def _render_html_chart(
     set_max_w: float,
     step_intervals: list[tuple[str, datetime, datetime]],
     receipt_markers: list[_ReceiptMarker],
+    test_name: str = "",
     video_start_seconds: float | None = None,
     step_completions: list[tuple[str, datetime]] | None = None,
 ) -> str:
@@ -1200,7 +1201,7 @@ def _render_html_chart(
     html = fig.to_html(full_html=True, include_plotlyjs=True)
     header = (
         '<div style="max-width:900px;margin:24px auto 0;padding:10px 14px 4px;font-family:sans-serif;">'
-        '<h2 style="margin:0 0 6px;font-size:20px;color:#222;">Device Power Chart</h2>'
+        f'<h2 style="margin:0 0 6px;font-size:20px;color:#222;">Device Power Chart: {test_name}</h2>'
         '<p style="margin:0;font-size:13px;color:#444;">'
         "This chart is an estimation of what device active power should look like during the witness test. "
         "It is based on active and default controls, polling and subscription timing, primacy, and expected "
@@ -1220,6 +1221,7 @@ async def generate_power_limit_chart_html(
     test_start: datetime,
     test_end: datetime,
     request_history: list[RequestEntry],
+    test_name: str = "",
     doe_tags: dict[int, str] | None = None,
     video_start_seconds: float | None = None,
     step_completions: list[tuple[str, datetime]] | None = None,
@@ -1283,6 +1285,7 @@ async def generate_power_limit_chart_html(
         set_max_w,
         step_intervals,
         receipt_markers,
+        test_name=test_name,
         video_start_seconds=video_start_seconds,
         step_completions=step_completions or [],
     )

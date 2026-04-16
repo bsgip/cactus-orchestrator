@@ -115,6 +115,7 @@ async def generate_power_limit_chart(run_artifact: RunArtifact, video_start_seco
                     test_start,
                     test_end,
                     request_history,
+                    test_name=reporting_data.runner_state.active_test_procedure.name,
                     doe_tags=doe_tags,
                     video_start_seconds=video_start_seconds,
                     step_completions=step_completions,
