@@ -22,8 +22,6 @@ import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Callable, Optional
-from zoneinfo import ZoneInfo
-
 import plotly.graph_objects as go
 from cactus_schema.runner.schema import RequestEntry
 from envoy.server.model.archive.doe import (
@@ -47,8 +45,6 @@ from cactus_runner.app.envoy_common import (
 )
 
 logger = logging.getLogger(__name__)
-
-_CANBERRA_TZ = ZoneInfo("Australia/Sydney")
 
 # AS4777.2 wGra: 16.67%/min = 0.2778%/s = 27.78 hundredths-of-%-per-sec
 _AS4777_WGRA_HUNDREDTHS: float = 16.67 / 60.0 * 100.0
@@ -813,15 +809,10 @@ def _build_trace(
         if ramp_end_dt <= test_end:
             # Defer the endpoint — a later event may interrupt this ramp.
             pending_ramp_end = (ramp_end_dt, ev.target)
-        else:
-            # Ramp extends past test end - clip and interpolate
-            if ramp_secs > 0.0:
-                frac = (test_end - ev.time).total_seconds() / ramp_secs
-                frac = max(0.0, min(1.0, frac))
-                v_at_end = current_v + frac * (ev.target - current_v)
-            else:
-                v_at_end = ev.target
-            points.append((test_end, v_at_end, ""))
+        # If ramp_end_dt > test_end, don't append test_end here — subsequent events
+        # within the test window would then be inserted AFTER the test_end point,
+        # causing plotly to draw a backward line. The post-loop section below handles
+        # the clipped test_end value correctly once all events have been processed.
 
         ramp_start_t = ev.time
         ramp_start_v = current_v
@@ -923,7 +914,6 @@ def _render_html_chart(
 
     tick_vals: list[float] = []
     bottom_labels: list[str] = []  # Relative time + UTC (shown below x-axis)
-    top_labels: list[str] = []  # AEDT/AEST (shown above chart)
 
     t_secs = 0.0
     while t_secs <= duration_secs + 1:
@@ -934,7 +924,6 @@ def _render_html_chart(
         else:
             rel_label = _duration_label(t_secs)
         bottom_labels.append(f"{rel_label}<br>{T.strftime('%H:%M')} UTC")
-        top_labels.append(T.astimezone(_CANBERRA_TZ).strftime("%H:%M %Z"))
         t_secs += tick_interval
 
     def to_rel(t: datetime) -> float:
@@ -990,17 +979,6 @@ def _render_html_chart(
         line_dash="dot",
         annotation_text=f"−setMaxW (−{int(set_max_w)} W)",
         annotation_position="bottom right",
-    )
-
-    # ── Invisible secondary x-axis trace for AEDT tick labels ────────────────
-    fig.add_trace(
-        go.Scatter(
-            x=tick_vals,
-            y=[None] * len(tick_vals),
-            xaxis="x2",
-            showlegend=False,
-            hoverinfo="skip",
-        )
     )
 
     # ── Control receipt markers ──────────────────────────────────────────────
@@ -1065,9 +1043,8 @@ def _render_html_chart(
 
     # ── Step completion markers ──────────────────────────────────────────────
     # Vertical lines spanning the full chart height + staggered labels above the plot.
-    # Lane y positions sit below the legend (which is at y=1.16).
-    _COMPLETION_LANE_Y = [1.04, 1.10, 1.16]
-    _COMPLETION_COLOR = "#7c3aed"  # Indigo/purple — distinct from receipt markers
+    _COMPLETION_LANE_Y = [1.06, 1.12, 1.18]
+    _COMPLETION_COLOR = "#888"  # Grey — readable without competing with axis labels
     if completions:
         lanes = _assign_completion_lanes(completions, to_rel)
         for (name, t), lane in zip(completions, lanes):
@@ -1178,17 +1155,6 @@ def _render_html_chart(
             range=[0, duration_secs],
             showgrid=True,
             gridcolor="rgba(0,0,0,0.08)",
-        ),
-        xaxis2=dict(
-            overlaying="x",
-            side="top",
-            tickmode="array",
-            tickvals=tick_vals,
-            ticktext=top_labels,
-            title="Canberra (AEDT / AEST)",
-            matches="x",
-            range=[0, duration_secs],
-            showgrid=False,
         ),
         yaxis=dict(
             title="Active Power (W)",

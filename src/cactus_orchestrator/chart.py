@@ -97,7 +97,14 @@ async def generate_power_limit_chart(run_artifact: RunArtifact, video_start_seco
 
         for sql in (schema_sql, data_sql):
             # psql is the canonical restore tool for plain-SQL pg_dump output; nosec B603 B607
-            await asyncio.to_thread(subprocess.run, ["psql", pg_url], input=sql.encode(), check=True)
+            await asyncio.to_thread(
+                subprocess.run,
+                ["psql", pg_url],
+                input=sql.encode(),
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
 
         engine = create_async_engine(async_pg_url)
         try:
