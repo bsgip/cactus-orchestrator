@@ -6,6 +6,7 @@ from typing import Annotated
 from cactus_runner.client import ClientSession, ClientTimeout, RunnerClient
 from cactus_schema.orchestrator import (
     AdminStatsResponse,
+    ProceedResponse,
     RunGroupResponse,
     RunResponse,
     TestProcedureRunSummaryResponse,
@@ -417,6 +418,50 @@ async def admin_get_run_status(
                 status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
                 detail=f"Unable to connect to run {run.run_id}'s pod to fetch status.",
             )
+
+
+@router.get(uri.AdminRunProceed, status_code=HTTPStatus.OK)
+async def admin_proceed_proxy(
+    run_id: int,
+    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.admin_all}))],
+) -> ProceedResponse:
+    """Forwards the proceed request to the appropriate runner instance on behalf of the run's owner."""
+
+    user_context, original_user_context = await assume_user_context_from_run(
+        session=db.session, user_context=user_context, run_id=run_id
+    )
+    if user_context == original_user_context:
+        logger.error(
+            (
+                f"Failed to assume new user context ({run_id=},"
+                f" assumed_user_context={user_context}, {original_user_context=})"
+            )
+        )
+    user = await select_user_or_raise(db.session, user_context)
+
+    try:
+        run = await select_user_run(db.session, user.user_id, run_id)
+    except NoResultFound as exc:
+        logger.debug(exc)
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Run does not exist.")
+
+    if run.run_status not in ACTIVE_RUN_STATUSES:
+        raise HTTPException(
+            status_code=HTTPStatus.GONE, detail=f"Run {run_id} has terminated. Unable to send proceed signal."
+        )
+
+    run_resource_names = get_resource_names(run.teststack_id)
+    settings = get_current_settings()
+    async with ClientSession(
+        base_url=run_resource_names.runner_base_url,
+        timeout=ClientTimeout(settings.test_execution_comms_timeout_seconds),
+    ) as s:
+        try:
+            return await RunnerClient.proceed(s)
+        except Exception as exc:
+            msg = f"Error sending proceed to run {run.run_id}."
+            logger.error(msg, exc_info=exc)
+            raise HTTPException(status_code=HTTPStatus.INTERNAL_SERVER_ERROR, detail=msg)
 
 
 @router.get(uri.AdminRun, status_code=HTTPStatus.OK)
