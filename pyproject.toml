@@ -27,7 +27,10 @@ dependencies = [
     "pyasn1",
     "reportlab",
     "types-reportlab",
-    "plotly",
+    # kaleido v1+ requires Chrome (and more...._to be installed (not available in the container image).
+    # plotly v6+ requires kaleido v1+. Keep both pinned until further consideration.
+    "plotly<6.0.0",
+    "kaleido<1.0.0",
     "testing.postgresql",
 ]
 name = "cactus-orchestrator"
@@ -46,6 +49,7 @@ dev = [
     "kubernetes-stubs",
     "isort",
     "pandas-stubs",
+    "types-reportlab",
 ]
 test = [
     "pytest",
