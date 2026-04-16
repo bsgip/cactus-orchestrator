@@ -873,27 +873,28 @@ def _choose_tick_interval_seconds(duration_secs: float) -> int:
 
 
 def _assign_completion_lanes(completions: list[tuple[str, datetime]], to_rel: Callable[[datetime], float]) -> list[int]:
-    """Assign a vertical stagger lane (0, 1, 2) to each step completion to avoid label overlap.
+    """Assign a vertical stack lane (0, 1, 2, …) to each step completion.
 
-    Completions that fall within _COMPLETION_LABEL_MIN_GAP_SECS of the previous completion
-    in the same lane are bumped to the next lane (cycling through 3 lanes).
+    Lane 0 is closest to the plot; higher lanes stack further above it.
+    A new lane is opened whenever all existing lanes have a label within
+    _COMPLETION_LABEL_MIN_GAP_SECS, so any number of simultaneous completions
+    stack cleanly without truncation or cycling.
     """
     _COMPLETION_LABEL_MIN_GAP_SECS = 45.0
-    _NUM_LANES = 3
-    last_in_lane: list[float] = [-999999.0] * _NUM_LANES
+    last_in_lane: list[float] = []  # most-recent rel-time assigned to each lane
     lanes: list[int] = []
     for _, t in completions:
         rel = to_rel(t)
-        # Pick the first lane where the last label is far enough away
-        assigned = 0
-        for lane in range(_NUM_LANES):
-            if rel - last_in_lane[lane] >= _COMPLETION_LABEL_MIN_GAP_SECS:
-                assigned = lane
+        # Find the lowest lane with enough horizontal clearance; open a new one if none.
+        assigned = len(last_in_lane)
+        for k, last in enumerate(last_in_lane):
+            if rel - last >= _COMPLETION_LABEL_MIN_GAP_SECS:
+                assigned = k
                 break
+        if assigned == len(last_in_lane):
+            last_in_lane.append(rel)
         else:
-            # All lanes are crowded — just cycle
-            assigned = len(lanes) % _NUM_LANES
-        last_in_lane[assigned] = rel
+            last_in_lane[assigned] = rel
         lanes.append(assigned)
     return lanes
 
@@ -935,7 +936,12 @@ def _render_html_chart(
     has_steps = bool(step_intervals)
     bottom_margin = 230 if has_steps else 130
     completions = sorted(step_completions or [], key=lambda x: x[1])
-    top_margin = 230 if completions else 150
+    lanes = _assign_completion_lanes(completions, to_rel) if completions else []
+    max_lane = max(lanes) if lanes else 0
+    # Each lane is 0.06 paper-coordinate units above the plot; legend floats above them all.
+    _COMPLETION_LANE_Y = [1.06 + i * 0.06 for i in range(max_lane + 1)]
+    legend_y = 1.06 + (max_lane + 1) * 0.06 + 0.06 if completions else 1.16
+    top_margin = (140 + (max_lane + 1) * 30) if completions else 150
 
     fig = go.Figure()
 
@@ -1043,11 +1049,9 @@ def _render_html_chart(
         )
 
     # ── Step completion markers ──────────────────────────────────────────────
-    # Vertical lines spanning the full chart height + staggered labels above the plot.
-    _COMPLETION_LANE_Y = [1.06, 1.12, 1.18]
+    # Vertical lines spanning the full chart height + stacked labels above the plot.
     _COMPLETION_COLOR = "#888"  # Grey — readable without competing with axis labels
     if completions:
-        lanes = _assign_completion_lanes(completions, to_rel)
         for (name, t), lane in zip(completions, lanes):
             rel = to_rel(t)
             if rel < 0 or rel > duration_secs:
@@ -1164,7 +1168,7 @@ def _render_html_chart(
             gridcolor="rgba(0,0,0,0.08)",
             zeroline=False,
         ),
-        legend=dict(orientation="h", yanchor="bottom", y=1.28 if completions else 1.16, xanchor="right", x=1),
+        legend=dict(orientation="h", yanchor="bottom", y=legend_y, xanchor="right", x=1),
         plot_bgcolor="white",
         paper_bgcolor="white",
         margin=dict(t=top_margin, b=bottom_margin, l=80, r=120),
