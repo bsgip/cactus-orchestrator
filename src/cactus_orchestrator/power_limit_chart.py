@@ -894,6 +894,158 @@ def _assign_completion_lanes(completions: list[tuple[str, datetime]], to_rel: Ca
     return lanes
 
 
+def _add_receipt_markers(
+    fig: go.Figure,
+    receipt_markers: list[_ReceiptMarker],
+    to_rel: Callable[[datetime], float],
+    set_max_w: float,
+) -> None:
+    for m in receipt_markers:
+        color = "#27ae60" if m.is_subscribed else "#e67e22"
+        fig.add_shape(
+            type="line",
+            xref="x",
+            yref="paper",
+            x0=to_rel(m.time),
+            x1=to_rel(m.time),
+            y0=0.02,
+            y1=0.98,
+            line=dict(color=color, width=1.5, dash="dot"),
+            opacity=0.55,
+        )
+    if any(m.is_subscribed for m in receipt_markers):
+        fig.add_trace(
+            go.Scatter(x=[None], y=[None], mode="lines", line=dict(color="#27ae60", width=1.5, dash="dot"), name="Notif receipt")
+        )
+    if any(not m.is_subscribed for m in receipt_markers):
+        fig.add_trace(
+            go.Scatter(x=[None], y=[None], mode="lines", line=dict(color="#e67e22", width=1.5, dash="dot"), name="Poll receipt")
+        )
+    if receipt_markers:
+        fig.add_trace(
+            go.Scatter(
+                x=[to_rel(m.time) for m in receipt_markers],
+                y=[set_max_w * 0.55] * len(receipt_markers),
+                mode="markers",
+                marker=dict(
+                    symbol="triangle-down",
+                    size=9,
+                    color=["#27ae60" if m.is_subscribed else "#e67e22" for m in receipt_markers],
+                    opacity=0.85,
+                ),
+                customdata=[
+                    ["Notification" if m.is_subscribed else "Poll", m.step_name or f"Group {m.group_id}"]
+                    for m in receipt_markers
+                ],
+                hovertemplate="%{customdata[0]} receipt — %{customdata[1]}<extra>Receipt</extra>",
+                showlegend=False,
+            )
+        )
+
+
+def _add_completion_markers(
+    fig: go.Figure,
+    completions: list[tuple[str, datetime]],
+    lanes: list[int],
+    lane_y: list[float],
+    duration_secs: float,
+    to_rel: Callable[[datetime], float],
+) -> None:
+    _COMPLETION_COLOR = "#888"
+    for (name, t), lane in zip(completions, lanes):
+        rel = to_rel(t)
+        if rel < 0 or rel > duration_secs:
+            continue
+        fig.add_shape(
+            type="line",
+            xref="x",
+            yref="paper",
+            x0=rel,
+            x1=rel,
+            y0=0,
+            y1=1,
+            line=dict(color=_COMPLETION_COLOR, width=1.5, dash="dash"),
+            opacity=0.45,
+        )
+        label = name if len(name) <= 22 else name[:20] + "…"
+        fig.add_annotation(
+            xref="x",
+            yref="paper",
+            x=rel,
+            y=lane_y[lane],
+            text=label,
+            showarrow=True,
+            arrowhead=0,
+            arrowcolor=_COMPLETION_COLOR,
+            arrowwidth=1,
+            ax=0,
+            ay=12,
+            font=dict(size=8, color=_COMPLETION_COLOR),
+            xanchor="center",
+            yanchor="bottom",
+        )
+    fig.add_trace(
+        go.Scatter(x=[None], y=[None], mode="lines", line=dict(color=_COMPLETION_COLOR, width=1.5, dash="dash"), name="Step complete")
+    )
+
+
+def _add_step_strips(
+    fig: go.Figure,
+    step_intervals: list[tuple[str, datetime, datetime]],
+    to_rel: Callable[[datetime], float],
+    test_start: datetime,
+    test_end: datetime,
+) -> None:
+    fig.add_annotation(
+        xref="paper",
+        yref="paper",
+        x=-0.02,
+        y=-0.32,
+        text="<b>Controls</b>",
+        showarrow=False,
+        font=dict(size=9, color="#555"),
+        xanchor="right",
+        yanchor="middle",
+    )
+    palette_idx = 0
+    for name, start, end in step_intervals:
+        is_default = name.startswith("Default")
+        if is_default:
+            color = "rgba(180,180,180,0.45)"
+        else:
+            color = _STEP_PALETTE[palette_idx % len(_STEP_PALETTE)]
+            palette_idx += 1
+        x0 = to_rel(max(start, test_start))
+        x1 = to_rel(min(end, test_end))
+        if x1 <= x0:
+            continue
+        fig.add_shape(
+            type="rect",
+            xref="x",
+            yref="paper",
+            x0=x0,
+            x1=x1,
+            y0=-0.42,
+            y1=-0.22,
+            fillcolor=color,
+            line=dict(color="rgba(0,0,0,0.18)", width=0.5),
+            layer="below",
+        )
+        if x1 - x0 >= 20:
+            label = name if len(name) <= 20 else name[:18] + "…"
+            fig.add_annotation(
+                xref="x",
+                yref="paper",
+                x=(x0 + x1) / 2,
+                y=-0.32,
+                text=label,
+                showarrow=False,
+                font=dict(size=8, color="#666" if is_default else "#000"),
+                xanchor="center",
+                yanchor="middle",
+            )
+
+
 def _render_html_chart(
     upper_trace: list[tuple[datetime, float, str]],
     lower_trace: list[tuple[datetime, float, str]],
@@ -910,16 +1062,13 @@ def _render_html_chart(
     tick_interval = _choose_tick_interval_seconds(duration_secs)
 
     tick_vals: list[float] = []
-    bottom_labels: list[str] = []  # Relative time + UTC (shown below x-axis)
+    bottom_labels: list[str] = []
 
     t_secs = 0.0
     while t_secs <= duration_secs + 1:
         T = test_start + timedelta(seconds=t_secs)
         tick_vals.append(t_secs)
-        if video_start_seconds is not None:
-            rel_label = _fmt_video_time(t_secs + video_start_seconds)
-        else:
-            rel_label = _duration_label(t_secs)
+        rel_label = _fmt_video_time(t_secs + video_start_seconds) if video_start_seconds is not None else _duration_label(t_secs)
         bottom_labels.append(f"{rel_label}<br>{T.strftime('%H:%M')} UTC")
         t_secs += tick_interval
 
@@ -934,7 +1083,7 @@ def _render_html_chart(
     lanes = _assign_completion_lanes(completions, to_rel) if completions else []
     max_lane = max(lanes) if lanes else 0
     # Each lane is 0.06 paper-coordinate units above the plot; legend floats above them all.
-    _COMPLETION_LANE_Y = [1.06 + i * 0.06 for i in range(max_lane + 1)]
+    lane_y = [1.06 + i * 0.06 for i in range(max_lane + 1)]
     legend_y = 1.06 + (max_lane + 1) * 0.06 + 0.06 if completions else 1.16
     top_margin = (140 + (max_lane + 1) * 30) if completions else 150
 
@@ -983,165 +1132,12 @@ def _render_html_chart(
         annotation_position="bottom right",
     )
 
-    # ── Control receipt markers ──────────────────────────────────────────────
-    # Vertical lines (shapes) — one per unique receipt event
-    for m in receipt_markers:
-        color = "#27ae60" if m.is_subscribed else "#e67e22"
-        fig.add_shape(
-            type="line",
-            xref="x",
-            yref="paper",
-            x0=to_rel(m.time),
-            x1=to_rel(m.time),
-            y0=0.02,
-            y1=0.98,
-            line=dict(color=color, width=1.5, dash="dot"),
-            opacity=0.55,
-        )
-
-    # Hover markers for receipt times (triangle markers + legend dummy traces)
-    has_subs = any(m.is_subscribed for m in receipt_markers)
-    has_polls = any(not m.is_subscribed for m in receipt_markers)
-    if has_subs:
-        fig.add_trace(
-            go.Scatter(
-                x=[None],
-                y=[None],
-                mode="lines",
-                line=dict(color="#27ae60", width=1.5, dash="dot"),
-                name="Notif receipt",
-            )
-        )
-    if has_polls:
-        fig.add_trace(
-            go.Scatter(
-                x=[None],
-                y=[None],
-                mode="lines",
-                line=dict(color="#e67e22", width=1.5, dash="dot"),
-                name="Poll receipt",
-            )
-        )
-    if receipt_markers:
-        fig.add_trace(
-            go.Scatter(
-                x=[to_rel(m.time) for m in receipt_markers],
-                y=[set_max_w * 0.55] * len(receipt_markers),
-                mode="markers",
-                marker=dict(
-                    symbol="triangle-down",
-                    size=9,
-                    color=["#27ae60" if m.is_subscribed else "#e67e22" for m in receipt_markers],
-                    opacity=0.85,
-                ),
-                customdata=[
-                    ["Notification" if m.is_subscribed else "Poll", m.step_name or f"Group {m.group_id}"]
-                    for m in receipt_markers
-                ],
-                hovertemplate="%{customdata[0]} receipt — %{customdata[1]}<extra>Receipt</extra>",
-                showlegend=False,
-            )
-        )
-
-    # ── Step completion markers ──────────────────────────────────────────────
-    # Vertical lines spanning the full chart height + stacked labels above the plot.
-    _COMPLETION_COLOR = "#888"  # Grey — readable without competing with axis labels
+    # ── Overlays ─────────────────────────────────────────────────────────────
+    _add_receipt_markers(fig, receipt_markers, to_rel, set_max_w)
     if completions:
-        for (name, t), lane in zip(completions, lanes):
-            rel = to_rel(t)
-            if rel < 0 or rel > duration_secs:
-                continue
-            fig.add_shape(
-                type="line",
-                xref="x",
-                yref="paper",
-                x0=rel,
-                x1=rel,
-                y0=0,
-                y1=1,
-                line=dict(color=_COMPLETION_COLOR, width=1.5, dash="dash"),
-                opacity=0.45,
-            )
-            label = name if len(name) <= 22 else name[:20] + "…"
-            fig.add_annotation(
-                xref="x",
-                yref="paper",
-                x=rel,
-                y=_COMPLETION_LANE_Y[lane],
-                text=label,
-                showarrow=True,
-                arrowhead=0,
-                arrowcolor=_COMPLETION_COLOR,
-                arrowwidth=1,
-                ax=0,
-                ay=12,
-                font=dict(size=8, color=_COMPLETION_COLOR),
-                xanchor="center",
-                yanchor="bottom",
-            )
-        # Legend dummy trace
-        fig.add_trace(
-            go.Scatter(
-                x=[None],
-                y=[None],
-                mode="lines",
-                line=dict(color=_COMPLETION_COLOR, width=1.5, dash="dash"),
-                name="Step complete",
-            )
-        )
-
-    # ── Step name strips at the bottom (paper coordinates) ───────────────────
+        _add_completion_markers(fig, completions, lanes, lane_y, duration_secs, to_rel)
     if has_steps:
-        # "Controls" axis label, anchored to the left edge of the plot
-        fig.add_annotation(
-            xref="paper",
-            yref="paper",
-            x=-0.02,
-            y=-0.32,
-            text="<b>Controls</b>",
-            showarrow=False,
-            font=dict(size=9, color="#555"),
-            xanchor="right",
-            yanchor="middle",
-        )
-        palette_idx = 0
-        for name, start, end in step_intervals:
-            is_default = name.startswith("Default")
-            if is_default:
-                color = "rgba(180,180,180,0.45)"
-            else:
-                color = _STEP_PALETTE[palette_idx % len(_STEP_PALETTE)]
-                palette_idx += 1
-            x0 = to_rel(max(start, test_start))
-            x1 = to_rel(min(end, test_end))
-            if x1 <= x0:
-                continue
-            fig.add_shape(
-                type="rect",
-                xref="x",
-                yref="paper",
-                x0=x0,
-                x1=x1,
-                y0=-0.42,
-                y1=-0.22,
-                fillcolor=color,
-                line=dict(color="rgba(0,0,0,0.18)", width=0.5),
-                layer="below",
-            )
-            interval_secs = x1 - x0
-            if interval_secs >= 20:
-                label = name if len(name) <= 20 else name[:18] + "…"
-                fig.add_annotation(
-                    xref="x",
-                    yref="paper",
-                    x=(x0 + x1) / 2,
-                    y=-0.32,
-                    text=label,
-                    showarrow=False,
-                    font=dict(size=8, color="#666" if is_default else "#000"),
-                    xanchor="center",
-                    yanchor="middle",
-                )
+        _add_step_strips(fig, step_intervals, to_rel, test_start, test_end)
 
     # ── Layout ───────────────────────────────────────────────────────────────
     fig.update_layout(
