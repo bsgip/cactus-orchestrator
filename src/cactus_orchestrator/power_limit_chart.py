@@ -897,11 +897,19 @@ def _add_receipt_markers(
         )
     if any(m.is_subscribed for m in receipt_markers):
         fig.add_trace(
-            go.Scatter(x=[None], y=[None], mode="lines", line=dict(color="#27ae60", width=1.5, dash="dot"), name="Notif receipt")
+            go.Scatter(
+                x=[None],
+                y=[None],
+                mode="lines",
+                line=dict(color="#27ae60", width=1.5, dash="dot"),
+                name="Notif receipt",
+            )
         )
     if any(not m.is_subscribed for m in receipt_markers):
         fig.add_trace(
-            go.Scatter(x=[None], y=[None], mode="lines", line=dict(color="#e67e22", width=1.5, dash="dot"), name="Poll receipt")
+            go.Scatter(
+                x=[None], y=[None], mode="lines", line=dict(color="#e67e22", width=1.5, dash="dot"), name="Poll receipt"
+            )
         )
     if receipt_markers:
         fig.add_trace(
@@ -920,6 +928,43 @@ def _add_receipt_markers(
                     for m in receipt_markers
                 ],
                 hovertemplate="%{customdata[0]} receipt — %{customdata[1]}<extra>Receipt</extra>",
+                showlegend=False,
+            )
+        )
+
+
+def _add_reconnect_markers(
+    fig: go.Figure,
+    disconnect_intervals: list[tuple[datetime, datetime]],
+    to_rel: Callable[[datetime], float],
+    duration_secs: float,
+) -> None:
+    _COLOR = "rgba(120,120,120,0.5)"
+    reconnect_rels = [
+        to_rel(de - timedelta(seconds=_OP_MOD_CONNECT_GRACE_SECONDS))
+        for _, de in disconnect_intervals
+        if to_rel(de - timedelta(seconds=_OP_MOD_CONNECT_GRACE_SECONDS)) < duration_secs
+    ]
+    for rel in reconnect_rels:
+        fig.add_shape(
+            type="line",
+            xref="x",
+            yref="paper",
+            x0=rel,
+            x1=rel,
+            y0=0,
+            y1=1,
+            line=dict(color=_COLOR, width=1, dash="dot"),
+        )
+    if reconnect_rels:
+        fig.add_trace(
+            go.Scatter(
+                x=reconnect_rels,
+                y=[0] * len(reconnect_rels),
+                mode="markers",
+                marker=dict(symbol="line-ns", size=10, color=_COLOR),
+                customdata=[["60 s AS4777 wGra wait period on reconnection"]] * len(reconnect_rels),
+                hovertemplate="Device reconnected — %{customdata[0]}<extra>Reconnect</extra>",
                 showlegend=False,
             )
         )
@@ -967,7 +1012,13 @@ def _add_completion_markers(
             yanchor="bottom",
         )
     fig.add_trace(
-        go.Scatter(x=[None], y=[None], mode="lines", line=dict(color=_COMPLETION_COLOR, width=1.5, dash="dash"), name="Step complete")
+        go.Scatter(
+            x=[None],
+            y=[None],
+            mode="lines",
+            line=dict(color=_COMPLETION_COLOR, width=1.5, dash="dash"),
+            name="Step complete",
+        )
     )
 
 
@@ -1036,6 +1087,7 @@ def _render_html_chart(
     set_max_w: float,
     step_intervals: list[tuple[str, datetime, datetime]],
     receipt_markers: list[_ReceiptMarker],
+    disconnect_intervals: list[tuple[datetime, datetime]],
     test_name: str = "",
     video_start_seconds: float | None = None,
     step_completions: list[tuple[str, datetime]] | None = None,
@@ -1050,7 +1102,11 @@ def _render_html_chart(
     while t_secs <= duration_secs + 1:
         T = test_start + timedelta(seconds=t_secs)
         tick_vals.append(t_secs)
-        rel_label = _fmt_video_time(t_secs + video_start_seconds) if video_start_seconds is not None else _duration_label(t_secs)
+        rel_label = (
+            _fmt_video_time(t_secs + video_start_seconds)
+            if video_start_seconds is not None
+            else _duration_label(t_secs)
+        )
         bottom_labels.append(f"{rel_label}<br>{T.strftime('%H:%M')} UTC")
         t_secs += tick_interval
 
@@ -1116,6 +1172,7 @@ def _render_html_chart(
 
     # ── Overlays ─────────────────────────────────────────────────────────────
     _add_receipt_markers(fig, receipt_markers, to_rel, set_max_w)
+    _add_reconnect_markers(fig, disconnect_intervals, to_rel, duration_secs)
     if completions:
         _add_completion_markers(fig, completions, lanes, lane_y, duration_secs, to_rel)
     if has_steps:
@@ -1266,6 +1323,7 @@ async def generate_power_limit_chart_html(
         set_max_w,
         step_intervals,
         receipt_markers,
+        disconnect_intervals,
         test_name=test_name,
         video_start_seconds=video_start_seconds,
         step_completions=step_completions or [],
