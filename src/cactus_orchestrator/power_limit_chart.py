@@ -867,15 +867,18 @@ def _choose_tick_interval_seconds(duration_secs: float) -> int:
     return 3600
 
 
-def _assign_completion_lanes(completions: list[tuple[str, datetime]], to_rel: Callable[[datetime], float]) -> list[int]:
+def _assign_completion_lanes(
+    completions: list[tuple[str, datetime]], to_rel: Callable[[datetime], float], duration_secs: float
+) -> list[int]:
     """Assign a vertical stack lane (0, 1, 2, …) to each step completion.
 
     Lane 0 is closest to the plot; higher lanes stack further above it.
     A new lane is opened whenever all existing lanes have a label within
-    _COMPLETION_LABEL_MIN_GAP_SECS, so any number of simultaneous completions
-    stack cleanly without truncation or cycling.
+    min_gap_secs, so any number of simultaneous completions stack cleanly.
+    The gap scales with duration so labels don't overlap on long tests.
     """
-    _COMPLETION_LABEL_MIN_GAP_SECS = 45.0
+    # ~22 chars at font size 8 occupies roughly 1/8 of the ~700px plot width.
+    min_gap_secs = max(45.0, duration_secs / 8)
     last_in_lane: list[float] = []  # most-recent rel-time assigned to each lane
     lanes: list[int] = []
     for _, t in completions:
@@ -883,7 +886,7 @@ def _assign_completion_lanes(completions: list[tuple[str, datetime]], to_rel: Ca
         # Find the lowest lane with enough horizontal clearance; open a new one if none.
         assigned = len(last_in_lane)
         for k, last in enumerate(last_in_lane):
-            if rel - last >= _COMPLETION_LABEL_MIN_GAP_SECS:
+            if rel - last >= min_gap_secs:
                 assigned = k
                 break
         if assigned == len(last_in_lane):
@@ -1080,7 +1083,7 @@ def _render_html_chart(
     has_steps = bool(step_intervals)
     bottom_margin = 230 if has_steps else 130
     completions = sorted(step_completions or [], key=lambda x: x[1])
-    lanes = _assign_completion_lanes(completions, to_rel) if completions else []
+    lanes = _assign_completion_lanes(completions, to_rel, duration_secs) if completions else []
     max_lane = max(lanes) if lanes else 0
     # Each lane is 0.06 paper-coordinate units above the plot; legend floats above them all.
     lane_y = [1.06 + i * 0.06 for i in range(max_lane + 1)]
