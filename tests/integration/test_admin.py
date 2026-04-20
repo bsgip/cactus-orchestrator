@@ -12,6 +12,7 @@ from cactus_schema.orchestrator import (
     HEADER_RUN_ID,
     HEADER_TEST_ID,
     HEADER_USER_NAME,
+    ProceedResponse,
     RunGroupResponse,
     RunResponse,
     TestProcedureRunSummaryResponse,
@@ -273,6 +274,46 @@ async def test_admin_get_run_status(
         k8s_mock.status.assert_called_once()
     else:
         k8s_mock.status.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "run_id, handled, expected_status",
+    [
+        (1, True, HTTPStatus.OK),
+        (1, False, HTTPStatus.OK),
+        (5, True, HTTPStatus.OK),
+        (5, False, HTTPStatus.OK),
+        (2, None, HTTPStatus.GONE),
+        (99, None, HTTPStatus.NOT_FOUND),
+    ],
+)
+@pytest.mark.asyncio
+async def test_admin_proceed_proxy(
+    k8s_mock: MockedK8s, client, pg_base_config, valid_jwt_admin1, valid_jwt_user1, run_id, handled, expected_status
+):
+    # Arrange
+    expected_proceed_data = ProceedResponse(handled=handled)
+    k8s_mock.proceed.return_value = expected_proceed_data
+
+    # Act
+    res = await client.get(f"/admin/run/{run_id}/proceed", headers={"Authorization": f"Bearer {valid_jwt_admin1}"})
+
+    # Assert
+    assert res.status_code == expected_status
+    if expected_status == HTTPStatus.OK:
+        actual_proceed_data = ProceedResponse.from_json(res.text)
+        assert actual_proceed_data == expected_proceed_data
+        k8s_mock.proceed.assert_called_once()
+    else:
+        k8s_mock.proceed.assert_not_called()
+
+    # Non-admin must be rejected
+    k8s_mock.proceed.reset_mock()
+    non_admin_res = await client.get(
+        f"/admin/run/{run_id}/proceed", headers={"Authorization": f"Bearer {valid_jwt_user1}"}
+    )
+    assert non_admin_res.status_code == HTTPStatus.UNAUTHORIZED
+    k8s_mock.proceed.assert_not_called()
 
 
 @pytest.mark.parametrize(
