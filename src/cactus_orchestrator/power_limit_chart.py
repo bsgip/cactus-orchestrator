@@ -21,7 +21,7 @@ import logging
 import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Callable, Optional
+from typing import Callable
 import plotly.graph_objects as go
 from cactus_schema.runner.schema import RequestEntry
 from envoy.server.model.archive.doe import (
@@ -480,11 +480,6 @@ def _find_active_default_at(
         if start <= T < end:
             return d
     return None
-
-
-def _min_notnone(*vals: Optional[float]) -> float | None:
-    valid = [v for v in vals if v is not None]
-    return min(valid) if valid else None
 
 
 def _resolve_type_limit(
