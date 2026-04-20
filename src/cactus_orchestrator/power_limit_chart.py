@@ -330,8 +330,10 @@ def _build_enriched_controls(
     sorted_requests = sorted(request_history, key=lambda r: r.timestamp)
     enriched: list[_EnrichedControl] = []
     for doe in all_does:
-        # Skip superseded non-archive controls (their effective history is in archive)
-        if not isinstance(doe, ArchiveDynamicOperatingEnvelope) and doe.superseded:
+        # Skip superseded controls. Active DOEs: their effective history is in archive.
+        # Archive DOEs with superseded=True are mass-delete snapshots — their validity
+        # window is already covered by the earlier superseded=False archive for the same DOE.
+        if doe.superseded:
             continue
 
         # Only include controls created during the test
