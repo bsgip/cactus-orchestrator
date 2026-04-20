@@ -22,7 +22,7 @@ import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Callable
-import plotly.graph_objects as go
+import plotly.graph_objects as go  # type: ignore[import-untyped]
 from cactus_schema.runner.schema import RequestEntry
 from envoy.server.model.archive.doe import (
     ArchiveDynamicOperatingEnvelope,
@@ -172,7 +172,7 @@ async def _get_subscribed_group_ids(session: AsyncSession) -> set[int]:
             Subscription.resource_id.is_not(None),
         )
     )
-    return {sub.resource_id for sub in result.scalars().all()}
+    return {sub.resource_id for sub in result.scalars().all() if sub.resource_id is not None}
 
 
 # ─── Control-interval and receipt-marker helpers ──────────────────────────────
