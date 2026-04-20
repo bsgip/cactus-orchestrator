@@ -74,6 +74,9 @@ class CactusOrchestratorSettings(BaseSettings):
     # readiness
     pod_readiness_check_container_name: str = "envoy"
 
+    # general orchestrator options
+    ignored_csip_aus_versions: list[str] = []
+
 
 class JWTAuthSettings(BaseSettings):
     jwks_url: str
