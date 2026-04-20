@@ -422,3 +422,12 @@ def pg_regeneration_config(pg_base_config, reporting_data_json, reporting_data_v
         cursor.execute(stmt, (reporting_data_json, reporting_data_version, file_data))
         pg_base_config.commit()
     yield pg_base_config
+
+
+@pytest.fixture
+def add_ignored_v12_version(client):
+
+    os.environ["IGNORED_CSIP_AUS_VERSIONS"] = '["v1.2"]'
+
+    # This is a sideeffect of some nasty globals that should be unpicked in the future
+    _reset_current_settings()
