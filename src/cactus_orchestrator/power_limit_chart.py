@@ -1126,6 +1126,7 @@ def _render_html_chart(
     lane_y = [1.06 + i * 0.06 for i in range(max_lane + 1)]
     legend_y = 1.06 + (max_lane + 1) * 0.06 + 0.06 if completions else 1.16
     top_margin = (140 + (max_lane + 1) * 30) if completions else 150
+    height = top_margin + 350 + bottom_margin
 
     fig = go.Figure()
 
@@ -1183,7 +1184,7 @@ def _render_html_chart(
     # ── Layout ───────────────────────────────────────────────────────────────
     fig.update_layout(
         title=dict(text="Expected Device Power Limits", font=dict(size=16)),
-        height=650,
+        height=height,
         xaxis=dict(
             title="",
             tickmode="array",
