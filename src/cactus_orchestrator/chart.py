@@ -104,9 +104,7 @@ async def generate_power_limit_chart(run_artifact: RunArtifact, video_start_seco
                 capture_output=True,
             )
             if proc.returncode != 0:
-                logger.error(
-                    "psql restore failed (exit %d): %s", proc.returncode, proc.stderr.decode(errors="replace")
-                )
+                logger.error("psql restore failed (exit %d): %s", proc.returncode, proc.stderr.decode(errors="replace"))
                 proc.check_returncode()
 
         engine = create_async_engine(async_pg_url)

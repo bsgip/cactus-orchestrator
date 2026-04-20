@@ -1268,8 +1268,12 @@ async def generate_power_limit_chart_html(
         False, event_times, sorted_groups, enriched, defaults_by_group, disconnect_intervals, set_max_w
     )
 
-    upper_trace = _build_trace(upper_events, test_start, test_end, set_max_w, set_max_w, disconnect_intervals, defaults_by_group)
-    lower_trace = _build_trace(lower_events, test_start, test_end, -set_max_w, set_max_w, disconnect_intervals, defaults_by_group)
+    upper_trace = _build_trace(
+        upper_events, test_start, test_end, set_max_w, set_max_w, disconnect_intervals, defaults_by_group
+    )
+    lower_trace = _build_trace(
+        lower_events, test_start, test_end, -set_max_w, set_max_w, disconnect_intervals, defaults_by_group
+    )
 
     step_intervals = _compute_active_control_intervals(
         event_times, sorted_groups, enriched, defaults_by_group, test_end

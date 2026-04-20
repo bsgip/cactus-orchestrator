@@ -147,6 +147,7 @@ async def test_chart_single_program_export_curtailment(pg_envoy_base_config):
         html = await generate_power_limit_chart_html(session, T0, test_end, polls)
 
     assert html is not None, "Chart generation returned None"
+    assert "Device Power Chart" in html
     out = _out("scenario_A_single_program_export0.html")
     out.write_text(html)
     print(f"\n  ✓ Scenario A → {out}")
@@ -204,6 +205,7 @@ async def test_chart_multi_program_primacy(pg_envoy_base_config):
         html = await generate_power_limit_chart_html(session, T0, test_end, polls)
 
     assert html is not None
+    assert "Device Power Chart" in html
     out = _out("scenario_B_multi_program_primacy0.html")
     out.write_text(html)
     print(f"\n  ✓ Scenario B → {out}")
@@ -279,6 +281,7 @@ async def test_chart_ramptms_and_defaults(pg_envoy_base_config):
         html = await generate_power_limit_chart_html(session, T0, test_end, polls)
 
     assert html is not None
+    assert "Device Power Chart" in html
     out = _out("scenario_C_ramptms_and_defaults0.html")
     out.write_text(html)
     print(f"\n  ✓ Scenario C → {out}")
@@ -350,6 +353,7 @@ async def test_chart_op_mod_connect(pg_envoy_base_config):
         html = await generate_power_limit_chart_html(session, T0, test_end, polls)
 
     assert html is not None
+    assert "Device Power Chart" in html
     out = _out("scenario_D_op_mod_connect0.html")
     out.write_text(html)
     print(f"\n  ✓ Scenario D → {out}")
@@ -418,6 +422,7 @@ async def test_chart_op_mod_connect_expiry(pg_envoy_base_config):
         html = await generate_power_limit_chart_html(session, T0, test_end, polls)
 
     assert html is not None
+    assert "Device Power Chart" in html
     out = _out("scenario_D2_op_mod_connect_expiry0.html")
     out.write_text(html)
     print(f"\n  ✓ Scenario D2 → {out}")
@@ -510,6 +515,7 @@ async def test_chart_gen10_derc456(pg_envoy_base_config):
         html = await generate_power_limit_chart_html(session, T0, test_end, polls)
 
     assert html is not None
+    assert "Device Power Chart" in html
     out = _out("scenario_E_gen10_derc4560.html")
     out.write_text(html)
     print(f"\n  ✓ Scenario E → {out}")
@@ -596,6 +602,7 @@ async def test_chart_gen10_derc456_subscribed(pg_envoy_base_config):
         html = await generate_power_limit_chart_html(session, T0, test_end, polls)
 
     assert html is not None
+    assert "Device Power Chart" in html
     out = _out("scenario_E2_gen10_derc456_subscribed0.html")
     out.write_text(html)
     print(f"\n  ✓ Scenario E2 → {out}")
@@ -667,6 +674,7 @@ async def test_chart_op_mod_energise(pg_envoy_base_config):
         html = await generate_power_limit_chart_html(session, T0, test_end, polls)
 
     assert html is not None
+    assert "Device Power Chart" in html
     out = _out("scenario_F_op_mod_energise0.html")
     out.write_text(html)
     print(f"\n  ✓ Scenario F → {out}")
