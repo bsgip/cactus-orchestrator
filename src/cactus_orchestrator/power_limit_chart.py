@@ -601,14 +601,14 @@ def _rate_based_duration(grad_w_hundredths: float, delta_w: float, set_max_w: fl
     return delta_w / rate_w_per_sec
 
 
-def _compute_ramp_seconds(
+def _compute_ramp(
     source: object | None,
     at_time: datetime,
     delta_w: float,
     set_max_w: float,
     defaults_by_group: dict[int, list[_DefaultLike]],
-) -> float:
-    """Compute ramp duration in seconds for a transition to source.
+) -> tuple[float, str]:
+    """Compute ramp duration and description for a transition to source.
 
     Rules:
       To DER control:    rampTms → DefaultDERControl.setGradW → 15s fixed
@@ -618,45 +618,25 @@ def _compute_ramp_seconds(
     if isinstance(source, _EnrichedControl):
         ramp_t = source.ramp_time_seconds
         if ramp_t is not None and ramp_t > 0.0:
-            return ramp_t
+            return ramp_t, f"rampTms={ramp_t:.0f}s"
         active_default = _find_active_default_at(at_time, source.site_control_group_id, defaults_by_group)
         default_grad = getattr(active_default, "ramp_rate_percent_per_second", None)
         if default_grad is not None and default_grad > 0:
-            return _rate_based_duration(float(default_grad), delta_w, set_max_w)
-        return _AS4777_SOFT_RAMP_SECONDS
+            secs = _rate_based_duration(float(default_grad), delta_w, set_max_w)
+            return secs, f"Default setGradW={default_grad} ({secs:.0f}s)"
+        return _AS4777_SOFT_RAMP_SECONDS, "AS4777 soft-start (15s)"
 
     if source is not None:
         default_grad = getattr(source, "ramp_rate_percent_per_second", None)
         if default_grad is not None and default_grad > 0:
-            return _rate_based_duration(float(default_grad), delta_w, set_max_w)
-        return _rate_based_duration(_AS4777_WGRA_HUNDREDTHS, delta_w, set_max_w)
+            secs = _rate_based_duration(float(default_grad), delta_w, set_max_w)
+            return secs, f"Default setGradW={default_grad} ({secs:.0f}s)"
+        secs = _rate_based_duration(_AS4777_WGRA_HUNDREDTHS, delta_w, set_max_w)
+        return secs, f"AS4777 wGra ({secs:.0f}s)"
 
     # Unconstrained
-    return _rate_based_duration(_AS4777_WGRA_HUNDREDTHS, delta_w, set_max_w)
-
-
-def _ramp_description(
-    source: object | None,
-    at_time: datetime,
-    ramp_secs: float,
-    defaults_by_group: dict[int, list[_DefaultLike]],
-) -> str:
-    """Human-readable string describing which ramp rule was applied."""
-    dur = f"{ramp_secs:.0f}s"
-    if isinstance(source, _EnrichedControl):
-        if source.ramp_time_seconds and source.ramp_time_seconds > 0:
-            return f"rampTms={source.ramp_time_seconds:.0f}s"
-        active_default = _find_active_default_at(at_time, source.site_control_group_id, defaults_by_group)
-        default_grad = getattr(active_default, "ramp_rate_percent_per_second", None)
-        if default_grad and default_grad > 0:
-            return f"Default setGradW={default_grad} ({dur})"
-        return "AS4777 soft-start (15s)"
-    if source is not None:
-        default_grad = getattr(source, "ramp_rate_percent_per_second", None)
-        if default_grad and default_grad > 0:
-            return f"Default setGradW={default_grad} ({dur})"
-        return f"AS4777 wGra ({dur})"
-    return f"AS4777 wGra ({dur})"
+    secs = _rate_based_duration(_AS4777_WGRA_HUNDREDTHS, delta_w, set_max_w)
+    return secs, f"AS4777 wGra ({secs:.0f}s)"
 
 
 # ─── Event collection ─────────────────────────────────────────────────────────
@@ -793,8 +773,7 @@ def _build_trace(
             ramp_secs = _rate_based_duration(_AS4777_WGRA_HUNDREDTHS, delta_w, set_max_w)
             desc = f"AS4777 wGra post-reconnect ({ramp_secs:.0f}s)"
         else:
-            ramp_secs = _compute_ramp_seconds(ev.source, ev.time, delta_w, set_max_w, defaults_by_group)
-            desc = _ramp_description(ev.source, ev.time, ramp_secs, defaults_by_group)
+            ramp_secs, desc = _compute_ramp(ev.source, ev.time, delta_w, set_max_w, defaults_by_group)
         rel_time = _duration_label((ev.time - test_start).total_seconds())
         hover = f"<br>T+{rel_time}  →  {ev.target:.0f} W  ({desc})"
 
