@@ -1464,3 +1464,34 @@ async def test_proceed_proxy(
         k8s_mock.proceed.assert_called_once()
     else:
         k8s_mock.proceed.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_run_power_limit_chart_run_not_found(client, pg_base_config, valid_jwt_user1):
+    res = await client.get("/run/99/power_limit_chart", headers={"Authorization": f"Bearer {valid_jwt_user1}"})
+    assert res.status_code == HTTPStatus.NOT_FOUND
+
+
+@pytest.mark.asyncio
+async def test_get_run_power_limit_chart_no_artifact(client, pg_base_config, valid_jwt_user1):
+    """Run 1 exists and belongs to user1 but has no artifact."""
+    res = await client.get("/run/1/power_limit_chart", headers={"Authorization": f"Bearer {valid_jwt_user1}"})
+    assert res.status_code == HTTPStatus.NOT_FOUND
+
+
+@pytest.mark.asyncio
+@patch("cactus_orchestrator.api.run.generate_power_limit_chart", return_value=None)
+async def test_get_run_power_limit_chart_insufficient_data(mock_chart, client, pg_base_config, valid_jwt_user1):
+    """Returns 404 when chart generation returns None (no DER data in artifact)."""
+    res = await client.get("/run/5/power_limit_chart", headers={"Authorization": f"Bearer {valid_jwt_user1}"})
+    assert res.status_code == HTTPStatus.NOT_FOUND
+
+
+@pytest.mark.asyncio
+@patch("cactus_orchestrator.api.run.generate_power_limit_chart", return_value="<html>chart</html>")
+async def test_get_run_power_limit_chart_ok(mock_chart, client, pg_base_config, valid_jwt_user1):
+    """Returns 200 text/html when chart generation succeeds."""
+    res = await client.get("/run/5/power_limit_chart", headers={"Authorization": f"Bearer {valid_jwt_user1}"})
+    assert res.status_code == HTTPStatus.OK
+    assert res.headers["content-type"].startswith("text/html")
+    assert "<html>chart</html>" in res.text

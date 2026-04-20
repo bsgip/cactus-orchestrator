@@ -39,6 +39,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from cactus_orchestrator.api.common import select_user_or_raise, select_user_run_group_or_raise
 from cactus_orchestrator.artifact import regenerate_pdf_report
+from cactus_orchestrator.chart import generate_power_limit_chart
 from cactus_orchestrator.auth import AuthPerm, UserContext, jwt_validator
 from cactus_orchestrator.crud import (
     ACTIVE_RUN_STATUSES,
@@ -289,6 +290,7 @@ async def spawn_teststack_and_init_run(
     try:
         # duplicate resources
         user_identifier = user.user_name or user.subject_id
+        pod_start_time = datetime.now(timezone.utc)
         await clone_statefulset(template_resource_names, run_resource_names, user_identifier)
         await clone_service(template_resource_names, run_resource_names, user_identifier)
 
@@ -302,6 +304,8 @@ async def spawn_teststack_and_init_run(
         ) as session:
 
             await wait_for_runner_health(session)
+            pod_startup_seconds = (datetime.now(timezone.utc) - pod_start_time).total_seconds()
+            logger.info(f"Pod {run_resource_names.stateful_set} ready in {pod_startup_seconds:.1f}s")
 
             # Build RunRequest objects for all tests
             run_requests: list[RunRequest] = []
@@ -610,16 +614,21 @@ async def delete_individual_run(
         logger.debug(exc)
         raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Not Found")
 
+    logger.info(f"Delete requested for run {run_id} by user {user.subject_id}")
+
     # For playlist runs, delete all siblings
     if run.playlist_execution_id:
         playlist_runs = await select_playlist_runs(db.session, run.playlist_execution_id)
+        run_ids = [r.run_id for r in playlist_runs]
         # Teardown shared teststack (only need once)
         await prepare_run_for_delete(run)
         # Delete all runs in the playlist
         await delete_runs(db.session, list(playlist_runs))
+        logger.info(f"Deleted playlist runs {run_ids} for user {user.subject_id}")
     else:
         await prepare_run_for_delete(run)
         await delete_runs(db.session, [run])
+        logger.info(f"Deleted run {run_id} for user {user.subject_id}")
 
     await db.session.commit()
 
@@ -793,6 +802,37 @@ async def get_run_artifact(
 
     user = await select_user_or_raise(db.session, user_context)
     return await get_run_artifact_response_for_user(user, run_id)
+
+
+@router.get(uri.RunPowerLimitChart, status_code=HTTPStatus.OK)
+async def get_run_power_limit_chart(
+    run_id: int,
+    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.user_all}))],
+    video_start_seconds: float | None = Query(None),
+) -> Response:
+    """Generates and returns a standalone HTML power limit chart for the run's envoy DB artifact."""
+    user = await select_user_or_raise(db.session, user_context)
+
+    try:
+        run = await select_user_run_with_artifact(db.session, user.user_id, run_id)
+    except NoResultFound:
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Run does not exist.")
+
+    if run.run_artifact is None:
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="RunArtifact does not exist.")
+
+    try:
+        html = await generate_power_limit_chart(run.run_artifact, video_start_seconds=video_start_seconds)
+    except ValueError as exc:
+        raise HTTPException(status_code=HTTPStatus.CONFLICT, detail=str(exc))
+
+    if html is None:
+        raise HTTPException(
+            status_code=HTTPStatus.NOT_FOUND,
+            detail="Chart unavailable: insufficient DER data in artifact.",
+        )
+
+    return Response(content=html, media_type="text/html")
 
 
 @router.post(uri.RunArtifactMultiple, status_code=HTTPStatus.OK)
