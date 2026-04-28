@@ -23,6 +23,33 @@ from cactus_orchestrator.model import RunArtifact, RunReportGeneration
 
 
 @pytest.mark.asyncio
+async def test_replace_pdf_in_zip_data_no_existing_pdf():
+    """When the ZIP has no PDF (e.g. runner no longer generates one), the PDF should be injected."""
+    PDF_FILENAME_PREFIX = "CactusTestProcedureReport"
+    TXT_FILENAME = "other_file.txt"
+    TXT_DATA = b"other"
+    PDF_DATA = b"new pdf bytes"
+
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as archive:
+        with archive.open(TXT_FILENAME, "w") as file:
+            file.write(TXT_DATA)
+
+    zip_data = zip_buffer.getvalue()
+
+    updated_zip_data = await replace_pdf_in_zip_data(
+        pdf_data=PDF_DATA, zip_data=zip_data, pdf_filename_prefix=PDF_FILENAME_PREFIX
+    )
+
+    with zipfile.ZipFile(io.BytesIO(updated_zip_data)) as archive:
+        assert len(archive.namelist()) == 2
+        assert TXT_FILENAME in archive.namelist()
+        injected_pdf = next(n for n in archive.namelist() if n.startswith(PDF_FILENAME_PREFIX))
+        assert archive.read(injected_pdf) == PDF_DATA
+        assert archive.read(TXT_FILENAME) == TXT_DATA
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("original_data, replacement_data", [(b"before", b"after"), (b"before", b"before")])
 async def test_replace_pdf_in_zip_data(original_data: bytes, replacement_data: bytes):
     PDF_FILENAME = f"CactusTestProcedureReport.pdf"

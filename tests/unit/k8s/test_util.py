@@ -128,26 +128,23 @@ def test_get_resource_names(mock_get_current_settings):
     mock_settings.template_service_name_prefix = "template-service-"
     mock_settings.template_statefulset_name_prefix = "template-statefulset-"
     mock_settings.template_app_name_prefix = "template-app-"
+    mock_settings.teststack_service_port = 80
+    mock_settings.test_execution_fqdn = "test.example.com"
+    mock_settings.test_execution_ingress_name = "test-ingress"
     mock_get_current_settings.return_value = mock_settings
 
     uuid = "abc123"
     names = get_resource_names(uuid)
     assert isinstance(names, RunResourceNames)
 
-    all_name_values = list(names.__dict__.values())
-    assert len(all_name_values) == len(set(all_name_values)), "All names should be unique"
-
     assert names.namespace == "test-ns"
     assert uuid in names.service and names.service.startswith("template-service-")
     assert uuid in names.stateful_set and names.stateful_set.startswith("template-statefulset-")
     assert uuid in names.app_label and names.app_label.startswith("template-app-")
     assert uuid in names.pod
-    assert uuid in names.pod_fqdn
 
-    # Some rudimentary checks on a hostname
-    assert names.pod_fqdn.lower() == names.pod_fqdn
-    assert "/" not in names.pod_fqdn
-    assert ":" not in names.pod_fqdn
+    # runner_base_url uses service DNS (not pod FQDN)
+    assert names.runner_base_url == f"http://template-service-{uuid}.test-ns.svc.cluster.local:80"
 
     # Should vary based on inputs
     assert names == get_resource_names(uuid), "Same inputs - same output"

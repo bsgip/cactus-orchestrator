@@ -67,6 +67,7 @@ The current implementation relies on 'template' resources (defined in YAML) that
 | `IDLETEARDOWNTASK_MAX_LIFETIME_SECONDS` | `86400` | Maximum lifetime (in seconds) allowed for a teststack instance. |
 | `IDLETEARDOWNTASK_IDLE_TIMEOUT_SECONDS` | `3600` | Time (in seconds) after last interaction before an instance is considered idle. |
 | `IDLETEARDOWNTASK_REPEAT_EVERY_SECONDS` | `120` | Frequency (in seconds) at which the idle teardown task runs. |
+| `IGNORED_CSIP_AUS_VERSIONS` | `[]` | JSON Encoded list of strings - what CSIP-Aus versions to be removed/ignored from the supported version list |
 
 ---
 ## Database-related

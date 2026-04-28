@@ -20,6 +20,7 @@ from fastapi_pagination.utils import disable_installed_extensions_check
 from cactus_orchestrator.api.run import map_run_to_run_response, select_user_run_group_or_raise
 from cactus_orchestrator.auth import AuthPerm, UserContext, jwt_validator
 from cactus_orchestrator.crud import select_group_runs_aggregated_by_procedure, select_group_runs_for_procedure
+from cactus_orchestrator.settings import get_current_settings
 
 logger = logging.getLogger(__name__)
 
@@ -48,20 +49,22 @@ def map_from_definitions_to_responses(definitions: dict[TestProcedureId, TestPro
 
 
 def map_versions() -> list[CSIPAusVersionResponse]:
-    return [CSIPAusVersionResponse(version=v.value) for v in CSIPAusVersion]
+    settings = get_current_settings()
+    return [
+        CSIPAusVersionResponse(version=v.value) for v in CSIPAusVersion if v not in settings.ignored_csip_aus_versions
+    ]
 
 
 # Test procedures
 test_procedures_by_id = get_all_test_procedures()
 test_procedure_responses = map_from_definitions_to_responses(test_procedures_by_id)
-version_responses = map_versions()
 
 
 @router.get(uri.VersionList, status_code=HTTPStatus.OK)
 async def get_versions_list_paginated(
     _: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.user_all}))],
 ) -> Page[CSIPAusVersionResponse]:
-    return paginate(version_responses)
+    return paginate(map_versions())
 
 
 @router.get(uri.ProcedureList, status_code=HTTPStatus.OK)

@@ -22,6 +22,25 @@ async def test_get_version_list_populated(client, valid_jwt_user1):
 
 
 @pytest.mark.asyncio
+async def test_get_version_list_with_ignore(add_ignored_v12_version, client, valid_jwt_user1):
+    """Test when there are test procedure available."""
+
+    # Act
+    res = await client.get("/version", headers={"Authorization": f"Bearer {valid_jwt_user1}"})
+
+    # Assert
+    assert res.status_code == HTTPStatus.OK
+    data = res.json()
+
+    returned_versions = [v["version"] for v in data["items"]]
+    for v in CSIPAusVersion:
+        if v == CSIPAusVersion.RELEASE_1_2:
+            assert v.value not in returned_versions
+        else:
+            assert v.value in returned_versions
+
+
+@pytest.mark.asyncio
 async def test_get_test_procedure_list_populated(client, valid_jwt_user1):
     """Basic test that we can fetch test procedures."""
 

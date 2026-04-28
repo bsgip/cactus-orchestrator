@@ -6,6 +6,7 @@ from typing import Annotated
 from cactus_runner.client import ClientSession, ClientTimeout, RunnerClient
 from cactus_schema.orchestrator import (
     AdminStatsResponse,
+    ProceedResponse,
     RunGroupResponse,
     RunResponse,
     TestProcedureRunSummaryResponse,
@@ -31,6 +32,7 @@ from cactus_orchestrator.api.run import (
 )
 from cactus_orchestrator.api.run_group import map_group_to_group_response
 from cactus_orchestrator.artifact import regenerate_run_artifact
+from cactus_orchestrator.chart import generate_power_limit_chart
 from cactus_orchestrator.auth import AuthPerm, UserContext, jwt_validator
 from cactus_orchestrator.crud import (
     ACTIVE_RUN_STATUSES,
@@ -330,6 +332,48 @@ async def admin_regenerate_report_and_get_run_artifact(
     return await get_run_artifact_response_for_user(user, run_id)
 
 
+@router.get(uri.AdminRunPowerLimitChart, status_code=HTTPStatus.OK)
+async def admin_get_run_power_limit_chart(
+    run_id: int,
+    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.admin_all}))],
+    video_start_seconds: float | None = Query(None),
+) -> Response:
+    """Generates and returns a standalone HTML power limit chart for the run's envoy DB artifact (admin access)."""
+    user_context, original_user_context = await assume_user_context_from_run(
+        session=db.session, user_context=user_context, run_id=run_id
+    )
+    if user_context == original_user_context:
+        logger.error(
+            (
+                f"Failed to assume new user context ({run_id=},"
+                f" assumed_user_context={user_context}, {original_user_context=})"
+            )
+        )
+    user = await select_user_or_raise(db.session, user_context)
+
+    try:
+        run = await select_user_run_with_artifact(db.session, user.user_id, run_id)
+    except NoResultFound as exc:
+        logger.debug(exc)
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Run does not exist.")
+
+    if run.run_artifact is None:
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="RunArtifact does not exist.")
+
+    try:
+        html = await generate_power_limit_chart(run.run_artifact, video_start_seconds=video_start_seconds)
+    except ValueError as exc:
+        raise HTTPException(status_code=HTTPStatus.CONFLICT, detail=str(exc))
+
+    if html is None:
+        raise HTTPException(
+            status_code=HTTPStatus.NOT_FOUND,
+            detail="Chart unavailable: insufficient DER data in artifact.",
+        )
+
+    return Response(content=html, media_type="text/html")
+
+
 @router.get(uri.AdminRunGroupProcedureRunList, status_code=HTTPStatus.OK)
 async def admin_get_runs_for_procedure_in_group(
     _: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.admin_all}))],
@@ -417,6 +461,50 @@ async def admin_get_run_status(
                 status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
                 detail=f"Unable to connect to run {run.run_id}'s pod to fetch status.",
             )
+
+
+@router.get(uri.AdminRunProceed, status_code=HTTPStatus.OK)
+async def admin_proceed_proxy(
+    run_id: int,
+    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.admin_all}))],
+) -> ProceedResponse:
+    """Forwards the proceed request to the appropriate runner instance on behalf of the run's owner."""
+
+    user_context, original_user_context = await assume_user_context_from_run(
+        session=db.session, user_context=user_context, run_id=run_id
+    )
+    if user_context == original_user_context:
+        logger.error(
+            (
+                f"Failed to assume new user context ({run_id=},"
+                f" assumed_user_context={user_context}, {original_user_context=})"
+            )
+        )
+    user = await select_user_or_raise(db.session, user_context)
+
+    try:
+        run = await select_user_run(db.session, user.user_id, run_id)
+    except NoResultFound as exc:
+        logger.debug(exc)
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Run does not exist.")
+
+    if run.run_status not in ACTIVE_RUN_STATUSES:
+        raise HTTPException(
+            status_code=HTTPStatus.GONE, detail=f"Run {run_id} has terminated. Unable to send proceed signal."
+        )
+
+    run_resource_names = get_resource_names(run.teststack_id)
+    settings = get_current_settings()
+    async with ClientSession(
+        base_url=run_resource_names.runner_base_url,
+        timeout=ClientTimeout(settings.test_execution_comms_timeout_seconds),
+    ) as s:
+        try:
+            return await RunnerClient.proceed(s)
+        except Exception as exc:
+            msg = f"Error sending proceed to run {run.run_id}."
+            logger.error(msg, exc_info=exc)
+            raise HTTPException(status_code=HTTPStatus.INTERNAL_SERVER_ERROR, detail=msg)
 
 
 @router.get(uri.AdminRun, status_code=HTTPStatus.OK)

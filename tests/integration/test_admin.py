@@ -1,6 +1,7 @@
 import io
 import zipfile
 from http import HTTPStatus
+from unittest.mock import patch
 
 import pytest
 from assertical.asserts.type import assert_list_type
@@ -12,6 +13,7 @@ from cactus_schema.orchestrator import (
     HEADER_RUN_ID,
     HEADER_TEST_ID,
     HEADER_USER_NAME,
+    ProceedResponse,
     RunGroupResponse,
     RunResponse,
     TestProcedureRunSummaryResponse,
@@ -276,6 +278,46 @@ async def test_admin_get_run_status(
 
 
 @pytest.mark.parametrize(
+    "run_id, handled, expected_status",
+    [
+        (1, True, HTTPStatus.OK),
+        (1, False, HTTPStatus.OK),
+        (5, True, HTTPStatus.OK),
+        (5, False, HTTPStatus.OK),
+        (2, None, HTTPStatus.GONE),
+        (99, None, HTTPStatus.NOT_FOUND),
+    ],
+)
+@pytest.mark.asyncio
+async def test_admin_proceed_proxy(
+    k8s_mock: MockedK8s, client, pg_base_config, valid_jwt_admin1, valid_jwt_user1, run_id, handled, expected_status
+):
+    # Arrange
+    expected_proceed_data = ProceedResponse(handled=handled)
+    k8s_mock.proceed.return_value = expected_proceed_data
+
+    # Act
+    res = await client.get(f"/admin/run/{run_id}/proceed", headers={"Authorization": f"Bearer {valid_jwt_admin1}"})
+
+    # Assert
+    assert res.status_code == expected_status
+    if expected_status == HTTPStatus.OK:
+        actual_proceed_data = ProceedResponse.from_json(res.text)
+        assert actual_proceed_data == expected_proceed_data
+        k8s_mock.proceed.assert_called_once()
+    else:
+        k8s_mock.proceed.assert_not_called()
+
+    # Non-admin must be rejected
+    k8s_mock.proceed.reset_mock()
+    non_admin_res = await client.get(
+        f"/admin/run/{run_id}/proceed", headers={"Authorization": f"Bearer {valid_jwt_user1}"}
+    )
+    assert non_admin_res.status_code == HTTPStatus.UNAUTHORIZED
+    k8s_mock.proceed.assert_not_called()
+
+
+@pytest.mark.parametrize(
     "run_id, expected_status",
     [(1, HTTPStatus.OK), (7, HTTPStatus.OK), (5, HTTPStatus.OK), (6, HTTPStatus.OK), (99, HTTPStatus.NOT_FOUND)],
 )
@@ -421,3 +463,34 @@ async def test_regenerate_run_report_and_get_artifact_data(
         assert res.headers[HEADER_RUN_ID] == str(run_id)
         assert res.headers[HEADER_GROUP_ID] == expected_group_id
         assert res.headers[HEADER_GROUP_NAME] == expected_group_name
+
+
+@pytest.mark.asyncio
+async def test_admin_get_run_power_limit_chart_run_not_found(client, pg_base_config, valid_jwt_admin1):
+    res = await client.get("/admin/run/99/power_limit_chart", headers={"Authorization": f"Bearer {valid_jwt_admin1}"})
+    assert res.status_code == HTTPStatus.NOT_FOUND
+
+
+@pytest.mark.asyncio
+async def test_admin_get_run_power_limit_chart_no_artifact(client, pg_base_config, valid_jwt_admin1):
+    """Run 1 exists but has no artifact."""
+    res = await client.get("/admin/run/1/power_limit_chart", headers={"Authorization": f"Bearer {valid_jwt_admin1}"})
+    assert res.status_code == HTTPStatus.NOT_FOUND
+
+
+@pytest.mark.asyncio
+@patch("cactus_orchestrator.api.admin.generate_power_limit_chart", return_value=None)
+async def test_admin_get_run_power_limit_chart_insufficient_data(mock_chart, client, pg_base_config, valid_jwt_admin1):
+    """Returns 404 when chart generation returns None (no DER data in artifact)."""
+    res = await client.get("/admin/run/5/power_limit_chart", headers={"Authorization": f"Bearer {valid_jwt_admin1}"})
+    assert res.status_code == HTTPStatus.NOT_FOUND
+
+
+@pytest.mark.asyncio
+@patch("cactus_orchestrator.api.admin.generate_power_limit_chart", return_value="<html>chart</html>")
+async def test_admin_get_run_power_limit_chart_ok(mock_chart, client, pg_base_config, valid_jwt_admin1):
+    """Returns 200 text/html when chart generation succeeds."""
+    res = await client.get("/admin/run/5/power_limit_chart", headers={"Authorization": f"Bearer {valid_jwt_admin1}"})
+    assert res.status_code == HTTPStatus.OK
+    assert res.headers["content-type"].startswith("text/html")
+    assert "<html>chart</html>" in res.text

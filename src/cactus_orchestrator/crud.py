@@ -216,9 +216,15 @@ async def update_run_run_status(
 
 
 async def create_runartifact(
-    session: AsyncSession, compression: str, file_data: bytes, reporting_data: str | None
+    session: AsyncSession,
+    compression: str,
+    file_data: bytes,
+    reporting_data: str | None,
+    reporting_data_version: int | None,
 ) -> RunArtifact:
-    runartifact = RunArtifact(compression=compression, file_data=file_data, reporting_data=reporting_data)
+    runartifact = RunArtifact(
+        compression=compression, file_data=file_data, reporting_data=reporting_data, version=reporting_data_version
+    )
     session.add(runartifact)
     await session.flush()
     return runartifact

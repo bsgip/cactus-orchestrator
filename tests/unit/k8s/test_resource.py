@@ -239,15 +239,17 @@ def test_generate_static_test_stack_id():
 
 
 def test_generate_dynamic_test_stack_id():
-    id1 = generate_dynamic_test_stack_id()
-    id2 = generate_dynamic_test_stack_id()
-    id3 = generate_dynamic_test_stack_id()
+    u = generate_class_instance(User, user_id=42, is_static_uri=False)
+    id1 = generate_dynamic_test_stack_id(u)
+    id2 = generate_dynamic_test_stack_id(u)
+    id3 = generate_dynamic_test_stack_id(u)
 
     assert_uri_friendly(id1)
     assert_uri_friendly(id2)
     assert_uri_friendly(id3)
 
     assert len(set([id1, id2, id3])) == 3, "All values must be unique"
+    assert all(i.endswith("-42") for i in [id1, id2, id3]), "Should include user_id suffix"
 
 
 def test_generate_envoy_dcap_uri():
