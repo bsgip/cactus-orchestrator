@@ -4,6 +4,8 @@ from http import HTTPStatus
 from cactus_schema.orchestrator import PlaylistRunInfo, RunResponse, RunStatusResponse
 from cactus_test_definitions.client import get_all_test_procedures
 from cactus_test_definitions.client.test_procedures import TestProcedure, TestProcedureId
+
+from cactus_orchestrator.settings import get_current_settings
 from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from cactus_orchestrator.auth import UserContext
@@ -13,7 +15,13 @@ from cactus_orchestrator.model import Run, RunGroup, RunStatus, User
 
 logger = logging.getLogger(__name__)
 
-test_procedures_by_id: dict[TestProcedureId, TestProcedure] = get_all_test_procedures()
+
+def get_filtered_test_procedures() -> dict[TestProcedureId, TestProcedure]:
+    ignored = set(get_current_settings().ignored_test_procedures)
+    return {k: v for k, v in get_all_test_procedures().items() if k.value not in ignored}
+
+
+test_procedures_by_id: dict[TestProcedureId, TestProcedure] = get_filtered_test_procedures()
 
 
 def map_run_status_to_run_status_response(run_status: RunStatus) -> RunStatusResponse:
