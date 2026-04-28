@@ -7,7 +7,7 @@ from cactus_schema.orchestrator.compliance import ComplianceClass, fetch_complia
 from cactus_test_definitions.client import TestProcedureId
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from cactus_orchestrator.api.common import get_filtered_test_procedures
+from cactus_orchestrator.procedures import get_filtered_test_procedures
 from cactus_orchestrator.crud import select_group_runs_aggregated_by_procedure
 from cactus_orchestrator.model import RunGroup
 
