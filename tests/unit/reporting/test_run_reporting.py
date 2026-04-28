@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 import pandas as pd
+import psycopg
 import pytest
 from assertical.fake.generator import generate_class_instance
 from cactus_runner.app.envoy_common import ReadingLocation
@@ -24,7 +25,9 @@ from envoy_schema.server.schema.sep2.types import (
 
 from cactus_orchestrator.reporting.run_reporting import (
     device_category_to_string,
+    generate_readings_timeline,
     pdf_report_as_bytes,
+    uom_to_string,
     validate_cell,
     validate_reading_duration,
 )
@@ -523,3 +526,62 @@ def _create_reading(seed: int, time_period_seconds: int | None) -> dict:
         time_period_start=BASIS + timedelta(seconds=seed * 60),
         time_period_seconds=time_period_seconds,
     ).__dict__
+
+
+def test_generate_readings_timeline():
+    # Arrange
+    def sample_readings(timestamps: list[datetime]):
+        return pd.DataFrame(
+            {
+                "scaled_value": [Decimal(1.0)] * len(timestamps),
+                "time_period_start": timestamps,
+            }
+        )
+
+    base_timestamp = datetime.now(timezone.utc)
+    COUNT = 10
+    readings_df = sample_readings([base_timestamp + timedelta(seconds=i) for i in range(COUNT)])
+    quantity = "myquantity"
+
+    # Act
+    timeline = generate_readings_timeline(
+        readings_df=readings_df,
+        quantity=quantity,
+        base_timestamp=base_timestamp,
+    )
+
+    json_readings = readings_df.to_json()
+
+    reconstituted_readings = pd.read_json(json_readings)
+
+    timeline = generate_readings_timeline(
+        readings_df=readings_df,
+        quantity=quantity,
+        base_timestamp=base_timestamp,
+    )
+
+
+# from cactus_runner.models import ReportingData
+#
+# from cactus_orchestrator.reporting.generate import generate_pdf_report_v1
+#
+#
+# def test_all_reporting_data_in_test_db():
+#     # NOTE: This requires an ssh tunnel to reach the db
+#     TEST_CONN_STRING = "postgresql://cactususer:@localhost:5434/cactusorchestrator"
+#     PROD_CONN_STRING = "postgresql://cactususer:@localhost:5434/cactusorchestrator"
+#
+#     conn_string = PROD_CONN_STRING
+#     with psycopg.connect(conninfo=conn_string) as conn:
+#         with conn.cursor() as cur:
+#             # Execute a command: this creates a new table
+#             cur.execute("""
+#                 select id, reporting_data, version from run_artifact where run_artifact.reporting_data is not null;
+#                 """)
+#
+#             results = cur.fetchall()
+#             for rd in results:
+#                 id, reporting_data_json, version = rd
+#                 print(f"Run Artifact {id=} {version=}")
+#                 reporting_data = ReportingData.from_json(version=1, string=reporting_data_json)
+#                 generate_pdf_report_v1(reporting_data=reporting_data)
