@@ -4,9 +4,10 @@ from enum import Enum, auto
 
 from cactus_schema.orchestrator import TestProcedureRunSummaryResponse
 from cactus_schema.orchestrator.compliance import ComplianceClass, fetch_compliance_classes
-from cactus_test_definitions.client import TestProcedureId, get_all_test_procedures
+from cactus_test_definitions.client import TestProcedureId
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from cactus_orchestrator.api.common import get_filtered_test_procedures
 from cactus_orchestrator.crud import select_group_runs_aggregated_by_procedure
 from cactus_orchestrator.model import RunGroup
 
@@ -77,7 +78,7 @@ async def get_class_compliance(
 async def get_procedure_mapping(
     session: AsyncSession, run_group: RunGroup
 ) -> dict[TestProcedureId, TestProcedureRunSummaryResponse]:
-    test_procedure_definitions = get_all_test_procedures()
+    test_procedure_definitions = get_filtered_test_procedures()
 
     procedures: list[TestProcedureRunSummaryResponse] = []
     for agg in await select_group_runs_aggregated_by_procedure(session=session, run_group_id=run_group.run_group_id):
