@@ -21,7 +21,6 @@ from cactus_schema.orchestrator import (
     ProceedResponse,
     RunArtifactMultipleRequest,
     RunResponse,
-    RunStatusResponse,
     StartRunResponse,
     uri,
 )
@@ -82,8 +81,6 @@ logger = logging.getLogger(__name__)
 
 
 router = APIRouter()
-
-
 
 
 async def prepare_run_for_delete(run: Run) -> None:
