@@ -1,14 +1,58 @@
 import logging
 from http import HTTPStatus
 
+from cactus_schema.orchestrator import PlaylistRunInfo, RunResponse, RunStatusResponse
+from cactus_test_definitions.client.test_procedures import TestProcedure, TestProcedureId
+
+from cactus_orchestrator.procedures import get_filtered_test_procedures
 from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
-
 from cactus_orchestrator.auth import UserContext
 from cactus_orchestrator.crud import insert_user, select_run_group_for_user, select_run_groups_for_user, select_user
-from cactus_orchestrator.model import RunGroup, User
+from cactus_orchestrator.k8s.resource import generate_envoy_dcap_uri, get_resource_names
+from cactus_orchestrator.model import Run, RunGroup, RunStatus, User
 
 logger = logging.getLogger(__name__)
+
+
+test_procedures_by_id: dict[TestProcedureId, TestProcedure] = get_filtered_test_procedures()
+
+
+def map_run_status_to_run_status_response(run_status: RunStatus) -> RunStatusResponse:
+    status = RunStatusResponse.finalised
+    if run_status == RunStatus.initialised:
+        status = RunStatusResponse.initialised
+    elif run_status == RunStatus.started:
+        status = RunStatusResponse.started
+    elif run_status == RunStatus.provisioning:
+        status = RunStatusResponse.provisioning
+    elif run_status == RunStatus.skipped:
+        status = RunStatusResponse.skipped
+    return status
+
+
+def map_run_to_run_response(run: Run, playlist_runs: list[PlaylistRunInfo] | None = None) -> RunResponse:
+    status = map_run_status_to_run_status_response(run.run_status)
+    try:
+        definition = test_procedures_by_id.get(TestProcedureId(run.testprocedure_id), None)
+    except ValueError:
+        definition = None
+
+    return RunResponse(
+        run_id=run.run_id,
+        test_procedure_id=run.testprocedure_id,
+        test_url=generate_envoy_dcap_uri(get_resource_names(run.teststack_id)),
+        status=status,
+        all_criteria_met=run.all_criteria_met,
+        created_at=run.created_at,
+        finalised_at=run.finalised_at,
+        is_device_cert=run.is_device_cert,
+        has_artifacts=run.run_artifact_id is not None,
+        playlist_execution_id=run.playlist_execution_id,
+        playlist_order=run.playlist_order,
+        playlist_runs=playlist_runs,
+        classes=definition.classes if definition else None,
+    )
 
 
 async def select_user_or_create(session: AsyncSession, user_context: UserContext) -> User:

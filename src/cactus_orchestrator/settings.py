@@ -76,6 +76,7 @@ class CactusOrchestratorSettings(BaseSettings):
 
     # general orchestrator options
     ignored_csip_aus_versions: list[str] = []
+    ignored_test_procedures: list[str] = []
 
 
 class JWTAuthSettings(BaseSettings):
