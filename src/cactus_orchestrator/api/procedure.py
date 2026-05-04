@@ -11,14 +11,18 @@ from cactus_schema.orchestrator import (
     uri,
 )
 from cactus_test_definitions import CSIPAusVersion
-from cactus_test_definitions.client import TestProcedure, TestProcedureId, get_all_test_procedures
+from cactus_test_definitions.client import TestProcedure, TestProcedureId
+
+from cactus_orchestrator.api.common import (
+    map_run_to_run_response,
+    select_user_run_group_or_raise,
+    test_procedures_by_id,
+)
+from cactus_orchestrator.auth import AuthPerm, UserContext, jwt_validator
 from fastapi import APIRouter, Depends, HTTPException, Response
 from fastapi_async_sqlalchemy import db
 from fastapi_pagination import Page, paginate
 from fastapi_pagination.utils import disable_installed_extensions_check
-
-from cactus_orchestrator.api.run import map_run_to_run_response, select_user_run_group_or_raise
-from cactus_orchestrator.auth import AuthPerm, UserContext, jwt_validator
 from cactus_orchestrator.crud import select_group_runs_aggregated_by_procedure, select_group_runs_for_procedure
 from cactus_orchestrator.settings import get_current_settings
 
@@ -55,8 +59,6 @@ def map_versions() -> list[CSIPAusVersionResponse]:
     ]
 
 
-# Test procedures
-test_procedures_by_id = get_all_test_procedures()
 test_procedure_responses = map_from_definitions_to_responses(test_procedures_by_id)
 
 
@@ -127,6 +129,7 @@ async def get_procedure_run_summaries_for_group(
                     latest_run_status=agg.latest_run_status,
                     latest_run_id=agg.latest_run_id,
                     latest_run_timestamp=agg.latest_run_timestamp,
+                    immediate_start=definition.preconditions is not None and definition.preconditions.immediate_start,
                 )
             )
 

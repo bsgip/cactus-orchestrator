@@ -21,7 +21,6 @@ from cactus_schema.orchestrator import (
     ProceedResponse,
     RunArtifactMultipleRequest,
     RunResponse,
-    RunStatusResponse,
     StartRunResponse,
     uri,
 )
@@ -30,6 +29,7 @@ from cactus_schema.runner import RunGroup as RunRequestRunGroup
 from cactus_schema.runner import RunnerStatus, RunRequest, TestCertificates, TestConfig, TestDefinition, TestUser
 from cactus_test_definitions import CSIPAusVersion
 from cactus_test_definitions.client.test_procedures import TestProcedureId, get_yaml_contents
+
 from cryptography import x509
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi_async_sqlalchemy import db
@@ -37,7 +37,12 @@ from fastapi_pagination import Page, paginate
 from sqlalchemy.exc import NoResultFound
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from cactus_orchestrator.api.common import select_user_or_raise, select_user_run_group_or_raise
+from cactus_orchestrator.api.common import (
+    map_run_status_to_run_status_response,
+    map_run_to_run_response,
+    select_user_or_raise,
+    select_user_run_group_or_raise,
+)
 from cactus_orchestrator.artifact import regenerate_pdf_report
 from cactus_orchestrator.chart import generate_power_limit_chart
 from cactus_orchestrator.auth import AuthPerm, UserContext, jwt_validator
@@ -76,38 +81,6 @@ logger = logging.getLogger(__name__)
 
 
 router = APIRouter()
-
-
-def map_run_status_to_run_status_response(run_status: RunStatus) -> RunStatusResponse:
-    status = RunStatusResponse.finalised
-    if run_status == RunStatus.initialised:
-        status = RunStatusResponse.initialised
-    elif run_status == RunStatus.started:
-        status = RunStatusResponse.started
-    elif run_status == RunStatus.provisioning:
-        status = RunStatusResponse.provisioning
-    elif run_status == RunStatus.skipped:
-        status = RunStatusResponse.skipped
-    return status
-
-
-def map_run_to_run_response(run: Run, playlist_runs: list[PlaylistRunInfo] | None = None) -> RunResponse:
-    status = map_run_status_to_run_status_response(run.run_status)
-
-    return RunResponse(
-        run_id=run.run_id,
-        test_procedure_id=run.testprocedure_id,
-        test_url=generate_envoy_dcap_uri(get_resource_names(run.teststack_id)),
-        status=status,
-        all_criteria_met=run.all_criteria_met,
-        created_at=run.created_at,
-        finalised_at=run.finalised_at,
-        is_device_cert=run.is_device_cert,
-        has_artifacts=run.run_artifact_id is not None,
-        playlist_execution_id=run.playlist_execution_id,
-        playlist_order=run.playlist_order,
-        playlist_runs=playlist_runs,
-    )
 
 
 async def prepare_run_for_delete(run: Run) -> None:

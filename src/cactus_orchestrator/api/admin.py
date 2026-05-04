@@ -23,13 +23,13 @@ from sqlalchemy.exc import NoResultFound
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from cactus_orchestrator import artifact
-from cactus_orchestrator.api.procedure import test_procedures_by_id
-from cactus_orchestrator.api.run import (
-    get_run_artifact_response_for_user,
+from cactus_orchestrator.api.common import (
     map_run_to_run_response,
     select_user_or_raise,
     select_user_run_group_or_raise,
+    test_procedures_by_id,
 )
+from cactus_orchestrator.api.run import get_run_artifact_response_for_user
 from cactus_orchestrator.api.run_group import map_group_to_group_response
 from cactus_orchestrator.artifact import regenerate_run_artifact
 from cactus_orchestrator.chart import generate_power_limit_chart
@@ -220,6 +220,7 @@ async def admin_get_procedure_run_summaries_for_group(
                     latest_run_status=agg.latest_run_status,
                     latest_run_id=agg.latest_run_id,
                     latest_run_timestamp=agg.latest_run_timestamp,
+                    immediate_start=definition.preconditions is not None and definition.preconditions.immediate_start,
                 )
             )
 
