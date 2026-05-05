@@ -45,9 +45,7 @@ async def fetch_certificate_key_pair(
     namespace = namespace or get_current_settings().test_execution_namespace
 
     # Read secret
-    res: ApplyResult = v1_core_api.read_namespaced_secret(
-        secret_name, namespace=namespace, async_req=True
-    )  # type: ignore
+    res: ApplyResult = v1_core_api.read_namespaced_secret(secret_name, namespace=namespace, async_req=True)  # type: ignore
     secret: client.V1Secret = await asyncio.to_thread(res.get)
 
     if secret is None or secret.data is None:
@@ -75,9 +73,7 @@ async def fetch_certificate_only(secret_name: str, namespace: str | None = None)
     namespace = namespace or get_current_settings().test_execution_namespace
 
     # Read secret
-    res: ApplyResult = v1_core_api.read_namespaced_secret(
-        secret_name, namespace=namespace, async_req=True
-    )  # type: ignore
+    res: ApplyResult = v1_core_api.read_namespaced_secret(secret_name, namespace=namespace, async_req=True)  # type: ignore
     secret: client.V1Secret = await asyncio.to_thread(res.get)
 
     if secret is None or secret.data is None:

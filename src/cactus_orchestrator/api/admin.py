@@ -32,8 +32,8 @@ from cactus_orchestrator.api.common import (
 from cactus_orchestrator.api.run import get_run_artifact_response_for_user
 from cactus_orchestrator.api.run_group import map_group_to_group_response
 from cactus_orchestrator.artifact import regenerate_run_artifact
-from cactus_orchestrator.chart import generate_power_limit_chart
 from cactus_orchestrator.auth import AuthPerm, UserContext, jwt_validator
+from cactus_orchestrator.chart import generate_power_limit_chart
 from cactus_orchestrator.crud import (
     ACTIVE_RUN_STATUSES,
     insert_compliance_generation_record,
@@ -581,8 +581,7 @@ async def admin_get_group_run_compliance_artifact(
         raise HTTPException(
             status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
             detail=(
-                "Unable to update ComplianceRecord with compliance file data"
-                f" for {run_group_id=} and {requester_id=}"
+                f"Unable to update ComplianceRecord with compliance file data for {run_group_id=} and {requester_id=}"
             ),
         )
 

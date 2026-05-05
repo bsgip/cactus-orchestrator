@@ -61,7 +61,7 @@ def async_k8s_api_retry[**P, T](
                     if ignore_status_code is not None:
                         if exc.status == ignore_status_code:
                             return None
-                    logger.debug(f"[Attempt {attempt+1}] Kubernetes API error: {exc.status} {exc.reason}")
+                    logger.debug(f"[Attempt {attempt + 1}] Kubernetes API error: {exc.status} {exc.reason}")
                     if attempt < retries - 1:
                         await asyncio.sleep(delay)
                     elif not fail_silently:

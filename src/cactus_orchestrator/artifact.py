@@ -77,7 +77,6 @@ async def replace_pdf_in_zip_data(pdf_data: bytes, zip_data: bytes, pdf_filename
     zip_buffer = io.BytesIO()
     pdf_was_written = False
     with zipfile.ZipFile(zip_buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as updated_zip:
-
         with zipfile.ZipFile(io.BytesIO(zip_data)) as original_zip:
             for member in original_zip.namelist():
                 with updated_zip.open(member, "w") as member_handle:

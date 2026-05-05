@@ -1,6 +1,4 @@
-import io
 import os
-import zipfile
 from datetime import datetime, timedelta, timezone
 from http import HTTPMethod, HTTPStatus
 from itertools import product
@@ -23,7 +21,6 @@ from cactus_schema.orchestrator import (
     ProceedResponse,
     RunResponse,
     StartRunResponse,
-    uri,
 )
 from cactus_schema.runner import (
     CriteriaEntry,
@@ -1102,7 +1099,6 @@ async def test_get_run_artifact_data(
     # Assert
     assert res.status_code == expected_status
     if expected_status == HTTPStatus.OK:
-
         assert expected_artifact_data == res.read()
 
         assert res.headers[HEADER_USER_NAME] == expected_user

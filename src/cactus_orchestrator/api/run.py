@@ -24,12 +24,19 @@ from cactus_schema.orchestrator import (
     StartRunResponse,
     uri,
 )
-from cactus_schema.runner import RequestData, RequestList
+from cactus_schema.runner import (
+    RequestData,
+    RequestList,
+    RunnerStatus,
+    RunRequest,
+    TestCertificates,
+    TestConfig,
+    TestDefinition,
+    TestUser,
+)
 from cactus_schema.runner import RunGroup as RunRequestRunGroup
-from cactus_schema.runner import RunnerStatus, RunRequest, TestCertificates, TestConfig, TestDefinition, TestUser
 from cactus_test_definitions import CSIPAusVersion
 from cactus_test_definitions.client.test_procedures import TestProcedureId, get_yaml_contents
-
 from cryptography import x509
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi_async_sqlalchemy import db
@@ -44,8 +51,8 @@ from cactus_orchestrator.api.common import (
     select_user_run_group_or_raise,
 )
 from cactus_orchestrator.artifact import regenerate_pdf_report
-from cactus_orchestrator.chart import generate_power_limit_chart
 from cactus_orchestrator.auth import AuthPerm, UserContext, jwt_validator
+from cactus_orchestrator.chart import generate_power_limit_chart
 from cactus_orchestrator.crud import (
     ACTIVE_RUN_STATUSES,
     create_runartifact,
@@ -111,7 +118,7 @@ async def wait_for_runner_health(s: ClientSession) -> None:
         await asyncio.sleep(2)
 
     raise CactusOrchestratorException(
-        f"Unable to fetch health from RunnerClient after {attempt+1} attempts. Will be treated as a failed start."
+        f"Unable to fetch health from RunnerClient after {attempt + 1} attempts. Will be treated as a failed start."
     )
 
 
@@ -275,7 +282,6 @@ async def spawn_teststack_and_init_run(
             base_url=run_resource_names.runner_base_url,
             timeout=ClientTimeout(settings.test_execution_comms_timeout_seconds),
         ) as session:
-
             await wait_for_runner_health(session)
             pod_startup_seconds = (datetime.now(timezone.utc) - pod_start_time).total_seconds()
             logger.info(f"Pod {run_resource_names.stateful_set} ready in {pod_startup_seconds:.1f}s")
@@ -476,7 +482,6 @@ async def finalise_run(
 ) -> RunArtifact | None:
 
     async with ClientSession(base_url=url, timeout=ClientTimeout(comms_timeout_seconds)) as s:
-
         # We need our final status to evaluate whether all criteria are passing
         # But we don't want to block the finalisation if there's an issue fetching it
         try:

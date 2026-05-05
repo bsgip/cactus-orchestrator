@@ -1,15 +1,14 @@
 from datetime import datetime, timezone
+from uuid import uuid4
 
 import pytest
 from assertical.asserts.time import assert_nowish
 from assertical.asserts.type import assert_dict_type, assert_list_type
 from assertical.fixtures.postgres import generate_async_session
 from cactus_test_definitions import CSIPAusVersion
-from cactus_test_definitions.client import TestProcedureId
+from cactus_test_definitions.client import TestProcedureId, get_all_test_procedures
 from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError, NoResultFound
-from uuid import uuid4
-from cactus_test_definitions.client import get_all_test_procedures
 
 from cactus_orchestrator.auth import UserContext
 from cactus_orchestrator.crud import (
@@ -382,7 +381,6 @@ async def test_select_user_run(pg_base_config, user_id: int, run_id: int, succes
     """Test selecting a run for a given user."""
     # Act
     async with generate_async_session(pg_base_config) as session:
-
         if success:
             run = await select_user_run(session, user_id, run_id)
             assert run is not None

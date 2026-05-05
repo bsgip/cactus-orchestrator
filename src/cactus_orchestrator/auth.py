@@ -94,9 +94,7 @@ class JWTValidator:
 
                 pem_key = rsa_key.public_bytes(
                     encoding=serialization.Encoding.PEM, format=serialization.PublicFormat.SubjectPublicKeyInfo
-                ).decode(
-                    "utf-8"
-                )  # NOTE: deserialising here fore cache
+                ).decode("utf-8")  # NOTE: deserialising here fore cache
 
                 kid = key["kid"]
                 logger.debug(f"JWK Cache entry update kid={kid} expiring={cache_expiry}")

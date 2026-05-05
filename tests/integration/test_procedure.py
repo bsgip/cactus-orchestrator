@@ -115,9 +115,9 @@ async def test_procedure_run_summaries_for_group(
         assert res.status_code == HTTPStatus.OK
         items = TestProcedureRunSummaryResponse.from_json(res.text)
         assert isinstance(items, list)
-        assert (
-            len(items) > 10
-        ), "Not every test is visible to every version (RunGroup) but there should be more tests than records in the DB"
+        assert len(items) > 10, (
+            "Not every test is visible to every version (RunGroup) but there should be more tests than records in the DB"
+        )
 
         counts_by_procedure_id = {procedure: count for procedure, count in expected_id_counts}
 

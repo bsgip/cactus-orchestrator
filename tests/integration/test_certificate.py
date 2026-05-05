@@ -212,7 +212,7 @@ async def test_generate_shared_aggregator_certificate_and_fetch(
     run_group_ids = [r.run_group_id for r in run_groups]
 
     # Act
-    res = await client.put(f"/run_group/certificate", headers={"Authorization": f"Bearer {valid_jwt_user1}"})
+    res = await client.put("/run_group/certificate", headers={"Authorization": f"Bearer {valid_jwt_user1}"})
 
     # Assert
     assert res.status_code == HTTPStatus.OK

@@ -1410,7 +1410,7 @@ def validate_reading_duration(readings_df: pd.DataFrame, allow_zero_duration: bo
 
         if invalid_count > 0:
             warnings.append(
-                f"{invalid_count} {"readings have" if invalid_count != 1 else "reading has"}"
+                f"{invalid_count} {'readings have' if invalid_count != 1 else 'reading has'}"
                 " invalid duration (not divisible by 60). This may indicate a configuration issue."
             )
 
