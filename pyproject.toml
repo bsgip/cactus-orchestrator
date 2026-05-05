@@ -38,16 +38,13 @@ dynamic = ["version"]
 
 [project.optional-dependencies]
 dev = [
-    "bandit",
-    "flake8",
     "mypy",
+    "ruff",
     "types-python-dateutil",
     "types-tzlocal",
     "types-pyasn1",
-    "black",
     "coverage",
     "kubernetes-stubs",
-    "isort",
     "pandas-stubs",
     "types-reportlab",
 ]
@@ -62,8 +59,18 @@ test = [
     "asgi_lifespan",
 ]
 
-[tool.black]
+[tool.ruff]
 line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "S", "C90", "B"]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 15
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S"]
+"alembic/**" = ["S"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
@@ -81,9 +88,6 @@ asyncio_default_fixture_loop_scope = "function"
 markers = [
     "idleteardowntask_enable(seconds): Mark test that enables teardown task and sets repeat every duration",
 ]
-
-[tool.bandit]
-exclude_dirs = ["tests", "alembic"]
 
 [tool.mypy]
 exclude = ["tests", "alembic"]
