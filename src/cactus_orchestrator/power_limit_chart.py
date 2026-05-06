@@ -520,18 +520,18 @@ def _resolve_type_limit(
 
 
 def _get_effective_upper_at(
-    T: datetime,
+    t: datetime,
     sorted_groups: list[SiteControlGroup],
     enriched: list[_EnrichedControl],
     defaults_by_group: dict[int, list[_DefaultLike]],
 ) -> tuple[float | None, object | None]:
-    """Returns (effective_limit_watts, source) for the upper bound at time T.
+    """Returns (effective_limit_watts, source) for the upper bound at time t.
 
     Export and generation limits are each resolved independently (active controls →
     defaults → unconstrained) and then combined with min so the most restrictive
     applies. The source returned is that of the binding (minimum) type."""
     exp_val, exp_src = _resolve_type_limit(
-        T,
+        t,
         sorted_groups,
         enriched,
         defaults_by_group,
@@ -539,7 +539,7 @@ def _get_effective_upper_at(
         lambda d: float(d.export_limit_active_watts) if d.export_limit_active_watts is not None else None,
     )
     gen_val, gen_src = _resolve_type_limit(
-        T,
+        t,
         sorted_groups,
         enriched,
         defaults_by_group,
@@ -556,19 +556,19 @@ def _get_effective_upper_at(
 
 
 def _get_effective_lower_at(
-    T: datetime,
+    t: datetime,
     sorted_groups: list[SiteControlGroup],
     enriched: list[_EnrichedControl],
     defaults_by_group: dict[int, list[_DefaultLike]],
 ) -> tuple[float | None, object | None]:
-    """Returns (effective_limit_watts, source) for the lower bound at time T.
+    """Returns (effective_limit_watts, source) for the lower bound at time t.
     Returns a positive magnitude value — caller negates it for display.
 
     Import and load limits are each resolved independently (active controls →
     defaults → unconstrained) and then combined with min so the most restrictive
     applies. The source returned is that of the binding (minimum) type."""
     imp_val, imp_src = _resolve_type_limit(
-        T,
+        t,
         sorted_groups,
         enriched,
         defaults_by_group,
@@ -576,7 +576,7 @@ def _get_effective_lower_at(
         lambda d: float(d.import_limit_active_watts) if d.import_limit_active_watts is not None else None,
     )
     load_val, load_src = _resolve_type_limit(
-        T,
+        t,
         sorted_groups,
         enriched,
         defaults_by_group,
@@ -688,22 +688,22 @@ def _build_limit_events(
     prev_target: float | None = None
     disconnect_starts = {ds for ds, _ in disconnect_intervals}
 
-    for T in event_times:
-        is_disconnected = any(ds <= T < de for ds, de in disconnect_intervals)
+    for t in event_times:
+        is_disconnected = any(ds <= t < de for ds, de in disconnect_intervals)
 
         if is_disconnected:
             target = 0.0
             source = None
         elif is_upper:
-            raw, source = _get_effective_upper_at(T, sorted_groups, enriched, defaults_by_group)
+            raw, source = _get_effective_upper_at(t, sorted_groups, enriched, defaults_by_group)
             target = min(raw if raw is not None else set_max_w, set_max_w)
         else:
-            raw, source = _get_effective_lower_at(T, sorted_groups, enriched, defaults_by_group)
+            raw, source = _get_effective_lower_at(t, sorted_groups, enriched, defaults_by_group)
             target = max(-(raw if raw is not None else set_max_w), -set_max_w)
 
         if prev_target is None or abs(target - prev_target) > 0.1:
-            instant = T in disconnect_starts
-            events.append(_LimitEvent(time=T, target=target, source=source, instant=instant))
+            instant = t in disconnect_starts
+            events.append(_LimitEvent(time=t, target=target, source=source, instant=instant))
             prev_target = target
 
     return events
@@ -712,7 +712,7 @@ def _build_limit_events(
 # ─── Trace building ───────────────────────────────────────────────────────────
 
 
-def _build_trace(
+def _build_trace(  # noqa: C901
     limit_events: list[_LimitEvent],
     test_start: datetime,
     test_end: datetime,
@@ -941,7 +941,7 @@ def _add_reconnect_markers(
     to_rel: Callable[[datetime], float],
     duration_secs: float,
 ) -> None:
-    _COLOR = "rgba(120,120,120,0.5)"
+    _color = "rgba(120,120,120,0.5)"
     reconnect_rels = [
         to_rel(de - timedelta(seconds=_OP_MOD_CONNECT_GRACE_SECONDS))
         for _, de in disconnect_intervals
@@ -956,7 +956,7 @@ def _add_reconnect_markers(
             x1=rel,
             y0=0,
             y1=1,
-            line=dict(color=_COLOR, width=1, dash="dot"),
+            line=dict(color=_color, width=1, dash="dot"),
         )
     if reconnect_rels:
         fig.add_trace(
@@ -964,7 +964,7 @@ def _add_reconnect_markers(
                 x=reconnect_rels,
                 y=[0] * len(reconnect_rels),
                 mode="markers",
-                marker=dict(symbol="line-ns", size=10, color=_COLOR),
+                marker=dict(symbol="line-ns", size=10, color=_color),
                 customdata=[["60 s AS4777 wGra wait period on reconnection"]] * len(reconnect_rels),
                 hovertemplate="Device reconnected — %{customdata[0]}<extra>Reconnect</extra>",
                 showlegend=False,
@@ -980,7 +980,7 @@ def _add_completion_markers(
     duration_secs: float,
     to_rel: Callable[[datetime], float],
 ) -> None:
-    _COMPLETION_COLOR = "#888"
+    _completion_color = "#888"
     for (name, t), lane in zip(completions, lanes, strict=False):
         rel = to_rel(t)
         if rel < 0 or rel > duration_secs:
@@ -993,7 +993,7 @@ def _add_completion_markers(
             x1=rel,
             y0=0,
             y1=1,
-            line=dict(color=_COMPLETION_COLOR, width=1.5, dash="dash"),
+            line=dict(color=_completion_color, width=1.5, dash="dash"),
             opacity=0.45,
         )
         label = name if len(name) <= 22 else name[:20] + "…"
@@ -1005,11 +1005,11 @@ def _add_completion_markers(
             text=label,
             showarrow=True,
             arrowhead=0,
-            arrowcolor=_COMPLETION_COLOR,
+            arrowcolor=_completion_color,
             arrowwidth=1,
             ax=0,
             ay=12,
-            font=dict(size=8, color=_COMPLETION_COLOR),
+            font=dict(size=8, color=_completion_color),
             xanchor="center",
             yanchor="bottom",
         )
@@ -1018,7 +1018,7 @@ def _add_completion_markers(
             x=[None],
             y=[None],
             mode="lines",
-            line=dict(color=_COMPLETION_COLOR, width=1.5, dash="dash"),
+            line=dict(color=_completion_color, width=1.5, dash="dash"),
             name="Step complete",
         )
     )
@@ -1102,14 +1102,14 @@ def _render_html_chart(
 
     t_secs = 0.0
     while t_secs <= duration_secs + 1:
-        T = test_start + timedelta(seconds=t_secs)
+        t = test_start + timedelta(seconds=t_secs)
         tick_vals.append(t_secs)
         rel_label = (
             _fmt_video_time(t_secs + video_start_seconds)
             if video_start_seconds is not None
             else _duration_label(t_secs)
         )
-        bottom_labels.append(f"{rel_label}<br>{T.strftime('%H:%M')} UTC")
+        bottom_labels.append(f"{rel_label}<br>{t.strftime('%H:%M')} UTC")
         t_secs += tick_interval
 
     def to_rel(t: datetime) -> float:
