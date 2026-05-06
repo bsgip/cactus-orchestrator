@@ -121,8 +121,8 @@ async def test_procedure_run_summaries_for_group(
 
         counts_by_procedure_id = {procedure: count for procedure, count in expected_id_counts}
 
-        assert all((i.category for i in items)), "Should not be empty"
-        assert all((i.description for i in items)), "Should not be empty"
+        assert all(i.category for i in items), "Should not be empty"
+        assert all(i.description for i in items), "Should not be empty"
 
         for summary in items:
             assert summary.run_count == counts_by_procedure_id.get(summary.test_procedure_id, 0)

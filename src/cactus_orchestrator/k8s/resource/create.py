@@ -10,7 +10,7 @@ from kubernetes.client import V1EnvVar, V1StatefulSet
 from cactus_orchestrator.k8s.resource import RunResourceNames, TemplateResourceNames, async_k8s_api_retry
 from cactus_orchestrator.settings import (
     DEFAULT_INGRESS_PATH_FORMAT,
-    CactusOrchestratorException,
+    CactusOrchestratorError,
     get_current_settings,
     v1_app_api,
     v1_core_api,
@@ -59,7 +59,7 @@ async def clone_statefulset(template_names: TemplateResourceNames, run_names: Ru
     # Rework the discovered spec into a new spec that's specific to the new service/labels
     new_spec = existing.spec
     if new_spec is None:
-        raise CactusOrchestratorException(
+        raise CactusOrchestratorError(
             f"{template_names.namespace} {template_names.stateful_set} - missing top level spec"
         )
     new_spec.service_name = run_names.service
@@ -68,7 +68,7 @@ async def clone_statefulset(template_names: TemplateResourceNames, run_names: Ru
     else:
         new_spec.selector.match_labels["app"] = run_names.app_label
     if new_spec.template.metadata is None:
-        raise CactusOrchestratorException(
+        raise CactusOrchestratorError(
             f"{template_names.namespace} {template_names.stateful_set} - missing spec.template.metadata"
         )
     if new_spec.template.metadata.labels is None:
@@ -80,12 +80,12 @@ async def clone_statefulset(template_names: TemplateResourceNames, run_names: Ru
     # hrefs properly include the prefix such that /edev will be encoded as /envoy-svc-abc123/edev
     href_env = V1EnvVar(name="HREF_PREFIX", value=f"/{run_names.service}", value_from=None)
     if new_spec.template.spec is None:
-        raise CactusOrchestratorException(
+        raise CactusOrchestratorError(
             f"{template_names.namespace} {template_names.stateful_set} - missing template spec"
         )
     update_containers = [c for c in new_spec.template.spec.containers if c.name in {"envoy", "taskiq-worker"}]
     if len(update_containers) != 2:
-        raise CactusOrchestratorException(
+        raise CactusOrchestratorError(
             f"{template_names.namespace} {template_names.stateful_set} - Expected 2 but found {len(update_containers)}"
             + " envoy/taskiq-worker containers."
         )
@@ -138,7 +138,7 @@ async def wait_for_pod(run_names: RunResourceNames, max_retries: int = 20, wait_
 
         await asyncio.sleep(wait_interval)
 
-    raise CactusOrchestratorException(f"{run_names.pod} failed to start.")
+    raise CactusOrchestratorError(f"{run_names.pod} failed to start.")
 
 
 @async_k8s_api_retry()

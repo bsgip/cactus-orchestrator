@@ -19,9 +19,9 @@ Receipt timing:
 
 import logging
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Callable
 
 import plotly.graph_objects as go  # type: ignore[import-untyped]
 from cactus_runner.app.envoy_common import (

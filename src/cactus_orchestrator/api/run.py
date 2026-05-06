@@ -3,12 +3,12 @@ import io
 import json
 import logging
 import zipfile
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from http import HTTPStatus
 from typing import Annotated
 from uuid import uuid4
 
-from cactus_runner.client import ClientSession, ClientTimeout, RunnerClient, RunnerClientException
+from cactus_runner.client import ClientSession, ClientTimeout, RunnerClient, RunnerClientError
 from cactus_schema.orchestrator import (
     HEADER_GROUP_ID,
     HEADER_GROUP_NAME,
@@ -82,7 +82,7 @@ from cactus_orchestrator.k8s.resource import (
 from cactus_orchestrator.k8s.resource.create import add_ingress_rule, clone_service, clone_statefulset, wait_for_pod
 from cactus_orchestrator.k8s.resource.delete import delete_service, delete_statefulset, remove_ingress_rule
 from cactus_orchestrator.model import Run, RunArtifact, RunStatus, User
-from cactus_orchestrator.settings import CactusOrchestratorException, get_current_settings
+from cactus_orchestrator.settings import CactusOrchestratorError, get_current_settings
 
 logger = logging.getLogger(__name__)
 
@@ -117,7 +117,7 @@ async def wait_for_runner_health(s: ClientSession) -> None:
         # Add a slight delay to give the pod a chance to standup
         await asyncio.sleep(2)
 
-    raise CactusOrchestratorException(
+    raise CactusOrchestratorError(
         f"Unable to fetch health from RunnerClient after {attempt + 1} attempts. Will be treated as a failed start."
     )
 
@@ -213,7 +213,7 @@ async def spawn_teststack_and_init_run(
             detail=f"Your certificate for {run_group_id} {run_group.name} must be generated before making a test run.",
         )
     client_cert = x509.load_pem_x509_certificate(run_group.certificate_pem)
-    if client_cert.not_valid_after_utc < datetime.now(timezone.utc):
+    if client_cert.not_valid_after_utc < datetime.now(UTC):
         raise HTTPException(
             HTTPStatus.EXPECTATION_FAILED,
             detail="Your certificate has expired. Please regenerate your certificate and try again.",
@@ -229,7 +229,7 @@ async def spawn_teststack_and_init_run(
         # This is a limitation of enabling static URIs and the user will be warned about it when enabling things
         active_runs = await select_active_runs_for_user(db.session, user.user_id)
         if len(active_runs) > 0:
-            run_ids_str = ",".join((str(r.run_id) for r in active_runs))
+            run_ids_str = ",".join(str(r.run_id) for r in active_runs)
             raise HTTPException(
                 HTTPStatus.CONFLICT,
                 detail=f"Static URIs are enabled therefore only a single run can be active. The following run IDs are still active and will need to be finalised first: {run_ids_str}.",  # noqa: E501
@@ -270,7 +270,7 @@ async def spawn_teststack_and_init_run(
     try:
         # duplicate resources
         user_identifier = user.user_name or user.subject_id
-        pod_start_time = datetime.now(timezone.utc)
+        pod_start_time = datetime.now(UTC)
         await clone_statefulset(template_resource_names, run_resource_names, user_identifier)
         await clone_service(template_resource_names, run_resource_names, user_identifier)
 
@@ -283,7 +283,7 @@ async def spawn_teststack_and_init_run(
             timeout=ClientTimeout(settings.test_execution_comms_timeout_seconds),
         ) as session:
             await wait_for_runner_health(session)
-            pod_startup_seconds = (datetime.now(timezone.utc) - pod_start_time).total_seconds()
+            pod_startup_seconds = (datetime.now(UTC) - pod_start_time).total_seconds()
             logger.info(f"Pod {run_resource_names.stateful_set} ready in {pod_startup_seconds:.1f}s")
 
             # Build RunRequest objects for all tests
@@ -347,7 +347,7 @@ async def spawn_teststack_and_init_run(
         # finally, include new service in ingress rule
         await add_ingress_rule(run_resource_names, user_identifier)
 
-    except (CactusOrchestratorException, RunnerClientException) as exc:
+    except (CactusOrchestratorError, RunnerClientError) as exc:
         logger.info("Failure to initialise runner. Will teardown any resources.", exc_info=exc)
         await teardown_teststack(run_resource_names)
         raise HTTPException(HTTPStatus.INTERNAL_SERVER_ERROR, detail="Internal Server Error")
@@ -428,7 +428,7 @@ async def start_run(
     ) as s:
         try:
             await RunnerClient.start(s)
-        except RunnerClientException as exc:
+        except RunnerClientError as exc:
             # Runner uses 412 to indicate unmet app-level preconditions (i.e. init phase steps not completed),
             # we 'proxy' this through.
             if exc.http_status_code == HTTPStatus.PRECONDITION_FAILED:
@@ -474,7 +474,7 @@ def is_all_criteria_met(runner_status: RunnerStatus | None) -> bool | None:
     criteria = runner_status.criteria if runner_status.criteria is not None else []
     request_history = runner_status.request_history if runner_status.request_history is not None else []
 
-    return all((c.success for c in criteria)) and all((not bool(r.body_xml_errors) for r in request_history))
+    return all(c.success for c in criteria) and all(not bool(r.body_xml_errors) for r in request_history)
 
 
 async def finalise_run(
@@ -646,7 +646,7 @@ async def finalise_run_and_teardown_teststack(
             run_resource_names.runner_base_url,
             db.session,
             RunStatus.finalised_by_client,
-            datetime.now(timezone.utc),
+            datetime.now(UTC),
             settings.test_execution_comms_timeout_seconds,
         )
         await db.session.commit()
@@ -743,7 +743,7 @@ async def finalise_playlist(
             run_resource_names.runner_base_url,
             db.session,
             RunStatus.finalised_by_client,
-            datetime.now(timezone.utc),
+            datetime.now(UTC),
             settings.test_execution_comms_timeout_seconds,
         )
     else:

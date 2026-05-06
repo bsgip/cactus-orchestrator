@@ -326,11 +326,11 @@ def generate_compliance_summary(
     elements.append(Paragraph("Compliance Summary", stylesheet.heading))
     elements.append(
         Paragraph(
-            (
+
                 "The following compliance classes defined under"
                 f" <b>CSIP-Aus {run_group.csip_aus_version}</b> have been attained by"
                 f" <b>{run_group.name}</b> on <i>{compliance_record.created_at}</i>."
-            )
+
         )
     )
     elements.append(stylesheet.spacer)

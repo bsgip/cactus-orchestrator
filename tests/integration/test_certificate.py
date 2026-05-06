@@ -1,9 +1,9 @@
 import io
 import zipfile
+from collections.abc import Generator
 from dataclasses import dataclass
 from http import HTTPStatus
 from itertools import product
-from typing import Generator
 from unittest.mock import Mock, patch
 
 import pytest

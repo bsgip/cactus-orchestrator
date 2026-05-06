@@ -197,10 +197,10 @@ async def admin_get_procedure_run_summaries_for_group(
     )
     if user_context == original_user_context:
         logger.error(
-            (
+
                 f"Failed to assume new user context ({run_group_id=},"
                 f" assumed_user_context={user_context}, {original_user_context=})"
-            )
+
         )
     _, run_group = await select_user_run_group_or_raise(db.session, user_context, run_group_id)
 
@@ -245,10 +245,10 @@ async def admin_get_groups_paginated(
     )
     if user_context == original_user_context:
         logger.error(
-            (
+
                 f"Failed to assume new user context ({run_group_id=},"
                 f" assumed_user_context={user_context}, {original_user_context=})"
-            )
+
         )
     user = await select_user_or_raise(db.session, user_context)
 
@@ -279,10 +279,10 @@ async def admin_get_run_artifact(
     )
     if user_context == original_user_context:
         logger.error(
-            (
+
                 f"Failed to assume new user context ({run_id=},"
                 f" assumed_user_context={user_context}, {original_user_context=})"
-            )
+
         )
     user = await select_user_or_raise(db.session, user_context)
 
@@ -302,10 +302,10 @@ async def admin_regenerate_report_and_get_run_artifact(
     )
     if user_context == original_user_context:
         logger.error(
-            (
+
                 f"Failed to assume new user context ({run_id=},"
                 f" assumed_user_context={user_context}, {original_user_context=})"
-            )
+
         )
     user = await select_user_or_raise(db.session, user_context)
 
@@ -345,10 +345,10 @@ async def admin_get_run_power_limit_chart(
     )
     if user_context == original_user_context:
         logger.error(
-            (
+
                 f"Failed to assume new user context ({run_id=},"
                 f" assumed_user_context={user_context}, {original_user_context=})"
-            )
+
         )
     user = await select_user_or_raise(db.session, user_context)
 
@@ -425,10 +425,10 @@ async def admin_get_run_status(
     )
     if user_context == original_user_context:
         logger.error(
-            (
+
                 f"Failed to assume new user context ({run_id=},"
                 f" assumed_user_context={user_context}, {original_user_context=})"
-            )
+
         )
     user = await select_user_or_raise(db.session, user_context)
 
@@ -476,10 +476,10 @@ async def admin_proceed_proxy(
     )
     if user_context == original_user_context:
         logger.error(
-            (
+
                 f"Failed to assume new user context ({run_id=},"
                 f" assumed_user_context={user_context}, {original_user_context=})"
-            )
+
         )
     user = await select_user_or_raise(db.session, user_context)
 
@@ -520,10 +520,10 @@ async def admin_get_individual_run(
     )
     if user_context == original_user_context:
         logger.error(
-            (
+
                 f"Failed to assume new user context ({run_id=},"
                 f" assumed_user_context={user_context}, {original_user_context=})"
-            )
+
         )
     user = await select_user_or_raise(db.session, user_context)
 

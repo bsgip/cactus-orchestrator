@@ -8,7 +8,7 @@ Run with:
     pytest tests/integration/test_power_limit_chart.py -v -s
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from http import HTTPStatus
 from pathlib import Path
@@ -25,7 +25,7 @@ from cactus_orchestrator.power_limit_chart import generate_power_limit_chart_htm
 
 OUTPUT_DIR = Path("/tmp/cactus_charts")
 
-T0 = datetime(2026, 2, 26, 9, 30, 0, tzinfo=timezone.utc)  # Test start time
+T0 = datetime(2026, 2, 26, 9, 30, 0, tzinfo=UTC)  # Test start time
 
 
 def _out(name: str) -> Path:

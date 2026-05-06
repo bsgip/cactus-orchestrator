@@ -1,9 +1,9 @@
 import asyncio
 import logging
 import re
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from functools import wraps
-from typing import Awaitable, Callable
 
 import shortuuid
 from envoy_schema.server.schema.uri import DeviceCapabilityUri
@@ -14,7 +14,7 @@ from cactus_orchestrator.settings import (
     RUNNER_SVC_URL,
     STATEFULSET_POD_NAME_FORMAT,
     TEST_EXECUTION_URL_FORMAT,
-    CactusOrchestratorException,
+    CactusOrchestratorError,
     get_current_settings,
 )
 
@@ -65,7 +65,7 @@ def async_k8s_api_retry[**P, T](
                     if attempt < retries - 1:
                         await asyncio.sleep(delay)
                     elif not fail_silently:
-                        raise CactusOrchestratorException(
+                        raise CactusOrchestratorError(
                             f"Failed action: {func.__name__}. Last API error: {exc.status} {exc.reason}"
                         )
                     else:

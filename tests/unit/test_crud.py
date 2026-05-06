@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
@@ -298,9 +298,9 @@ async def test_insert_user_unique_constraint(pg_base_config):
         (99, None, None, []),
         (1, True, None, [7, 4, 3, 2]),
         (1, False, None, [8, 1]),
-        (1, None, datetime(2024, 1, 1, 0, 1, tzinfo=timezone.utc), [8, 7, 4, 3, 2, 1]),
-        (1, None, datetime(2024, 1, 1, 0, 5, tzinfo=timezone.utc), [8, 7]),
-        (1, True, datetime(2024, 1, 1, 0, 3, 5, tzinfo=timezone.utc), [7, 4]),
+        (1, None, datetime(2024, 1, 1, 0, 1, tzinfo=UTC), [8, 7, 4, 3, 2, 1]),
+        (1, None, datetime(2024, 1, 1, 0, 5, tzinfo=UTC), [8, 7]),
+        (1, True, datetime(2024, 1, 1, 0, 3, 5, tzinfo=UTC), [7, 4]),
     ],
 )
 @pytest.mark.asyncio
@@ -358,7 +358,7 @@ async def test_select_nonfinalised_runs(pg_base_config):
 @pytest.mark.asyncio
 async def test_update_run_run_status(pg_base_config, run_id: int, run_status: RunStatus):
     """Test updating the finalisation status of a run."""
-    finalised_at = datetime(2025, 1, 1, tzinfo=timezone.utc)
+    finalised_at = datetime(2025, 1, 1, tzinfo=UTC)
 
     # Act
     async with generate_async_session(pg_base_config) as session:
@@ -395,10 +395,10 @@ async def test_select_user_run(pg_base_config, user_id: int, run_id: int, succes
 @pytest.mark.parametrize(
     "user_id, run_id, run_status, finalised_at, all_criteria_met",
     [
-        (1, 1, RunStatus.finalised_by_client, datetime(2025, 1, 1, tzinfo=timezone.utc), True),
-        (1, 1, RunStatus.finalised_by_timeout, datetime(2025, 2, 2, tzinfo=timezone.utc), False),
-        (1, 1, RunStatus.finalised_by_client, datetime(2025, 3, 3, tzinfo=timezone.utc), None),
-        (2, 6, RunStatus.finalised_by_client, datetime(2025, 1, 1, tzinfo=timezone.utc), True),
+        (1, 1, RunStatus.finalised_by_client, datetime(2025, 1, 1, tzinfo=UTC), True),
+        (1, 1, RunStatus.finalised_by_timeout, datetime(2025, 2, 2, tzinfo=UTC), False),
+        (1, 1, RunStatus.finalised_by_client, datetime(2025, 3, 3, tzinfo=UTC), None),
+        (2, 6, RunStatus.finalised_by_client, datetime(2025, 1, 1, tzinfo=UTC), True),
     ],
 )
 @pytest.mark.asyncio

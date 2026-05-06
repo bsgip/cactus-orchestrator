@@ -93,7 +93,7 @@ async def get_test_procedure_yaml(
             / f"{TestProcedureId(test_procedure_id).value}.yaml"
         )
         with resources.as_file(file_name) as yaml_file:
-            with open(yaml_file, "r") as fp:
+            with open(yaml_file) as fp:
                 text = fp.read()
     except Exception as exc:
         logger.error(f"Error reading test procedure {test_procedure_id}", exc_info=exc)

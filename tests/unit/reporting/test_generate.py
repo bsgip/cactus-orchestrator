@@ -1,5 +1,5 @@
 import io
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pandas as pd
 import pytest
@@ -31,9 +31,9 @@ def test_readings_dataframe_round_trip_preserves_datetime_columns():
     This test ensures that created_time and changed_time (both contain '_time') are detected and converted, and that
     the orchestrator side deserialisation method works.
     """
-    t_start = datetime(2026, 2, 1, 12, 0, 0, tzinfo=timezone.utc)
-    t_created = datetime(2026, 2, 1, 11, 0, 0, tzinfo=timezone.utc)
-    t_changed = datetime(2026, 2, 1, 11, 30, 0, tzinfo=timezone.utc)
+    t_start = datetime(2026, 2, 1, 12, 0, 0, tzinfo=UTC)
+    t_created = datetime(2026, 2, 1, 11, 0, 0, tzinfo=UTC)
+    t_changed = datetime(2026, 2, 1, 11, 30, 0, tzinfo=UTC)
 
     reading = generate_class_instance(
         SiteReading, time_period_start=t_start, created_time=t_created, changed_time=t_changed, value=100
@@ -96,7 +96,7 @@ async def test_generate_pdf_report_v1_with_readings():
     Uses the relative-timeline subtraction in generate_readings_timeline that previously failed with:
         TypeError: numpy.ndarray - Timestamp due to int64 datetime columns.
     """
-    t_start = datetime(2024, 3, 1, 12, 0, 0, tzinfo=timezone.utc)
+    t_start = datetime(2024, 3, 1, 12, 0, 0, tzinfo=UTC)
 
     reading = generate_class_instance(SiteReading, time_period_start=t_start, value=100)
     reading_type = generate_class_instance(SiteReadingType, power_of_ten_multiplier=0)

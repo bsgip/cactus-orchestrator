@@ -1,7 +1,7 @@
 import io
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from functools import partial
 from http import HTTPStatus
 
@@ -173,7 +173,7 @@ def first_page_template(
 ) -> None:
     """Template for the first/front/title page of the report"""
 
-    document_creation: str = datetime.now(timezone.utc).strftime("%d-%m-%Y")
+    document_creation: str = datetime.now(UTC).strftime("%d-%m-%Y")
 
     canvas.saveState()
 

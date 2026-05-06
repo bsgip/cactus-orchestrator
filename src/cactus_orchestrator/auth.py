@@ -1,10 +1,11 @@
 import base64
 import json
 import logging
-from datetime import datetime, timedelta, timezone
+from collections.abc import Callable, Coroutine
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from http import HTTPStatus
-from typing import Any, Callable, Coroutine, cast
+from typing import Any, cast
 
 import httpx
 import jwt
@@ -85,7 +86,7 @@ class JWTValidator:
             raise JWKError(f"Failed to fetch JWKS: {str(e)}")
 
         jwks = response.json().get("keys", [])
-        now = datetime.now(tz=timezone.utc)
+        now = datetime.now(tz=UTC)
         cache_expiry = now + self.cache_length
         new_cache: dict[str, ExpiringValue[str]] = {}
         for key in jwks:

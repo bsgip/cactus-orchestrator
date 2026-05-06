@@ -1,7 +1,8 @@
 from collections import defaultdict
+from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from typing import Any, Sequence
+from datetime import UTC, datetime
+from typing import Any
 
 from cactus_schema.orchestrator import AdminStatsResponse
 from cactus_test_definitions import CSIPAusVersion
@@ -142,7 +143,7 @@ async def select_run_group_counts_for_user(session: AsyncSession, run_group_ids:
 async def select_run_group_for_user(
     session: AsyncSession, user_id: int, run_group_id: int, with_cert: bool = False
 ) -> RunGroup | None:
-    stmt = select(RunGroup).where(((RunGroup.user_id == user_id) & (RunGroup.run_group_id == run_group_id))).limit(1)
+    stmt = select(RunGroup).where((RunGroup.user_id == user_id) & (RunGroup.run_group_id == run_group_id)).limit(1)
     if with_cert:
         stmt = stmt.options(undefer(RunGroup.certificate_pem))
 
@@ -340,7 +341,7 @@ async def select_group_runs_aggregated_by_procedure(
         )
         .group_by(Run.testprocedure_id)
     )
-    raw_counts = dict((r._tuple() for r in count_resp.all()))
+    raw_counts = dict(r._tuple() for r in count_resp.all())
 
     # Do the "distinct on" query for the latest runs by type
     stmt = (
@@ -420,7 +421,7 @@ async def insert_playlist_runs(
                      will be marked as skipped.
     """
     runs = []
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     for order, procedure_id in enumerate(test_procedure_ids):
         if order < start_index:
             # Runs before start_index are skipped

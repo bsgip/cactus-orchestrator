@@ -9,7 +9,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.types import CertificateIssuerPrivateKeyTypes
 from kubernetes import client
 
-from cactus_orchestrator.settings import CactusOrchestratorException, get_current_settings, v1_core_api
+from cactus_orchestrator.settings import CactusOrchestratorError, get_current_settings, v1_core_api
 
 
 class SecretString:
@@ -49,7 +49,7 @@ async def fetch_certificate_key_pair(
     secret: client.V1Secret = await asyncio.to_thread(res.get)
 
     if secret is None or secret.data is None:
-        raise CactusOrchestratorException(f"secret {secret_name} not found in namespace {namespace}")
+        raise CactusOrchestratorError(f"secret {secret_name} not found in namespace {namespace}")
 
     # Decode b64 encoded cert and key
     crt_bytes = base64.b64decode(secret.data["tls.crt"])
@@ -77,7 +77,7 @@ async def fetch_certificate_only(secret_name: str, namespace: str | None = None)
     secret: client.V1Secret = await asyncio.to_thread(res.get)
 
     if secret is None or secret.data is None:
-        raise CactusOrchestratorException(f"secret {secret_name} not found in namespace {namespace}")
+        raise CactusOrchestratorError(f"secret {secret_name} not found in namespace {namespace}")
 
     # Decode b64 encoded cert
     crt_bytes = base64.b64decode(secret.data["ca.crt"])

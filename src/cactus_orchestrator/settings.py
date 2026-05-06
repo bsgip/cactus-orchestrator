@@ -5,8 +5,8 @@ from kubernetes import client, config
 from pydantic import PostgresDsn
 from pydantic_settings import BaseSettings
 
-TLS_SERVER_SECRET_NAME_FORMAT = "tls-server-{domain}"  # nosec: Not a password
-TLS_CA_SECRET_NAME_FORMAT = "tls-ca-{ingress_name}"  # nosec: Not a password
+TLS_SERVER_SECRET_NAME_FORMAT = "tls-server-{domain}"  # noqa: S105
+TLS_CA_SECRET_NAME_FORMAT = "tls-ca-{ingress_name}"  # noqa: S105
 # NOTE: follwing two must be kept similar
 DEFAULT_INGRESS_PATH_FORMAT = "/{svc_name}/(.*)"
 TEST_EXECUTION_URL_FORMAT = "https://{fqdn}/{svc_name}"
@@ -31,7 +31,7 @@ def load_k8s_config() -> None:
         config.kube_config.load_kube_config()  # If running locally
 
 
-class CactusOrchestratorException(Exception): ...  # noqa: E701
+class CactusOrchestratorError(Exception): ...  # noqa: E701
 
 
 class CactusOrchestratorSettings(BaseSettings):
