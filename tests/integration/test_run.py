@@ -264,7 +264,7 @@ async def test_spawn_teststack_and_init_tolerant_to_status_errors(
 
     # Check init/status were called
     k8s_mock.init.assert_awaited_once()
-    k8s_mock.health.call_count == 3
+    assert k8s_mock.health.call_count == 3
 
     # Check the DB
     async with generate_async_session(pg_base_config) as session:

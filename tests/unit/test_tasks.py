@@ -116,7 +116,6 @@ async def test_teardown_idle_teststack(k8s_mock, pg_base_config, client):
             assert_nowish(r.finalised_at)
 
     # Check we cleared up k8's
-    Mock.call_count
     assert k8s_mock.last_interaction.call_count == len(expected_finalised_run_ids)
     assert k8s_mock.delete_service.call_count == len(expected_finalised_run_ids)
     assert k8s_mock.delete_statefulset.call_count == len(expected_finalised_run_ids)

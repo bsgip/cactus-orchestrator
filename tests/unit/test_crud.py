@@ -176,7 +176,7 @@ async def test_select_users(pg_base_config):
 async def test_select_user_from_run_group(pg_base_config, run_group_id, user_id):
     async with generate_async_session(pg_base_config) as session:
         user = await select_user_from_run_group(session=session, run_group_id=run_group_id)
-        assert user.user_id if user else None == user_id
+        assert (user.user_id if user else None) == user_id
 
 
 @pytest.mark.parametrize(
@@ -265,12 +265,12 @@ async def test_select_run_group_user(pg_base_config, with_cert: bool):
             assert run_group_2.certificate_pem is None
             assert run_group_3.certificate_pem == bytes([3])
         else:
-            with pytest.raises(Exception):
-                run_group_1.certificate_pem
-            with pytest.raises(Exception):
-                run_group_2.certificate_pem
-            with pytest.raises(Exception):
-                run_group_3.certificate_pem
+            with pytest.raises(Exception):  # noqa: B017
+                _ = run_group_1.certificate_pem
+            with pytest.raises(Exception):  # noqa: B017
+                _ = run_group_2.certificate_pem
+            with pytest.raises(Exception):  # noqa: B017
+                _ = run_group_3.certificate_pem
 
 
 @pytest.mark.asyncio

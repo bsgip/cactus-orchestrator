@@ -69,7 +69,7 @@ async def test_get_test_procedures_by_id(client, valid_jwt_user1, run_id, status
     # Assert
     assert res.status_code == status
     if status == 200:
-        res.headers["Content-Type"] == "application/yaml"
+        assert res.headers["Content-Type"] == "application/yaml"
         assert len(res.text) > 10
 
 

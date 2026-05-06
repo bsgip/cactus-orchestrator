@@ -24,11 +24,9 @@ async def patch_user_name(
     user = await select_user(db.session, user_context)
     if user is None:
         logger.error(
-
-                "Unable to update user."
-                f" User not found subject_id={user_context.subject_id}"
-                f" issuer_id={user_context.issuer_id}."
-
+            "Unable to update user."
+            f" User not found subject_id={user_context.subject_id}"
+            f" issuer_id={user_context.issuer_id}."
         )
         raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail=f"User '{user_context.subject_id}' not found.")
 

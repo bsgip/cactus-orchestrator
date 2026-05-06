@@ -981,7 +981,7 @@ def _add_completion_markers(
     to_rel: Callable[[datetime], float],
 ) -> None:
     _COMPLETION_COLOR = "#888"
-    for (name, t), lane in zip(completions, lanes):
+    for (name, t), lane in zip(completions, lanes, strict=False):
         rel = to_rel(t)
         if rel < 0 or rel > duration_secs:
             continue

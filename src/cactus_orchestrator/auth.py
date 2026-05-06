@@ -184,7 +184,7 @@ class JWTValidator:
                 permissions = [AuthPerm(p) for p in validated.permissions]
             except Exception as exc:  # It's difficult to know what exception jwt.decode will raise so use catch-all
                 logger.debug(
-                    f"jwks_url='{self._settings.jwks_url}' issuer='{self._settings.issuer}' audience='{self._settings.audience}'"  # noqa: 501
+                    f"jwks_url='{self._settings.jwks_url}' issuer='{self._settings.issuer}' audience='{self._settings.audience}'"  # noqa: E501
                 )
                 logger.error(
                     f"Failure validating JWT claims. required_permissions={required_permissions}.",
