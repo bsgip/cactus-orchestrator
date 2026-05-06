@@ -40,9 +40,9 @@ class ConditionalSpacer(Spacer):
     the requested height of the spacer.
     """
 
-    def wrap(self, aW: float, aH: float) -> tuple[float, float]:
-        height = min(self.height, aH - 1e-8)
-        return (aW, height)
+    def wrap(self, a_w: float, a_h: float) -> tuple[float, float]:
+        height = min(self.height, a_h - 1e-8)
+        return (a_w, height)
 
 
 PAGE_WIDTH, PAGE_HEIGHT = A4
@@ -225,8 +225,8 @@ def later_pages_template(canvas: Canvas, doc: BaseDocTemplate, compliance_id: st
 
 
 def fig_to_image(fig: go.Figure, content_width: float) -> Image:
-    UPSCALE_FACTOR = 4
-    img_bytes = fig.to_image(format="png", scale=UPSCALE_FACTOR)  # Scale up figure so it's high enough resolution
+    upscale_factor = 4
+    img_bytes = fig.to_image(format="png", scale=upscale_factor)  # Scale up figure so it's high enough resolution
     pil_image = PilImage.open(io.BytesIO(img_bytes))
     buffer = io.BytesIO(img_bytes)
     scale_factor = pil_image.width / content_width  # rescale image to width of page content

@@ -71,9 +71,9 @@ class ConditionalSpacer(Spacer):
     the requested height of the spacer.
     """
 
-    def wrap(self, aW, aH):  # type: ignore
-        height = min(self.height, aH - 1e-8)
-        return (aW, height)
+    def wrap(self, a_w: float, a_h: float) -> tuple[float, float]:  # type: ignore[override]
+        height = min(self.height, a_h - 1e-8)
+        return (a_w, height)
 
 
 PAGE_WIDTH, PAGE_HEIGHT = A4
@@ -252,8 +252,8 @@ def later_pages_template(canvas: Canvas, doc: BaseDocTemplate, test_procedure_na
 
 
 def fig_to_image(fig: go.Figure, content_width: float) -> Image:
-    UPSCALE_FACTOR = 4
-    img_bytes = fig.to_image(format="png", scale=UPSCALE_FACTOR)  # Scale up figure so it's high enough resolution
+    upscale_factor = 4
+    img_bytes = fig.to_image(format="png", scale=upscale_factor)  # Scale up figure so it's high enough resolution
     pil_image = PilImage.open(io.BytesIO(img_bytes))
     buffer = io.BytesIO(img_bytes)
     scale_factor = pil_image.width / content_width  # rescale image to width of page content
@@ -1293,7 +1293,7 @@ def truncate_mrid(mrid: str) -> str:
     return mrid[:7] + "..." if len(mrid) > 7 else mrid
 
 
-def validate_cell(reading_type: ReadingType, col_idx: int, row_num: int) -> str | None:
+def validate_cell(reading_type: ReadingType, col_idx: int, row_num: int) -> str | None:  # noqa: C901
     """
     Validates a cell value and returns an error message if invalid.
     These validation steps come from SA TS 5573:2025, Table 8.1

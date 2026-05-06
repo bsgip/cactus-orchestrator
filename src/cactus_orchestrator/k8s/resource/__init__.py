@@ -67,7 +67,7 @@ def async_k8s_api_retry[**P, T](
                     elif not fail_silently:
                         raise CactusOrchestratorError(
                             f"Failed action: {func.__name__}. Last API error: {exc.status} {exc.reason}"
-                        )
+                        ) from exc
                     else:
                         logger.info(f"Call to {func.__name__} failing silently")
                         return None

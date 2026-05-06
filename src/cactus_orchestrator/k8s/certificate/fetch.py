@@ -13,7 +13,7 @@ from cactus_orchestrator.settings import CactusOrchestratorError, get_current_se
 
 
 class SecretString:
-    def __init__(self, secret: str):
+    def __init__(self, secret: str) -> None:
         self._secret = secret
 
     def __str__(self) -> str:

@@ -50,7 +50,7 @@ def create_or_update_k8s_tls_secret(
         if exc.status == 409:  # Conflict - secret already exists, so we update it
             v1_core_api.replace_namespaced_secret(secret_name, namespace, secret)
         else:
-            raise RuntimeError(f"Failed to create/update TLS secret: {exc}")
+            raise RuntimeError(f"Failed to create/update TLS secret: {exc}") from exc
 
 
 def enable_mtls_on_ingress(*, ingress_name: str, ca_secret_name: str, namespace: str) -> None:

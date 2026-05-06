@@ -130,7 +130,7 @@ async def regenerate_pdf_report(file_data: bytes, raw_reporting_data: str, versi
     except Exception as exc:
         msg = "Failed to convert json to ReportingData instance."
         logger.error(msg, exc_info=exc)
-        raise ValueError(f"Artifact regeneration error: {msg}")
+        raise ValueError(f"Artifact regeneration error: {msg}") from exc
 
     pdf_generation_error: str | None = None
     pdf_data: bytes | None = None
@@ -154,14 +154,14 @@ async def regenerate_pdf_report(file_data: bytes, raw_reporting_data: str, versi
 
     if pdf_data is not None:
         try:
-            CACTUS_TEST_PROCEDURE_REPORT_PREFIX = "CactusTestProcedureReport"
+            cactus_test_procedure_report_prefix = "CactusTestProcedureReport"
             updated_zip_data = await replace_pdf_in_zip_data(
-                pdf_data=pdf_data, zip_data=file_data, pdf_filename_prefix=CACTUS_TEST_PROCEDURE_REPORT_PREFIX
+                pdf_data=pdf_data, zip_data=file_data, pdf_filename_prefix=cactus_test_procedure_report_prefix
             )
         except Exception as exc:
             msg = "Failed to replace pdf in archive."
             logger.error(msg, exc_info=exc)
-            raise ValueError(f"Artifact regeneration error: {msg}")
+            raise ValueError(f"Artifact regeneration error: {msg}") from exc
 
     return updated_zip_data
 

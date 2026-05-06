@@ -5,7 +5,7 @@ from collections.abc import Callable, Coroutine
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from http import HTTPStatus
-from typing import Any, cast
+from typing import cast
 
 import httpx
 import jwt
@@ -71,7 +71,7 @@ class JWTValidator:
         the depends/auth to support proper dependency injection to remove this cruft"""
         self._settings = JWTAuthSettings()  # type: ignore  [call-arg]
 
-    async def _update_rsa_jwk_cache(self, _: Any) -> dict[str, ExpiringValue[str]]:
+    async def _update_rsa_jwk_cache(self, _: object) -> dict[str, ExpiringValue[str]]:
         """Fetchs a single JWK (RSA public key only) from the auth server.
 
         Returns:
@@ -83,7 +83,7 @@ class JWTValidator:
                 response.raise_for_status()
         except httpx.HTTPError as e:
             logger.error(f"Failed to update JWK cache. jwks_url={self._settings.jwks_url}", exc_info=e)
-            raise JWKError(f"Failed to fetch JWKS: {str(e)}")
+            raise JWKError(f"Failed to fetch JWKS: {str(e)}") from e
 
         jwks = response.json().get("keys", [])
         now = datetime.now(tz=UTC)
@@ -174,7 +174,7 @@ class JWTValidator:
         """Wrap this method in Depends e.g. Depends(jwt_validator.verify_jwt_and_check_perms({"perm1"}))"""
 
         async def _verify_and_check_permissions(
-            auth: HTTPAuthorizationCredentials = Security(security),
+            auth: HTTPAuthorizationCredentials = Security(security),  # noqa: B008
         ) -> UserContext:
             token = auth.credentials
 
@@ -190,7 +190,7 @@ class JWTValidator:
                     f"Failure validating JWT claims. required_permissions={required_permissions}.",
                     exc_info=exc,
                 )
-                raise HTTPException(status_code=HTTPStatus.UNAUTHORIZED, detail="Invalid token")
+                raise HTTPException(status_code=HTTPStatus.UNAUTHORIZED, detail="Invalid token") from exc
             return UserContext(subject_id=validated.sub, issuer_id=validated.iss, permissions=permissions)
 
         return _verify_and_check_permissions

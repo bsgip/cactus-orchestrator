@@ -178,7 +178,7 @@ async def _get_subscribed_group_ids(session: AsyncSession) -> set[int]:
 # ─── Control-interval and receipt-marker helpers ──────────────────────────────
 
 
-def _compute_active_control_intervals(
+def _compute_active_control_intervals(  # noqa: C901
     event_times: list[datetime],
     sorted_groups: list[SiteControlGroup],
     enriched: list[_EnrichedControl],
@@ -194,11 +194,11 @@ def _compute_active_control_intervals(
     segments: list[tuple[tuple | None, str, datetime]] = []
     last_key: tuple | None = ()  # sentinel — not a valid key
 
-    for T in event_times:
+    for t in event_times:
         # Find highest-priority active DOE across all groups
         winning_doe: _EnrichedControl | None = None
         for group in sorted_groups:
-            ctrl = _find_active_control_at(T, group.site_control_group_id, enriched)
+            ctrl = _find_active_control_at(t, group.site_control_group_id, enriched)
             if ctrl is not None:
                 winning_doe = ctrl
                 break
@@ -207,7 +207,7 @@ def _compute_active_control_intervals(
         winning_default_gid: int | None = None
         if winning_doe is None:
             for group in sorted_groups:
-                if _find_active_default_at(T, group.site_control_group_id, defaults_by_group) is not None:
+                if _find_active_default_at(t, group.site_control_group_id, defaults_by_group) is not None:
                     winning_default_gid = group.site_control_group_id
                     break
 
@@ -223,7 +223,7 @@ def _compute_active_control_intervals(
             label = ""
 
         if key != last_key:
-            segments.append((key, label, T))
+            segments.append((key, label, t))
             last_key = key
 
     intervals: list[tuple[str, datetime, datetime]] = []
@@ -447,16 +447,16 @@ def _compute_disconnect_intervals(
 
 
 def _find_active_control_at(
-    T: datetime,
+    t: datetime,
     group_id: int,
     enriched: list[_EnrichedControl],
 ) -> _EnrichedControl | None:
-    """Find the highest-priority active enriched control for the given group at time T."""
+    """Find the highest-priority active enriched control for the given group at time t."""
     best: _EnrichedControl | None = None
     for ctrl in enriched:
         if ctrl.site_control_group_id != group_id:
             continue
-        if not (ctrl.effective_start <= T < ctrl.effective_end):
+        if not (ctrl.effective_start <= t < ctrl.effective_end):
             continue
         if best is None:
             best = ctrl
@@ -469,23 +469,23 @@ def _find_active_control_at(
 
 
 def _find_active_default_at(
-    T: datetime,
+    t: datetime,
     group_id: int,
     defaults_by_group: dict[int, list[_DefaultLike]],
 ) -> _DefaultLike | None:
-    """Find the active default control for the given group at time T."""
+    """Find the active default control for the given group at time t."""
     for d in defaults_by_group.get(group_id, []):
         window = _default_active_window(d)
         if window is None:
             continue
         start, end = window
-        if start <= T < end:
+        if start <= t < end:
             return d
     return None
 
 
 def _resolve_type_limit(
-    T: datetime,
+    t: datetime,
     sorted_groups: list[SiteControlGroup],
     enriched: list[_EnrichedControl],
     defaults_by_group: dict[int, list[_DefaultLike]],
@@ -503,14 +503,14 @@ def _resolve_type_limit(
     Keeping the two phases separate means an active control that does not set a
     particular type does not shadow a default that does."""
     for group in sorted_groups:
-        ctrl = _find_active_control_at(T, group.site_control_group_id, enriched)
+        ctrl = _find_active_control_at(t, group.site_control_group_id, enriched)
         if ctrl is not None:
             val = get_ctrl_val(ctrl)
             if val is not None:
                 return val, ctrl
 
     for group in sorted_groups:
-        default = _find_active_default_at(T, group.site_control_group_id, defaults_by_group)
+        default = _find_active_default_at(t, group.site_control_group_id, defaults_by_group)
         if default is not None:
             val = get_default_val(default)
             if val is not None:
