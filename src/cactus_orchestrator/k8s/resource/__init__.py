@@ -47,16 +47,21 @@ class RunResourceNames:
 
 
 def async_k8s_api_retry[**P, T](
-    retries: int = 3, delay: int = 2, ignore_status_code: int | None = None, fail_silently: bool = False
+    retries: int = 3,
+    delay: int = 2,
+    ignore_status_code: int | None = None,
+    fail_silently: bool = False,
 ) -> Callable[[Callable[P, Awaitable[T | None]]], Callable[P, Awaitable[T | None]]]:
     """Used to wrap any of the async k8s api requests with retry functionality."""
 
-    def decorator(func: Callable[P, Awaitable[T | None]]) -> Callable[P, Awaitable[T | None]]:
+    def decorator(
+        func: Callable[P, Awaitable[T | None]],
+    ) -> Callable[P, Awaitable[T | None]]:
         @wraps(func)
         async def async_retry(*args: P.args, **kwargs: P.kwargs) -> T | None:
             for attempt in range(retries):
                 try:
-                    return await func(*args, **kwargs)
+                    return await func(*args, **kwargs)  # ty: ignore[invalid-return-type,invalid-argument-type]
                 except ApiException as exc:
                     if ignore_status_code is not None:
                         if exc.status == ignore_status_code:
@@ -66,16 +71,18 @@ def async_k8s_api_retry[**P, T](
                         await asyncio.sleep(delay)
                     elif not fail_silently:
                         raise CactusOrchestratorError(
-                            f"Failed action: {func.__name__}. Last API error: {exc.status} {exc.reason}"
+                            f"Failed action: {func.__name__}. Last API error: {exc.status} {exc.reason}"  # ty: ignore[unresolved-attribute]
                         ) from exc
                     else:
-                        logger.info(f"Call to {func.__name__} failing silently")
+                        logger.info(
+                            f"Call to {func.__name__} failing silently"  # ty: ignore[unresolved-attribute]
+                        )
                         return None
             return None
 
-        return async_retry
+        return async_retry  # ty: ignore[invalid-return-type]
 
-    return decorator
+    return decorator  # ty: ignore[invalid-return-type]
 
 
 def get_template_names(csip_aus_version: str) -> TemplateResourceNames:
@@ -100,7 +107,9 @@ def get_resource_names(uuid: str) -> RunResourceNames:
     pod_name = STATEFULSET_POD_NAME_FORMAT.format(statefulset_name=statefulset_name)
 
     runner_base_url = RUNNER_SVC_URL.format(
-        svc_name=svc_name, namespace=settings.test_execution_namespace, svc_port=settings.teststack_service_port
+        svc_name=svc_name,
+        namespace=settings.test_execution_namespace,
+        svc_port=settings.teststack_service_port,
     )
     envoy_base_url = TEST_EXECUTION_URL_FORMAT.format(fqdn=settings.test_execution_fqdn, svc_name=svc_name)
 

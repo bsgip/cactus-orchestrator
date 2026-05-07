@@ -11,9 +11,7 @@ TLS_CA_SECRET_NAME_FORMAT = "tls-ca-{ingress_name}"  # noqa: S105
 DEFAULT_INGRESS_PATH_FORMAT = "/{svc_name}/(.*)"
 TEST_EXECUTION_URL_FORMAT = "https://{fqdn}/{svc_name}"
 
-STATEFULSET_POD_NAME_FORMAT = (
-    "{statefulset_name}-0"  # TODO: this is the k8s naming scheme of a statefulsets pod, how to better handle?
-)
+STATEFULSET_POD_NAME_FORMAT = "{statefulset_name}-0"  # TODO: k8s naming scheme of a statefulsets pod, how to do better?
 RUNNER_SVC_URL = "http://{svc_name}.{namespace}.svc.cluster.local:{svc_port}"
 
 
@@ -68,7 +66,7 @@ class CactusOrchestratorSettings(BaseSettings):
     # teardown
     idleteardowntask_enable: bool = True
     idleteardowntask_max_lifetime_seconds: int = 3600 * 24 * 4  # 4 days
-    idleteardowntask_idle_timeout_seconds: int = 7200  # 2 hour (we have some tests with a 1 hour poll/post rate)
+    idleteardowntask_idle_timeout_seconds: int = 7200  # 2 hour (some tests have 1 hour poll/post rate)
     idleteardowntask_repeat_every_seconds: int = 120
 
     # readiness
@@ -94,7 +92,7 @@ _main_settings: CactusOrchestratorSettings | None = None
 def get_current_settings() -> CactusOrchestratorSettings:
     global _main_settings
     if not _main_settings:
-        _main_settings = CactusOrchestratorSettings()  # type: ignore  [call-arg]
+        _main_settings = CactusOrchestratorSettings()  # ty: ignore[missing-argument]
         return _main_settings
     return _main_settings
 

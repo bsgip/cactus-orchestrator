@@ -63,13 +63,13 @@ class JWTValidator:
 
     def __init__(self, cache_length: timedelta) -> None:
         self.cache_length = cache_length  # How long should the
-        self._settings = JWTAuthSettings()  # type: ignore  [call-arg]
+        self._settings = JWTAuthSettings()  # ty: ignore[missing-argument]
         self._rsa_jwk_cache = AsyncCache(self._update_rsa_jwk_cache, force_update_delay_seconds=10)
 
     def _reload_settings(self) -> None:
         """Not threadsafe / designed for normal - designed for tests to reload the settings. We will need to rework
         the depends/auth to support proper dependency injection to remove this cruft"""
-        self._settings = JWTAuthSettings()  # type: ignore  [call-arg]
+        self._settings = JWTAuthSettings()  # ty: ignore[missing-argument]
 
     async def _update_rsa_jwk_cache(self, _: object) -> dict[str, ExpiringValue[str]]:
         """Fetchs a single JWK (RSA public key only) from the auth server.

@@ -28,11 +28,7 @@ def extract_envoy_dumps(zip_data: bytes) -> tuple[str, str]:
     with zipfile.ZipFile(io.BytesIO(zip_data)) as zf:
         names = zf.namelist()
         schema_name = next(
-            (
-                n
-                for n in names
-                if n.startswith(_ENVOY_SCHEMA_DUMP_PREFIX) and n.endswith(_DUMP_SUFFIX)
-            ),
+            (n for n in names if n.startswith(_ENVOY_SCHEMA_DUMP_PREFIX) and n.endswith(_DUMP_SUFFIX)),
             None,
         )
         data_name = next(
@@ -52,9 +48,7 @@ def extract_envoy_dumps(zip_data: bytes) -> tuple[str, str]:
         return zf.read(schema_name).decode(), zf.read(data_name).decode()
 
 
-async def generate_power_limit_chart(
-    run_artifact: RunArtifact, video_start_seconds: float | None = None
-) -> str | None:
+async def generate_power_limit_chart(run_artifact: RunArtifact, video_start_seconds: float | None = None) -> str | None:
     """Generate a standalone power limit HTML chart from the dumps stored in a RunArtifact.
 
     Spins up an ephemeral local postgres process (via testing.postgresql), restores the
@@ -69,19 +63,13 @@ async def generate_power_limit_chart(
     schema_sql, data_sql = extract_envoy_dumps(run_artifact.file_data)
 
     try:
-        reporting_data = ReportingData.from_json(
-            run_artifact.version, run_artifact.reporting_data
-        )
+        reporting_data = ReportingData.from_json(run_artifact.version, run_artifact.reporting_data)
     except Exception as exc:
         raise ValueError(f"Failed to deserialize reporting data: {exc}") from exc
 
-    test_start: datetime | None = (
-        reporting_data.runner_state.active_test_procedure.started_at
-    )
+    test_start: datetime | None = reporting_data.runner_state.active_test_procedure.started_at
     if test_start is None:
-        logger.warning(
-            "power_limit_chart: test procedure has no started_at - skipping chart"
-        )
+        logger.warning("power_limit_chart: test procedure has no started_at - skipping chart")
         return None
     test_end: datetime = reporting_data.created_at
     request_history = reporting_data.runner_state.request_history
@@ -90,9 +78,7 @@ async def generate_power_limit_chart(
     # This allows the chart to label each control by its YAML tag rather than inferring
     # a step name from request timestamps (which is fragile when controls are created
     # during the same request that polls the DERC list).
-    tag_by_alias = (
-        reporting_data.runner_state.active_test_procedure.resource_annotations.der_control_ids_by_alias
-    )
+    tag_by_alias = reporting_data.runner_state.active_test_procedure.resource_annotations.der_control_ids_by_alias
     doe_tags: dict[int, str] = {doe_id: tag for tag, doe_id in tag_by_alias.items()}
 
     step_completions: list[tuple[str, datetime]] = [
@@ -102,9 +88,7 @@ async def generate_power_limit_chart(
     ]
 
     try:
-        pg: testing.postgresql.Postgresql = await asyncio.to_thread(
-            testing.postgresql.Postgresql
-        )
+        pg: testing.postgresql.Postgresql = await asyncio.to_thread(testing.postgresql.Postgresql)
     except RuntimeError as exc:
         raise ValueError(f"Postgres unavailable (is initdb installed?): {exc}") from exc
     try:
@@ -121,20 +105,14 @@ async def generate_power_limit_chart(
             )
             if proc.returncode != 0:
                 stderr_str = (
-                    proc.stderr.decode(errors="replace")
-                    if isinstance(proc.stderr, bytes)
-                    else str(proc.stderr)
+                    proc.stderr.decode(errors="replace") if isinstance(proc.stderr, bytes) else str(proc.stderr)
                 )
-                logger.error(
-                    "psql restore failed (exit %d): %s", proc.returncode, stderr_str
-                )
+                logger.error("psql restore failed (exit %d): %s", proc.returncode, stderr_str)
                 proc.check_returncode()
 
         engine = create_async_engine(async_pg_url)
         try:
-            session_factory = async_sessionmaker(
-                engine, class_=AsyncSession, expire_on_commit=False
-            )
+            session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
             async with session_factory() as session:
                 return await generate_power_limit_chart_html(
                     session,

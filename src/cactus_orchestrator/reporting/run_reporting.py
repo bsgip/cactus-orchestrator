@@ -4,11 +4,12 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from functools import partial
 from http import HTTPStatus
+from typing import cast
 
 import pandas as pd
 import PIL.Image as PilImage
-import plotly.express as px  # type: ignore
-import plotly.graph_objects as go  # type: ignore
+import plotly.express as px
+import plotly.graph_objects as go
 from cactus_runner import __version__ as cactus_runner_version
 from cactus_runner.app.envoy_common import ReadingLocation
 from cactus_runner.app.timeline import Timeline, duration_to_label
@@ -23,7 +24,12 @@ from cactus_runner.models import (
     SiteDERSetting,
     SiteDERStatus,
 )
-from cactus_schema.runner import ClientInteraction, ClientInteractionType, RequestEntry, StepStatus
+from cactus_schema.runner import (
+    ClientInteraction,
+    ClientInteractionType,
+    RequestEntry,
+    StepStatus,
+)
 from cactus_test_definitions import CSIPAusVersion
 from cactus_test_definitions import __version__ as cactus_test_definitions_version
 from envoy.server.model import DynamicOperatingEnvelope
@@ -59,7 +65,11 @@ from cactus_orchestrator import __version__ as cactus_orchestrator_version
 
 logger = logging.getLogger(__name__)
 
-WITNESS_TEST_CLASSES: list[str] = ["DER-A", "DER-G", "DER-L"]  # Classes from section 14 of sa-ts-5573-2025
+WITNESS_TEST_CLASSES: list[str] = [
+    "DER-A",
+    "DER-G",
+    "DER-L",
+]  # Classes from section 14 of sa-ts-5573-2025
 
 CHART_MARGINS = dict(l=80, r=20, t=40, b=80)
 
@@ -71,9 +81,9 @@ class ConditionalSpacer(Spacer):
     the requested height of the spacer.
     """
 
-    def wrap(self, a_w: float, a_h: float) -> tuple[float, float]:  # type: ignore[override]
-        height = min(self.height, a_h - 1e-8)
-        return (a_w, height)
+    def wrap(self, aW: float, aH: float) -> tuple[float, float]:  # noqa: N803
+        height = min(self.height, aH - 1e-8)
+        return (aW, height)
 
 
 PAGE_WIDTH, PAGE_HEIGHT = A4
@@ -157,8 +167,8 @@ def get_stylesheet() -> StyleSheet:
             leading=22,
             spaceAfter=3,
         ),
-        heading=sample_style_sheet.get("Heading2"),  # type: ignore
-        subheading=sample_style_sheet.get("Heading3"),  # type: ignore
+        heading=cast(ParagraphStyle, sample_style_sheet["Heading2"]),
+        subheading=cast(ParagraphStyle, sample_style_sheet["Heading3"]),
         table=DEFAULT_TABLE_STYLE,
         table_width=MAX_CONTENT_WIDTH,
         spacer=DEFAULT_SPACER,
@@ -169,7 +179,11 @@ def get_stylesheet() -> StyleSheet:
 
 
 def first_page_template(
-    canvas: Canvas, doc: BaseDocTemplate, test_procedure_name: str, test_run_id: str, csip_aus_version: CSIPAusVersion
+    canvas: Canvas,
+    doc: BaseDocTemplate,
+    test_procedure_name: str,
+    test_run_id: str,
+    csip_aus_version: CSIPAusVersion,
 ) -> None:
     """Template for the first/front/title page of the report"""
 
@@ -212,7 +226,9 @@ def first_page_template(
     canvas.setFillColor(TEXT_COLOR)
     canvas.setFont("Helvetica", 6)
     canvas.drawRightString(
-        PAGE_WIDTH - MARGIN, PAGE_HEIGHT - BANNER_HEIGHT - 0.2 * inch, f"Report created on {document_creation}"
+        PAGE_WIDTH - MARGIN,
+        PAGE_HEIGHT - BANNER_HEIGHT - 0.2 * inch,
+        f"Report created on {document_creation}",
     )
     canvas.drawRightString(
         PAGE_WIDTH - MARGIN,
@@ -220,7 +236,9 @@ def first_page_template(
         f"Cactus Test Definitions v{cactus_test_definitions_version}",
     )
     canvas.drawRightString(
-        PAGE_WIDTH - MARGIN, PAGE_HEIGHT - BANNER_HEIGHT - 0.5 * inch, f"Cactus Runner v{cactus_runner_version}"
+        PAGE_WIDTH - MARGIN,
+        PAGE_HEIGHT - BANNER_HEIGHT - 0.5 * inch,
+        f"Cactus Runner v{cactus_runner_version}",
     )
     canvas.drawRightString(
         PAGE_WIDTH - MARGIN,
@@ -228,7 +246,9 @@ def first_page_template(
         f"Cactus Orchestrator {cactus_orchestrator_version}",
     )
     canvas.drawRightString(
-        PAGE_WIDTH - MARGIN, PAGE_HEIGHT - BANNER_HEIGHT - 0.80 * inch, f"CSIP Aus {csip_aus_version}"
+        PAGE_WIDTH - MARGIN,
+        PAGE_HEIGHT - BANNER_HEIGHT - 0.80 * inch,
+        f"CSIP Aus {csip_aus_version}",
     )
 
 
@@ -257,7 +277,11 @@ def fig_to_image(fig: go.Figure, content_width: float) -> Image:
     pil_image = PilImage.open(io.BytesIO(img_bytes))
     buffer = io.BytesIO(img_bytes)
     scale_factor = pil_image.width / content_width  # rescale image to width of page content
-    return Image(buffer, width=pil_image.width / scale_factor, height=pil_image.height / scale_factor)
+    return Image(
+        buffer,
+        width=pil_image.width / scale_factor,
+        height=pil_image.height / scale_factor,
+    )
 
 
 def generate_overview_section(
@@ -378,7 +402,10 @@ def generate_criteria_summary_chart(num_passed: int, num_failed: int, requires_w
 
     # Set the colors of the segments
     if num_failed == 0 and requires_witness_testing:
-        colors = [rl_to_plotly_color(GENTLE_WARNING_COLOR), rl_to_plotly_color(FAIL_COLOR)]
+        colors = [
+            rl_to_plotly_color(GENTLE_WARNING_COLOR),
+            rl_to_plotly_color(FAIL_COLOR),
+        ]
     else:
         colors = [rl_to_plotly_color(PASS_COLOR), rl_to_plotly_color(FAIL_COLOR)]
 
@@ -395,7 +422,12 @@ def generate_criteria_summary_table(check_results: dict[str, CheckResult], style
             ("ALIGN", (0, 0), (-1, -1), "LEFT"),
             ("TOPPADDING", (0, 0), (-1, -1), 8),
             ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
-            ("ROWBACKGROUNDS", (0, 0), (-1, -1), [TABLE_ROW_COLOR, TABLE_ALT_ROW_COLOR]),
+            (
+                "ROWBACKGROUNDS",
+                (0, 0),
+                (-1, -1),
+                [TABLE_ROW_COLOR, TABLE_ALT_ROW_COLOR],
+            ),
             ("TEXTCOLOR", (0, 0), (-1, 0), TABLE_HEADER_TEXT_COLOR),
             ("LINEBELOW", (0, 0), (-1, 0), 1, TABLE_LINE_COLOR),
             ("LINEBELOW", (0, -1), (-1, -1), 1, TABLE_LINE_COLOR),
@@ -477,7 +509,9 @@ def generate_set_max_w_warning_banner(stylesheet: StyleSheet) -> list[Flowable]:
 
 
 def generate_criteria_section(
-    check_results: dict[str, CheckResult], requires_witness_testing: bool, stylesheet: StyleSheet
+    check_results: dict[str, CheckResult],
+    requires_witness_testing: bool,
+    stylesheet: StyleSheet,
 ) -> list[Flowable]:
     check_values = [check_result.passed for check_result in check_results.values()]
     num_passed = sum(check_values)
@@ -486,7 +520,9 @@ def generate_criteria_section(
     elements: list[Flowable] = []
     elements.append(Paragraph("Criteria", stylesheet.heading))
     chart = generate_criteria_summary_chart(
-        num_passed=num_passed, num_failed=num_failed, requires_witness_testing=requires_witness_testing
+        num_passed=num_passed,
+        num_failed=num_failed,
+        requires_witness_testing=requires_witness_testing,
     )
     table = generate_criteria_summary_table(check_results=check_results, stylesheet=stylesheet)
     elements.append(BalancedColumns([chart, table]))
@@ -537,7 +573,9 @@ def get_requests_with_errors(runner_state: RunnerState) -> dict[int, RequestEntr
     }
 
 
-def get_requests_with_validation_errors(runner_state: RunnerState) -> dict[int, RequestEntry]:
+def get_requests_with_validation_errors(
+    runner_state: RunnerState,
+) -> dict[int, RequestEntry]:
     return {
         index: request_entry
         for index, request_entry in enumerate(runner_state.request_history)
@@ -816,7 +854,10 @@ def generate_device_overview_table(
     device_data = [
         ["NMI", site.nmi if site.nmi else "Unspecified"],
         ["LFDI", site.lfdi],
-        ["Device Category", device_category_to_string(device_category=DeviceCategory(site.device_category))],
+        [
+            "Device Category",
+            device_category_to_string(device_category=DeviceCategory(site.device_category)),
+        ],
         ["Site Generation", generation_method],
     ]
     column_widths = [int(fraction * stylesheet.table_width) for fraction in [0.2, 0.5]]
@@ -865,7 +906,8 @@ def generate_site_section(site: Site, stylesheet: StyleSheet) -> list[Flowable]:
         if site_der.site_der_availability is not None:
             elements.extend(
                 generate_site_der_availability_table(
-                    site_der_availability=site_der.site_der_availability, stylesheet=stylesheet
+                    site_der_availability=site_der.site_der_availability,
+                    stylesheet=stylesheet,
                 )
             )
             elements.append(stylesheet.spacer)
@@ -1134,7 +1176,9 @@ def generate_timeline_checklist(timeline: Timeline, runner_state: RunnerState) -
     )
     fig.update_yaxes(title="", showticklabels=False, showgrid=False, range=[0, 1])
     fig.update_layout(
-        height=150, legend=dict(orientation="h", yanchor="top", y=-0.2, xanchor="center", x=0.5), margin=dict(t=0, b=80)
+        height=150,
+        legend=dict(orientation="h", yanchor="top", y=-0.2, xanchor="center", x=0.5),
+        margin=dict(t=0, b=80),
     )
 
     return fig_to_image(fig=fig, content_width=MAX_CONTENT_WIDTH)
@@ -1152,7 +1196,12 @@ def generate_step_completion_table(runner_state: RunnerState, stylesheet: StyleS
             ("ALIGN", (0, 0), (-1, -1), "LEFT"),
             ("TOPPADDING", (0, 0), (-1, -1), 8),
             ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
-            ("ROWBACKGROUNDS", (0, 0), (-1, -1), [TABLE_ROW_COLOR, TABLE_ALT_ROW_COLOR]),
+            (
+                "ROWBACKGROUNDS",
+                (0, 0),
+                (-1, -1),
+                [TABLE_ROW_COLOR, TABLE_ALT_ROW_COLOR],
+            ),
             ("TEXTCOLOR", (0, 0), (-1, 0), TABLE_HEADER_TEXT_COLOR),
             ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
             ("LINEBELOW", (0, 0), (-1, 0), 1, TABLE_LINE_COLOR),
@@ -1197,7 +1246,10 @@ def generate_step_completion_table(runner_state: RunnerState, stylesheet: StyleS
 
 
 def generate_timeline_section(
-    timeline: Timeline | None, runner_state: RunnerState, sites: list[Site], stylesheet: StyleSheet
+    timeline: Timeline | None,
+    runner_state: RunnerState,
+    sites: list[Site],
+    stylesheet: StyleSheet,
 ) -> list[Flowable]:
     elements: list[Flowable] = []
     elements.append(Paragraph("Timeline", stylesheet.heading))
@@ -1217,7 +1269,10 @@ def generate_timeline_section(
 
 
 def generate_readings_timeline(
-    readings_df: pd.DataFrame, quantity: str, runner_state: RunnerState, time_relative_to_test_start: bool = True
+    readings_df: pd.DataFrame,
+    quantity: str,
+    runner_state: RunnerState,
+    time_relative_to_test_start: bool = True,
 ) -> Image:
     x_axis_column = "time_period_start"
     x_axis_label = "Time (UTC)"
@@ -1226,7 +1281,7 @@ def generate_readings_timeline(
     alternative_x_axis_label = "Time relative to test start (s)"
     if time_relative_to_test_start and base_timestamp is not None:
         new_x_axis_column = "timedelta_from_start"
-        readings_df[new_x_axis_column] = readings_df[x_axis_column] - base_timestamp  # type: ignore
+        readings_df[new_x_axis_column] = readings_df[x_axis_column] - base_timestamp
         x_axis_column = new_x_axis_column
         x_axis_label = alternative_x_axis_label
 
@@ -1293,7 +1348,9 @@ def truncate_mrid(mrid: str) -> str:
     return mrid[:7] + "..." if len(mrid) > 7 else mrid
 
 
-def validate_cell(reading_type: ReadingType, col_idx: int, row_num: int) -> str | None:  # noqa: C901
+def validate_cell(  # noqa: C901
+    reading_type: ReadingType, col_idx: int, row_num: int
+) -> str | None:
     """
     Validates a cell value and returns an error message if invalid.
     These validation steps come from SA TS 5573:2025, Table 8.1
@@ -1372,7 +1429,8 @@ def format_cell_value(value: str, is_error: bool) -> str | Paragraph:
 def allow_zero_width_duration(srt: ReadingType) -> bool:
     """Certain ReadingTypes (eg BESS types) expect zero duration readings. Most other reading types do NOT
 
-    Returns True if the supplied ReadingType is permitted to have zero duration readings. False otherwise"""
+    Returns True if the supplied ReadingType is permitted to have zero duration readings. False otherwise
+    """
     return srt.uom == UomType.REAL_ENERGY_WATT_HOURS  # This is our shorthand for identifying BESS readings
 
 
@@ -1476,7 +1534,16 @@ def generate_reading_count_table(
         else:
             table_row_idx += 1
 
-    headers = ["/MUP", "MMR", "Site type", "Unit", "Data Qualifier", "Kind", "Phase", "# Readings"]
+    headers = [
+        "/MUP",
+        "MMR",
+        "Site type",
+        "Unit",
+        "Data Qualifier",
+        "Kind",
+        "Phase",
+        "# Readings",
+    ]
     table_data.insert(0, headers)
 
     fractions = [0.07, 0.1, 0.1, 0.2, 0.14, 0.08, 0.1, 0.14]
@@ -1498,7 +1565,12 @@ def generate_reading_count_table(
                 ("FONTSIZE", (0, error_row_idx), (6, error_row_idx), 6),
                 ("TOPPADDING", (0, error_row_idx), (-1, error_row_idx), 2),
                 ("BOTTOMPADDING", (0, error_row_idx), (-1, error_row_idx), 2),
-                ("LEFTPADDING", (0, error_row_idx), (0, error_row_idx), column_widths[0]),
+                (
+                    "LEFTPADDING",
+                    (0, error_row_idx),
+                    (0, error_row_idx),
+                    column_widths[0],
+                ),
                 ("ALIGNMENT", (0, error_row_idx), (6, error_row_idx), "LEFT"),
                 ("ROWHEIGHT", (0, error_row_idx), (6, error_row_idx), 12),
             ]
@@ -1508,7 +1580,12 @@ def generate_reading_count_table(
     for row_idx, col_idx in error_cells:
         styles.extend(
             [
-                ("BACKGROUND", (col_idx, row_idx), (col_idx, row_idx), colors.Color(1, 0.9, 0.9)),
+                (
+                    "BACKGROUND",
+                    (col_idx, row_idx),
+                    (col_idx, row_idx),
+                    colors.Color(1, 0.9, 0.9),
+                ),
                 ("TEXTCOLOR", (col_idx, row_idx), (col_idx, row_idx), colors.red),
             ]
         )
@@ -1552,7 +1629,9 @@ def generate_readings_section(
                 elements.append(Paragraph(reading_description(reading_type), style=stylesheet.subheading))
                 elements.append(
                     generate_readings_timeline(
-                        readings_df=readings_df, quantity=uom_to_string(reading_type.uom), runner_state=runner_state
+                        readings_df=readings_df,
+                        quantity=uom_to_string(reading_type.uom),
+                        runner_state=runner_state,
                     )
                 )
     else:
@@ -1563,7 +1642,8 @@ def generate_readings_section(
 
 
 def first_client_interaction_of_type(
-    client_interactions: list[ClientInteraction], interaction_type: ClientInteractionType
+    client_interactions: list[ClientInteraction],
+    interaction_type: ClientInteractionType,
 ) -> ClientInteraction:
     for client_interaction in client_interactions:
         if client_interaction.interaction_type == interaction_type:
@@ -1645,19 +1725,29 @@ def generate_page_elements(
     # Criteria Section
     page_elements.extend(
         generate_criteria_section(
-            check_results=check_results, stylesheet=stylesheet, requires_witness_testing=requires_witness_testing
+            check_results=check_results,
+            stylesheet=stylesheet,
+            requires_witness_testing=requires_witness_testing,
         )
     )
 
     # Timeline Section
     page_elements.extend(
-        generate_timeline_section(timeline=timeline, runner_state=runner_state, sites=sites, stylesheet=stylesheet)
+        generate_timeline_section(
+            timeline=timeline,
+            runner_state=runner_state,
+            sites=sites,
+            stylesheet=stylesheet,
+        )
     )
 
     # Readings Section
     page_elements.extend(
         generate_readings_section(
-            runner_state=runner_state, readings=readings, reading_counts=reading_counts, stylesheet=stylesheet
+            runner_state=runner_state,
+            readings=readings,
+            reading_counts=reading_counts,
+            stylesheet=stylesheet,
         )
     )
 
@@ -1709,7 +1799,11 @@ def pdf_report_as_bytes(
         test_run_id=test_run_id,
         csip_aus_version=runner_state.active_test_procedure.csip_aus_version,
     )
-    later_pages = partial(later_pages_template, test_procedure_name=test_procedure_name, test_run_id=test_run_id)
+    later_pages = partial(
+        later_pages_template,
+        test_procedure_name=test_procedure_name,
+        test_run_id=test_run_id,
+    )
 
     with io.BytesIO() as buffer:
         doc = SimpleDocTemplate(
