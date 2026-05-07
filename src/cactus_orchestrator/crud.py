@@ -519,13 +519,12 @@ async def update_compliance_request(
 
 
 async def update_compliance_request_status(
-    session: AsyncSession, compliance_request_id: int, user_id: int, new_status: ComplianceRequestStatus
+    session: AsyncSession, compliance_request: ComplianceRequest, user_id: int, new_status: ComplianceRequestStatus
 ):
-    values = {"updated_at": datetime.now(timezone.utc), "updated_by": user_id, "status": new_status}
-    stmt = (
-        update(ComplianceRequest).where(ComplianceRequest.compliance_request_id == compliance_request_id).values(values)
-    )
-    await session.execute(stmt)
+    compliance_request.status = new_status
+    compliance_request.updated_at = datetime.now(timezone.utc)
+    compliance_request.updated_by = user_id
+    await session.flush()
 
 
 async def update_compliance_request_classes(

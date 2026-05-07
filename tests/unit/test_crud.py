@@ -759,10 +759,14 @@ async def test_update_compliance_request_status(pg_compliance_config):
     expected_status = ComplianceRequestStatus.PUSHED_BACK
 
     async with generate_async_session(pg_compliance_config) as session:
+        request = await select_compliance_request(session=session, compliance_request_id=compliance_request_id)
+        assert request is not None
         await update_compliance_request_status(
-            session=session, compliance_request_id=compliance_request_id, user_id=USER_ID, new_status=expected_status
+            session=session, compliance_request=request, user_id=USER_ID, new_status=expected_status
         )
+        await session.commit()
 
+    async with generate_async_session(pg_compliance_config) as session:
         request = await select_compliance_request(session=session, compliance_request_id=compliance_request_id)
         assert request is not None
         assert_nowish(request.updated_at)
