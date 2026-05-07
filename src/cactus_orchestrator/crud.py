@@ -412,7 +412,7 @@ async def update_compliance_generation_record_with_file_data(
 
 
 async def select_compliance_request(
-    session: AsyncSession, compliance_request_id: int, include_classes: bool = True, include_runs: bool = False
+    session: AsyncSession, compliance_request_id: int, include_classes: bool = True, include_runs: bool = True
 ) -> ComplianceRequest | None:
     stmt = select(ComplianceRequest).where(ComplianceRequest.compliance_request_id == compliance_request_id)
 
@@ -507,11 +507,29 @@ async def update_compliance_request_classes(
     session: AsyncSession, compliance_request: ComplianceRequest, user_id: int, classes: set[str]
 ):
     # The cascade settings on the classes relationship of the ComplianceRequest model
-    # with handle removing the existing classes allowing us to add all classes that should
-    # be present.
+    # with handle removing the existing classes.
+    # NOTE: For classes that are 'preserved' (present before and after the update), the existing row
+    # in the table is deleted and a new row added.
+    # (i.e. the id for that class will change, everything else will be the same).
     compliance_request.classes = [ComplianceRequestClass(compliance_class=c) for c in classes]
 
     # update metadata
+    compliance_request.updated_at = datetime.now(timezone.utc)
+    compliance_request.updated_by = user_id
+    await session.flush()
+
+
+async def update_compliance_request_runs(
+    session: AsyncSession, compliance_request: ComplianceRequest, user_id: int, runs: set[int]
+):
+    # The cascade settings on the runs relationship of the ComplianceRequest model
+    # with handle removing the existing runs.
+    # NOTE: For runs that are 'preserved' (present before and after the update), the existing row
+    # in the table is deleted and a new row added.
+    # (i.e. the id for that ComplianceRequestRun will appear to change, everything else will be the same).
+    compliance_request.runs = [ComplianceRequestRun(compliance_run_id=r) for r in runs]
+
+    # Update metadata
     compliance_request.updated_at = datetime.now(timezone.utc)
     compliance_request.updated_by = user_id
     await session.flush()

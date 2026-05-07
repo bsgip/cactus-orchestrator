@@ -41,6 +41,7 @@ from cactus_orchestrator.crud import (
     select_users,
     update_compliance_request,
     update_compliance_request_classes,
+    update_compliance_request_runs,
     update_compliance_request_status,
     update_run_run_status,
     update_run_with_runartifact_and_finalise,
@@ -744,6 +745,7 @@ async def test_update_compliance_request_status(pg_compliance_config):
 @pytest.mark.parametrize("expected_classes", [set(), {"A", "G", "DER-G"}, {"A", "L"}, {"L", "DER-A", "S-G"}])
 @pytest.mark.asyncio
 async def test_update_compliance_request_classes(expected_classes: set[str], pg_compliance_config):
+    # Arrange
     compliance_request_id = 1  # existing classes = {"L", "DER-A", "S-G"}
     USER_ID = 1
 
@@ -766,6 +768,23 @@ async def test_update_compliance_request_classes(expected_classes: set[str], pg_
         assert actual_classes == expected_classes
         assert_nowish(request.updated_at)
         assert request.updated_by == USER_ID
+
+
+@pytest.mark.parametrize("expected_runs", [set(), {1}, {1, 2, 3}, {4, 5, 6}])
+@pytest.mark.asyncio
+async def test_update_compliance_request_runs(expected_runs: set[int], pg_compliance_config):
+    # Arrange
+    USER_ID = 2
+    compliance_request_id = 1
+
+    # Act
+    async with generate_async_session(pg_compliance_config) as session:
+        request = await select_compliance_request(session=session, compliance_request_id=compliance_request_id)
+        assert request is not None
+        await update_compliance_request_runs(
+            session=session, compliance_request=request, user_id=USER_ID, runs=expected_runs
+        )
+        await session.commit()
 
 
 @pytest.mark.asyncio

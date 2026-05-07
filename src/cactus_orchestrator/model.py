@@ -234,8 +234,7 @@ class ComplianceRequest(Base):
 
     # Compliance classes
     classes: Mapped[list["ComplianceRequestClass"]] = relationship(lazy="raise", cascade="all, delete-orphan")
-    # classes: Mapped[list["ComplianceRequestClass"]] = relationship(lazy="raise")  # NO CASCADE
-    runs: Mapped[list["ComplianceRequestRun"]] = relationship(lazy="raise")
+    runs: Mapped[list["ComplianceRequestRun"]] = relationship(lazy="raise", cascade="all, delete-orphan")
 
     # Compliance request metadata
     csip_aus_version: Mapped[str] = mapped_column(String, nullable=False, unique=False)
