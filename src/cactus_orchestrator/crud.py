@@ -412,8 +412,11 @@ async def update_compliance_generation_record_with_file_data(
 
 
 async def select_compliance_request(
-    session: AsyncSession, compliance_request_id: int, include_classes: bool = True, include_runs: bool = True
-) -> ComplianceRequest | None:
+    session: AsyncSession,
+    compliance_request_id: int,
+    include_classes: bool = True,
+    include_runs: bool = True,
+) -> ComplianceRequest:
     stmt = select(ComplianceRequest).where(ComplianceRequest.compliance_request_id == compliance_request_id)
 
     if include_classes:
@@ -423,10 +426,31 @@ async def select_compliance_request(
         stmt = stmt.options(selectinload(ComplianceRequest.runs))
 
     result = await session.execute(stmt)
-    return result.scalar_one_or_none()
+    return result.scalar_one()
 
 
-async def select_compliance_requests_for_user(session: AsyncSession, user_id: int) -> Sequence[ComplianceRequest]:
+async def select_user_compliance_request(
+    session: AsyncSession,
+    user_id: int,
+    compliance_request_id: int,
+    include_classes: bool = True,
+    include_runs: bool = True,
+) -> ComplianceRequest:
+    stmt = select(ComplianceRequest).where(
+        ComplianceRequest.compliance_request_id == compliance_request_id, ComplianceRequest.created_by == user_id
+    )
+
+    if include_classes:
+        stmt = stmt.options(selectinload(ComplianceRequest.classes))
+
+    if include_runs:
+        stmt = stmt.options(selectinload(ComplianceRequest.runs))
+
+    result = await session.execute(stmt)
+    return result.scalar_one()
+
+
+async def select_user_compliance_requests(session: AsyncSession, user_id: int) -> Sequence[ComplianceRequest]:
     stmt = (
         select(ComplianceRequest).where(ComplianceRequest.created_by == user_id).order_by(ComplianceRequest.created_at)
     )

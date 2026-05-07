@@ -23,7 +23,6 @@ from cactus_orchestrator.crud import (
     select_active_runs_for_user,
     select_admin_stats,
     select_compliance_request,
-    select_compliance_requests_for_user,
     select_group_runs_aggregated_by_procedure,
     select_group_runs_for_procedure,
     select_next_playlist_run,
@@ -35,6 +34,8 @@ from cactus_orchestrator.crud import (
     select_run_groups_for_user,
     select_runs_for_group,
     select_user,
+    select_user_compliance_request,
+    select_user_compliance_requests,
     select_user_from_run_group,
     select_user_run,
     select_user_run_with_artifact,
@@ -626,29 +627,29 @@ async def test_insert_compliance_generation_record(pg_base_config):
 
 
 @pytest.mark.asyncio
-async def test_select_compliance_request(pg_compliance_config):
-    async with generate_async_session(pg_compliance_config) as session:
-        request = await select_compliance_request(
-            session=session, compliance_request_id=1, include_classes=True, include_runs=True
-        )
+async def test_select_user_compliance_request(pg_compliance_config):
+    # These match the db fixture values in "tests/data/compliance_config.sql"
+    CREATED_AT = datetime.fromisoformat("2026-05-04T13:15Z")
+    UPDATED_AT = CREATED_AT
+    USER_ID = 2
+    CLASSES = {"L", "DER-A", "S-G"}
+    RUNS = {1, 3, 5}
+    WITNESSED_AT = datetime.fromisoformat("2026-05-01T15:30Z")
+    ATTRIBUTES = [
+        "der_brand",
+        "der_oem",
+        "der_series",
+        "der_representative_models",
+        "software_client_type",
+        "software_client_providers",
+        "software_client_versions",
+        "onsite_hardware_details",
+    ]
 
-        # These match the db fixture values in "tests/data/compliance_config.sql"
-        CREATED_AT = datetime.fromisoformat("2026-05-04T13:15Z")
-        UPDATED_AT = CREATED_AT
-        USER_ID = 2
-        CLASSES = {"L", "DER-A", "S-G"}
-        RUNS = {1, 3, 5}
-        WITNESSED_AT = datetime.fromisoformat("2026-05-01T15:30Z")
-        ATTRIBUTES = [
-            "der_brand",
-            "der_oem",
-            "der_series",
-            "der_representative_models",
-            "software_client_type",
-            "software_client_providers",
-            "software_client_versions",
-            "onsite_hardware_details",
-        ]
+    async with generate_async_session(pg_compliance_config) as session:
+        request = await select_user_compliance_request(
+            session=session, user_id=USER_ID, compliance_request_id=1, include_classes=True, include_runs=True
+        )
 
         assert request is not None
         assert request.created_by == USER_ID
@@ -666,10 +667,10 @@ async def test_select_compliance_request(pg_compliance_config):
 
 
 @pytest.mark.asyncio
-async def test_select_compliance_requests(pg_compliance_config):
+async def test_select_user_compliance_requests(pg_compliance_config):
     USER_ID = 2
     async with generate_async_session(pg_compliance_config) as session:
-        requests = await select_compliance_requests_for_user(session=session, user_id=USER_ID)
+        requests = await select_user_compliance_requests(session=session, user_id=USER_ID)
 
         assert len(requests) == 2
         assert requests[0].created_at != requests[1].created_at
