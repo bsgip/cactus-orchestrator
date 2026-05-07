@@ -66,7 +66,7 @@ async def fetch_certificate_key_pair(
     if not isinstance(private_key, tuple(get_args(CertificateIssuerPrivateKeyTypes))):
         raise TypeError(f"Invalid private key type for {secret_name}")
 
-    return certificate, private_key  # type: ignore
+    return certificate, private_key
 
 
 async def fetch_certificate_only(secret_name: str, namespace: str | None = None) -> x509.Certificate:

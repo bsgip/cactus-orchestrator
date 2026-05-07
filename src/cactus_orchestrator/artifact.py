@@ -126,7 +126,7 @@ async def regenerate_pdf_report(file_data: bytes, raw_reporting_data: str, versi
         ValueError if the reporting data cannot be parsed or the zip cannot be written.
     """
     try:
-        reporting_data = ReportingData.from_json(version, raw_reporting_data)  # type: ignore
+        reporting_data = ReportingData.from_json(version, raw_reporting_data)
     except Exception as exc:
         msg = "Failed to convert json to ReportingData instance."
         logger.error(msg, exc_info=exc)

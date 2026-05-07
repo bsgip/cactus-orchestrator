@@ -39,7 +39,7 @@ dynamic = ["version"]
 [project.optional-dependencies]
 dev = [
     "bandit",
-    "mypy",
+    "ty",
     "ruff",
     "types-python-dateutil",
     "types-tzlocal",
@@ -91,24 +91,9 @@ markers = [
     "idleteardowntask_enable(seconds): Mark test that enables teardown task and sets repeat every duration",
 ]
 
-[tool.mypy]
+[tool.ty.src]
 exclude = ["tests", "alembic"]
-check_untyped_defs = true
-disallow_incomplete_defs = true
-disallow_untyped_decorators = true
-disallow_untyped_defs = true
-namespace_packages = true
-warn_redundant_casts = true
 
-[[tool.mypy.overrides]] # temporary until these libs are typed.
-module = [
-    "cactus_runner",
-    "cactus_test_definitions",
-    "cactus_runner.client",
-    "testing",
-    "testing.postgresql",
-]
-ignore_missing_imports = true
 
 [tool.setuptools.dynamic]
 version = { attr = "cactus_orchestrator.__version__" }
