@@ -19,11 +19,11 @@ jobs:
         uses: actions/checkout@v4
       - name: Setup Python
         uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.pyver }}
       - name: Install Dependencies
         run: |
           pip install .[test]
-        with:
-          python-version: ${{ matrix.pyver }}
       - name: Install linters
         run: pip install ruff bandit ty
 
