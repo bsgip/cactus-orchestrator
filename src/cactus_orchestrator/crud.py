@@ -438,7 +438,7 @@ async def insert_compliance_request(
     session: AsyncSession,
     created_by: int,
     csip_aus_version: str,
-    witness_test: datetime,
+    witnessed_at: datetime,
     classes: set[str],
     runs: set[int],
     der_brand: str,
@@ -464,7 +464,7 @@ async def insert_compliance_request(
         classes=[ComplianceRequestClass(compliance_class=c) for c in classes],
         runs=[ComplianceRequestRun(compliance_run_id=r) for r in runs],
         csip_aus_version=csip_aus_version,
-        witness_test=witness_test,
+        witnessed_at=witnessed_at,
         der_brand=der_brand,
         der_oem=der_oem,
         der_series=der_series,
@@ -486,7 +486,7 @@ async def update_compliance_request(
     user_id: int,
     compliance_request: ComplianceRequest,
     csip_aus_version: str,
-    witness_test: datetime,
+    witnessed_at: datetime,
     der_brand: str,
     der_oem: str,
     der_series: str,
@@ -501,7 +501,7 @@ async def update_compliance_request(
     This function does not update 'status', 'classes' or 'runs'. Instead use 'update_compliance_status', 'update_compliance_classes' and 'update_compliance_runs'.
     """
     compliance_request.csip_aus_version = csip_aus_version
-    compliance_request.witness_test = witness_test
+    compliance_request.witnessed_at = witnessed_at
     compliance_request.der_brand = der_brand
     compliance_request.der_oem = der_oem
     compliance_request.der_series = der_series

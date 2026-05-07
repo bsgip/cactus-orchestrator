@@ -660,7 +660,7 @@ async def test_select_compliance_request(pg_compliance_config):
         assert RUNS == {r.compliance_run_id for r in request.runs}
         assert RUNS == {r.compliance_run.run_id for r in request.runs}
         assert request.csip_aus_version == "v1.2"
-        assert request.witness_test == WITNESSED_AT
+        assert request.witnessed_at == WITNESSED_AT
         for attribute in ATTRIBUTES:
             assert getattr(request, attribute) == attribute
 
@@ -683,7 +683,7 @@ async def test_insert_compliance_request(pg_compliance_config):
         "classes": {"A", "DER-A"},
         "runs": {4, 5, 6},
         "csip_aus_version": "v1.2",
-        "witness_test": datetime.now(timezone.utc),
+        "witnessed_at": datetime.now(timezone.utc),
         "der_brand": "der_brand",
         "der_oem": "der_oem",
         "der_series": "der_series",
@@ -723,7 +723,7 @@ async def test_update_compliance_request(pg_compliance_config):
     USER_ID = 1  # admin
     new_compliance_values = {
         "csip_aus_version": "v1.2",
-        "witness_test": datetime.now(timezone.utc),
+        "witnessed_at": datetime.now(timezone.utc),
         "der_brand": "new_der_brand",
         "der_oem": "new_der_oem",
         "der_series": "new_der_series",

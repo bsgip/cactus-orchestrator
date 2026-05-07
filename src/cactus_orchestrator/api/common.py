@@ -2,15 +2,16 @@ import logging
 from http import HTTPStatus
 
 from cactus_schema.orchestrator import PlaylistRunInfo, RunResponse, RunStatusResponse
+from cactus_schema.orchestrator.schema import ComplianceRequestContentResponse
 from cactus_test_definitions.client.test_procedures import TestProcedure, TestProcedureId
-
-from cactus_orchestrator.procedures import get_filtered_test_procedures
 from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
+
 from cactus_orchestrator.auth import UserContext
 from cactus_orchestrator.crud import insert_user, select_run_group_for_user, select_run_groups_for_user, select_user
 from cactus_orchestrator.k8s.resource import generate_envoy_dcap_uri, get_resource_names
-from cactus_orchestrator.model import Run, RunGroup, RunStatus, User
+from cactus_orchestrator.model import ComplianceRequest, Run, RunGroup, RunStatus, User
+from cactus_orchestrator.procedures import get_filtered_test_procedures
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +53,23 @@ def map_run_to_run_response(run: Run, playlist_runs: list[PlaylistRunInfo] | Non
         playlist_order=run.playlist_order,
         playlist_runs=playlist_runs,
         classes=definition.classes if definition else None,
+    )
+
+
+async def map_to_compliance_request_response(request: ComplianceRequest) -> ComplianceRequestContentResponse:
+    return ComplianceRequestContentResponse(
+        compliance_standard=request.csip_aus_version,
+        witness_test=request.witnessed_at,
+        classes=[c.compliance_class for c in request.classes],
+        runs=[r.compliance_run_id for r in request.runs],
+        der_brand=request.der_brand,
+        der_oem=request.der_oem,
+        der_series=request.der_series,
+        der_repmodels=request.der_representative_models,
+        software_type=request.software_client_type,
+        software_providers=request.software_client_providers,
+        software_versions=request.software_client_versions,
+        hardware_details=request.onsite_hardware_details,
     )
 
 

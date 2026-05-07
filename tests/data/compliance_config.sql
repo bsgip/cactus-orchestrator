@@ -29,7 +29,7 @@ VALUES
 (1, 1, '2025-11-24T12:30Z');
 
 -- Compliance Requests
-INSERT INTO compliance_request (created_at, created_by, updated_at, updated_by, status, csip_aus_version, witness_test, der_brand, der_oem, der_series, der_representative_models, software_client_type, software_client_providers, software_client_versions, onsite_hardware_details)
+INSERT INTO compliance_request (created_at, created_by, updated_at, updated_by, status, csip_aus_version, witnessed_at, der_brand, der_oem, der_series, der_representative_models, software_client_type, software_client_providers, software_client_versions, onsite_hardware_details)
 VALUES
 (
 	'2026-05-04T13:15Z',

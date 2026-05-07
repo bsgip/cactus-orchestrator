@@ -238,7 +238,7 @@ class ComplianceRequest(Base):
 
     # Compliance request metadata
     csip_aus_version: Mapped[str] = mapped_column(String, nullable=False, unique=False)
-    witness_test: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    witnessed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     der_brand: Mapped[str] = mapped_column(String, nullable=False, unique=False)
     der_oem: Mapped[str] = mapped_column(String, nullable=False, unique=False)
     der_series: Mapped[str] = mapped_column(String, nullable=False, unique=False)
