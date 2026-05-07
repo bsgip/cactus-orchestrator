@@ -11,7 +11,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload, selectinload, undefer
 
 from cactus_orchestrator.auth import UserContext
-from cactus_orchestrator.model import ComplianceRecord, Run, RunArtifact, RunGroup, RunReportGeneration, RunStatus, User
+from cactus_orchestrator.model import (
+    ComplianceRecord,
+    ComplianceRequest,
+    ComplianceRequestClass,
+    ComplianceRequestRun,
+    ComplianceRequestStatus,
+    Run,
+    RunArtifact,
+    RunGroup,
+    RunReportGeneration,
+    RunStatus,
+    User,
+)
 
 ACTIVE_RUN_STATUSES: set[RunStatus] = {RunStatus.provisioning, RunStatus.started, RunStatus.initialised}
 FINALISED_RUN_STATUSES: set[RunStatus] = {
@@ -396,6 +408,112 @@ async def update_compliance_generation_record_with_file_data(
     session: AsyncSession, compliance_record: ComplianceRecord, file_data: bytes
 ) -> None:
     compliance_record.file_data = file_data
+    await session.flush()
+
+
+async def select_compliance_request(
+    session: AsyncSession, compliance_request_id: int, include_classes: bool = True, include_runs: bool = False
+) -> ComplianceRequest | None:
+    stmt = select(ComplianceRequest).where(ComplianceRequest.compliance_request_id == compliance_request_id)
+
+    if include_classes:
+        stmt = stmt.options(selectinload(ComplianceRequest.classes))
+
+    if include_runs:
+        stmt = stmt.options(selectinload(ComplianceRequest.runs))
+
+    result = await session.execute(stmt)
+    return result.scalar_one_or_none()
+
+
+async def select_compliance_requests_for_user(session: AsyncSession, user_id: int) -> Sequence[ComplianceRequest]:
+    stmt = (
+        select(ComplianceRequest).where(ComplianceRequest.created_by == user_id).order_by(ComplianceRequest.created_at)
+    )
+    result = await session.execute(stmt)
+    return result.scalars().all()
+
+
+async def insert_compliance_request(
+    session: AsyncSession,
+    created_by: int,
+    csip_aus_version: str,
+    witness_test: datetime,
+    classes: set[str],
+    runs: set[int],
+    der_brand: str,
+    der_oem: str,
+    der_series: str,
+    der_representative_models: str,
+    software_client_type: str,
+    software_client_providers: str,
+    software_client_versions: str,
+    onsite_hardware_details: str,
+) -> ComplianceRequest:
+    """
+    Inserts a new compliance request.
+
+    update_by is set the same value as created_by
+    status defaults to ComplianceRequestStatus.SUBMITTED
+    """
+
+    compliance_request = ComplianceRequest(
+        created_by=created_by,
+        updated_by=created_by,
+        status=ComplianceRequestStatus.SUBMITTED,
+        classes=[ComplianceRequestClass(compliance_class=c) for c in classes],
+        runs=[ComplianceRequestRun(compliance_run_id=r) for r in runs],
+        csip_aus_version=csip_aus_version,
+        witness_test=witness_test,
+        der_brand=der_brand,
+        der_oem=der_oem,
+        der_series=der_series,
+        der_representative_models=der_representative_models,
+        software_client_type=software_client_type,
+        software_client_providers=software_client_providers,
+        software_client_versions=software_client_versions,
+        onsite_hardware_details=onsite_hardware_details,
+    )
+
+    session.add(compliance_request)
+    await session.flush()
+
+    return compliance_request
+
+
+async def update_compliance_request(session: AsyncSession, compliance_request_id: int) -> ComplianceRequest:
+    raise NotImplementedError
+    # stmt = update(ComplianceRequest).where(ComplianceRequest.compliance_request_id == compliance_request_id).values()
+    # await session.execute(stmt)
+
+    # run.run_artifact_id = run_artifact_id
+    # run.finalised_at = finalised_at
+    # run.run_status = run_status
+    # run.all_criteria_met = all_criteria_met
+    # await session.flush()
+
+
+async def update_compliance_request_status(
+    session: AsyncSession, compliance_request_id: int, user_id: int, new_status: ComplianceRequestStatus
+):
+    values = {"updated_at": datetime.now(timezone.utc), "updated_by": user_id, "status": new_status}
+    stmt = (
+        update(ComplianceRequest).where(ComplianceRequest.compliance_request_id == compliance_request_id).values(values)
+    )
+    await session.execute(stmt)
+
+
+async def update_compliance_request_classes(
+    session: AsyncSession, compliance_request: ComplianceRequest, user_id: int, classes: set[str]
+):
+    # The cascade settings on the classes relationship of the ComplianceRequest model
+    # with handle removing the existing classes allowing us to add all classes that should
+    # be present.
+    compliance_request.classes = [ComplianceRequestClass(compliance_class=c) for c in classes]
+
+    # update metadata
+    compliance_request.updated_at = datetime.now(timezone.utc)
+    compliance_request.updated_by = user_id
     await session.flush()
 
 

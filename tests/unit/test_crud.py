@@ -1,27 +1,29 @@
 from datetime import datetime, timezone
+from uuid import uuid4
 
 import pytest
 from assertical.asserts.time import assert_nowish
 from assertical.asserts.type import assert_dict_type, assert_list_type
 from assertical.fixtures.postgres import generate_async_session
 from cactus_test_definitions import CSIPAusVersion
-from cactus_test_definitions.client import TestProcedureId
+from cactus_test_definitions.client import TestProcedureId, get_all_test_procedures
 from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError, NoResultFound
-from uuid import uuid4
-from cactus_test_definitions.client import get_all_test_procedures
 
 from cactus_orchestrator.auth import UserContext
 from cactus_orchestrator.crud import (
     ProcedureRunAggregated,
     count_playlist_runs,
     insert_compliance_generation_record,
+    insert_compliance_request,
     insert_playlist_runs,
     insert_run_for_run_group,
     insert_run_group,
     insert_user,
     select_active_runs_for_user,
     select_admin_stats,
+    select_compliance_request,
+    select_compliance_requests_for_user,
     select_group_runs_aggregated_by_procedure,
     select_group_runs_for_procedure,
     select_next_playlist_run,
@@ -37,11 +39,24 @@ from cactus_orchestrator.crud import (
     select_user_run,
     select_user_run_with_artifact,
     select_users,
+    update_compliance_request,
+    update_compliance_request_classes,
+    update_compliance_request_status,
     update_run_run_status,
     update_run_with_runartifact_and_finalise,
+    update_runartifact_with_file_data,
     update_user_name,
 )
-from cactus_orchestrator.model import ComplianceRecord, Run, RunArtifact, RunGroup, RunStatus, User
+from cactus_orchestrator.model import (
+    ComplianceRecord,
+    ComplianceRequestClass,
+    ComplianceRequestStatus,
+    Run,
+    RunArtifact,
+    RunGroup,
+    RunStatus,
+    User,
+)
 
 
 @pytest.mark.asyncio
@@ -607,6 +622,150 @@ async def test_insert_compliance_generation_record(pg_base_config):
     async with generate_async_session(pg_base_config) as s:
         compliance_record_count = (await s.execute(select(func.count()).select_from(ComplianceRecord))).scalar_one()
         assert compliance_record_count == 1
+
+
+@pytest.mark.asyncio
+async def test_select_compliance_request(pg_compliance_config):
+    async with generate_async_session(pg_compliance_config) as session:
+        request = await select_compliance_request(
+            session=session, compliance_request_id=1, include_classes=True, include_runs=True
+        )
+
+        # These match the db fixture values in "tests/data/compliance_config.sql"
+        CREATED_AT = datetime.fromisoformat("2026-05-04T13:15Z")
+        UPDATED_AT = CREATED_AT
+        USER_ID = 2
+        CLASSES = {"L", "DER-A", "S-G"}
+        RUNS = {1, 3, 5}
+        WITNESSED_AT = datetime.fromisoformat("2026-05-01T15:30Z")
+        ATTRIBUTES = [
+            "der_brand",
+            "der_oem",
+            "der_series",
+            "der_representative_models",
+            "software_client_type",
+            "software_client_providers",
+            "software_client_versions",
+            "onsite_hardware_details",
+        ]
+
+        assert request is not None
+        assert request.created_by == USER_ID
+        assert request.created_at == CREATED_AT
+        assert request.updated_by == USER_ID
+        assert request.updated_at == UPDATED_AT
+        assert request.status == ComplianceRequestStatus.SUBMITTED
+        assert CLASSES == {c.compliance_class for c in request.classes}
+        assert RUNS == {r.compliance_run_id for r in request.runs}
+        assert RUNS == {r.compliance_run.run_id for r in request.runs}
+        assert request.csip_aus_version == "v1.2"
+        assert request.witness_test == WITNESSED_AT
+        for attribute in ATTRIBUTES:
+            assert getattr(request, attribute) == attribute
+
+
+@pytest.mark.asyncio
+async def test_select_compliance_requests(pg_compliance_config):
+    USER_ID = 2
+    async with generate_async_session(pg_compliance_config) as session:
+        requests = await select_compliance_requests_for_user(session=session, user_id=USER_ID)
+
+        assert len(requests) == 2
+        assert requests[0].created_at != requests[1].created_at
+
+
+@pytest.mark.asyncio
+async def test_insert_compliance_request(pg_compliance_config):
+    USER_ID = 2
+    compliance_values = {
+        "created_by": USER_ID,
+        "classes": {"A", "DER-A"},
+        "runs": {4, 5, 6},
+        "csip_aus_version": "v1.2",
+        "witness_test": datetime.now(timezone.utc),
+        "der_brand": "der_brand",
+        "der_oem": "der_oem",
+        "der_series": "der_series",
+        "der_representative_models": "der_representative_models",
+        "software_client_type": "software_client_type",
+        "software_client_providers": "software_client_providers",
+        "software_client_versions": "software_client_versions",
+        "onsite_hardware_details": "onsite_hardware_details",
+    }
+    relationship_attributes = ["classes", "runs"]
+
+    async with generate_async_session(pg_compliance_config) as session:
+        new_request = await insert_compliance_request(session=session, **compliance_values)
+
+        assert_nowish(new_request.created_at)
+        assert_nowish(new_request.updated_at)
+        assert new_request.status == ComplianceRequestStatus.SUBMITTED
+        for attribute, value in compliance_values.items():
+            # skip relationship attributes (they are checked below)
+            if attribute in relationship_attributes:
+                continue
+            assert getattr(new_request, attribute) == value
+
+        classes = compliance_values["classes"]
+        for c in new_request.classes:
+            assert c.compliance_class in classes
+
+        runs = compliance_values["runs"]
+        for r in new_request.runs:
+            assert r.compliance_run_id in runs
+
+
+@pytest.mark.asyncio
+async def test_update_compliance_request(pg_compliance_config):
+    async with generate_async_session(pg_compliance_config) as session:
+        request = await select_compliance_request(session=session, compliance_request_id=1)
+        assert request is not None
+        # result = await update_compliance_request(session=session, compliance_request=request)
+
+
+@pytest.mark.asyncio
+async def test_update_compliance_request_status(pg_compliance_config):
+    compliance_request_id = 1
+    USER_ID = 1  # admin
+    expected_status = ComplianceRequestStatus.PUSHED_BACK
+
+    async with generate_async_session(pg_compliance_config) as session:
+        await update_compliance_request_status(
+            session=session, compliance_request_id=compliance_request_id, user_id=USER_ID, new_status=expected_status
+        )
+
+        request = await select_compliance_request(session=session, compliance_request_id=compliance_request_id)
+        assert request is not None
+        assert_nowish(request.updated_at)
+        assert request.updated_by == USER_ID
+        assert request.status == expected_status
+
+
+@pytest.mark.parametrize("expected_classes", [set(), {"A", "G", "DER-G"}, {"A", "L"}, {"L", "DER-A", "S-G"}])
+@pytest.mark.asyncio
+async def test_update_compliance_request_classes(expected_classes: set[str], pg_compliance_config):
+    compliance_request_id = 1  # existing classes = {"L", "DER-A", "S-G"}
+    USER_ID = 1
+
+    # Act
+    async with generate_async_session(pg_compliance_config) as session:
+        request = await select_compliance_request(session=session, compliance_request_id=compliance_request_id)
+        assert request is not None
+
+        await update_compliance_request_classes(
+            session=session, compliance_request=request, user_id=USER_ID, classes=expected_classes
+        )
+        await session.commit()
+
+    # Assert
+    async with generate_async_session(pg_compliance_config) as session:
+        request = await select_compliance_request(session=session, compliance_request_id=compliance_request_id)
+        assert request is not None
+
+        actual_classes = {c.compliance_class for c in request.classes}
+        assert actual_classes == expected_classes
+        assert_nowish(request.updated_at)
+        assert request.updated_by == USER_ID
 
 
 @pytest.mark.asyncio
