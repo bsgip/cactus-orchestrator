@@ -1,7 +1,5 @@
-import io
 import os
-import zipfile
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from http import HTTPMethod, HTTPStatus
 from itertools import product
 from unittest.mock import Mock, patch
@@ -11,7 +9,7 @@ from aiohttp import ClientConnectorDNSError
 from assertical.asserts.time import assert_nowish
 from assertical.fake.generator import generate_class_instance
 from assertical.fixtures.postgres import generate_async_session
-from cactus_runner.client import RunnerClientException
+from cactus_runner.client import RunnerClientError
 from cactus_schema.orchestrator import (
     HEADER_GROUP_ID,
     HEADER_GROUP_NAME,
@@ -23,7 +21,6 @@ from cactus_schema.orchestrator import (
     ProceedResponse,
     RunResponse,
     StartRunResponse,
-    uri,
 )
 from cactus_schema.runner import (
     CriteriaEntry,
@@ -267,7 +264,7 @@ async def test_spawn_teststack_and_init_tolerant_to_status_errors(
 
     # Check init/status were called
     k8s_mock.init.assert_awaited_once()
-    k8s_mock.health.call_count == 3
+    assert k8s_mock.health.call_count == 3
 
     # Check the DB
     async with generate_async_session(pg_base_config) as session:
@@ -471,7 +468,7 @@ async def test_spawn_teststack_and_init_run_teardown_on_init_failure(
 
         await session.commit()
 
-    k8s_mock.init.side_effect = RunnerClientException("My mock exception")
+    k8s_mock.init.side_effect = RunnerClientError("My mock exception")
 
     # Act
     req = InitRunRequest(test_procedure_id=TestProcedureId.ALL_01.value)
@@ -532,7 +529,7 @@ async def test_start_run_precondition_failed(client, k8s_mock: MockedK8s, pg_bas
 
     # Arrange
     error_message = "my mock error message"
-    k8s_mock.start.side_effect = RunnerClientException(
+    k8s_mock.start.side_effect = RunnerClientError(
         "Some sort of error", http_status_code=HTTPStatus.PRECONDITION_FAILED, error_message=error_message
     )
     run_id = 1
@@ -761,7 +758,7 @@ async def test_finalise_run_creates_run_artifact_and_updates_run(
 
     k8s_mock.status.return_value = runner_status
     k8s_mock.finalize.return_value = finalize_data
-    finalise_time = datetime(2023, 4, 5, tzinfo=timezone.utc)
+    finalise_time = datetime(2023, 4, 5, tzinfo=UTC)
     timeout_seconds = 10
     regenerate_mock.return_value = finalize_data
 
@@ -804,7 +801,7 @@ async def test_finalise_run_handles_runner_finalize_failure(
 
     k8s_mock.status.return_value = runner_status
     k8s_mock.finalize.side_effect = Exception("mock exception")
-    finalise_time = datetime(2023, 4, 5, tzinfo=timezone.utc)
+    finalise_time = datetime(2023, 4, 5, tzinfo=UTC)
     timeout_seconds = 10
     regenerate_mock.return_value = b""
 
@@ -844,7 +841,7 @@ async def test_finalise_run_handles_runner_status_failure(
 
     k8s_mock.status.side_effect = Exception("my mock exception")
     k8s_mock.finalize.return_value = finalize_data
-    finalise_time = datetime(2023, 4, 5, tzinfo=timezone.utc)
+    finalise_time = datetime(2023, 4, 5, tzinfo=UTC)
     timeout_seconds = 10
     regenerate_mock.return_value = finalize_data
 
@@ -1102,7 +1099,6 @@ async def test_get_run_artifact_data(
     # Assert
     assert res.status_code == expected_status
     if expected_status == HTTPStatus.OK:
-
         assert expected_artifact_data == res.read()
 
         assert res.headers[HEADER_USER_NAME] == expected_user

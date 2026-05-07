@@ -7,9 +7,9 @@ from cactus_schema.orchestrator.compliance import ComplianceClass, fetch_complia
 from cactus_test_definitions.client import TestProcedureId
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from cactus_orchestrator.procedures import get_filtered_test_procedures
 from cactus_orchestrator.crud import select_group_runs_aggregated_by_procedure
 from cactus_orchestrator.model import RunGroup
+from cactus_orchestrator.procedures import get_filtered_test_procedures
 
 
 class ComplianceStatus(Enum):
@@ -33,6 +33,10 @@ class Compliance:
     per_run_compliance: list[RunCompliance]
 
 
+ACTIVE_RUN_STATUSES = [1, 2, 6]  # initialized, started, provisioning
+FINALIZED_RUN_STATUSES = [3, 4]  # finalized by user, finalized by timeout
+
+
 def fetch_compliance_class(class_name: str) -> ComplianceClass:
     classes = fetch_compliance_classes({class_name})
     if classes:
@@ -41,9 +45,6 @@ def fetch_compliance_class(class_name: str) -> ComplianceClass:
 
 
 def run_summary_to_compliance_status(test_procedure: TestProcedureRunSummaryResponse) -> ComplianceStatus:
-    ACTIVE_RUN_STATUSES = [1, 2, 6]  # initialized, started, provisioning
-    FINALIZED_RUN_STATUSES = [3, 4]  # finalized by user, finalized by timeout
-
     if test_procedure.latest_run_status in ACTIVE_RUN_STATUSES:
         return ComplianceStatus.ACTIVE
     elif test_procedure.run_count == 0:

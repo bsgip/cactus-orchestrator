@@ -8,7 +8,7 @@ Run with:
     pytest tests/integration/test_power_limit_chart.py -v -s
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from http import HTTPStatus
 from pathlib import Path
@@ -20,11 +20,12 @@ from cactus_schema.runner.schema import HTTPMethod, RequestEntry
 from envoy.server.model.doe import DynamicOperatingEnvelope, SiteControlGroup, SiteControlGroupDefault
 from envoy.server.model.site import Site, SiteDER, SiteDERSetting
 from envoy.server.model.subscription import Subscription, SubscriptionResource
+
 from cactus_orchestrator.power_limit_chart import generate_power_limit_chart_html
 
 OUTPUT_DIR = Path("/tmp/cactus_charts")
 
-T0 = datetime(2026, 2, 26, 9, 30, 0, tzinfo=timezone.utc)  # Test start time
+T0 = datetime(2026, 2, 26, 9, 30, 0, tzinfo=UTC)  # Test start time
 
 
 def _out(name: str) -> Path:

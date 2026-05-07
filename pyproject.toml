@@ -39,15 +39,13 @@ dynamic = ["version"]
 [project.optional-dependencies]
 dev = [
     "bandit",
-    "flake8",
-    "mypy",
+    "ty",
+    "ruff",
     "types-python-dateutil",
     "types-tzlocal",
     "types-pyasn1",
-    "black",
     "coverage",
     "kubernetes-stubs",
-    "isort",
     "pandas-stubs",
     "types-reportlab",
 ]
@@ -62,8 +60,19 @@ test = [
     "asgi_lifespan",
 ]
 
-[tool.black]
+[tool.ruff]
 line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "S", "C90", "B", "UP", "ANN", "N"]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 10
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S", "ANN", "N"]
+"alembic/**" = ["S"]
+"src/cactus_orchestrator/settings.py" = ["S105"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
@@ -82,27 +91,9 @@ markers = [
     "idleteardowntask_enable(seconds): Mark test that enables teardown task and sets repeat every duration",
 ]
 
-[tool.bandit]
-exclude_dirs = ["tests", "alembic"]
-
-[tool.mypy]
+[tool.ty.src]
 exclude = ["tests", "alembic"]
-check_untyped_defs = true
-disallow_incomplete_defs = true
-disallow_untyped_decorators = true
-disallow_untyped_defs = true
-namespace_packages = true
-warn_redundant_casts = true
 
-[[tool.mypy.overrides]] # temporary until these libs are typed.
-module = [
-    "cactus_runner",
-    "cactus_test_definitions",
-    "cactus_runner.client",
-    "testing",
-    "testing.postgresql",
-]
-ignore_missing_imports = true
 
 [tool.setuptools.dynamic]
 version = { attr = "cactus_orchestrator.__version__" }

@@ -78,7 +78,7 @@ async def test_get_admin_endpoint_not_authorised_for_nonadmin(admin_endpoints: l
 async def test_admin_get_users(client, pg_base_config, valid_jwt_admin1):
 
     # Act
-    res = await client.get(f"/admin/users", headers={"Authorization": f"Bearer {valid_jwt_admin1}"})
+    res = await client.get("/admin/users", headers={"Authorization": f"Bearer {valid_jwt_admin1}"})
 
     # Assert
     assert res.status_code == HTTPStatus.OK
@@ -139,13 +139,14 @@ async def test_admin_procedure_run_summaries_for_group(
 
         items = TestProcedureRunSummaryResponse.from_json(res.text)
         assert_list_type(TestProcedureRunSummaryResponse, items)
-        assert (
-            len(items) > 10
-        ), "Not every test is visible to every version (RunGroup) but there should be more tests than records in the DB"
+        assert len(items) > 10, (
+            "Not every test is visible to every version (RunGroup) "
+            "but there should be more tests than records in the DB"
+        )
         counts_by_procedure_id = {procedure: count for procedure, count in expected_id_counts}
 
-        assert all((i.category for i in items)), "Should not be empty"
-        assert all((i.description for i in items)), "Should not be empty"
+        assert all(i.category for i in items), "Should not be empty"
+        assert all(i.description for i in items), "Should not be empty"
 
         for summary in items:
             assert summary.run_count == counts_by_procedure_id.get(summary.test_procedure_id, 0)
@@ -389,7 +390,6 @@ async def test_get_run_artifact_data(
     # Assert
     assert res.status_code == expected_status
     if expected_status == HTTPStatus.OK:
-
         assert expected_artifact_data == res.read()
 
         assert res.headers[HEADER_USER_NAME] == expected_user
@@ -448,7 +448,6 @@ async def test_regenerate_run_report_and_get_artifact_data(
     # Assert
     assert res.status_code == expected_status
     if expected_status == HTTPStatus.OK:
-
         if check_for_regeneration:
             zip_data = res.read()
             assert original_artifact_data != zip_data

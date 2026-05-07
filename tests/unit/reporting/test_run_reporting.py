@@ -1,6 +1,6 @@
 import http
 import random
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pandas as pd
@@ -29,8 +29,8 @@ from cactus_orchestrator.reporting.run_reporting import (
     validate_reading_duration,
 )
 
-BASIS = datetime(2023, 5, 7, tzinfo=timezone.utc)
-DT_NOW = datetime.now(timezone.utc)
+BASIS = datetime(2023, 5, 7, tzinfo=UTC)
+DT_NOW = datetime.now(UTC)
 
 
 def active_test_procedure(

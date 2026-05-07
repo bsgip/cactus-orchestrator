@@ -2,9 +2,10 @@ import io
 import logging
 from dataclasses import dataclass
 from functools import partial
+from typing import cast
 
 import PIL.Image as PilImage
-import plotly.graph_objects as go  # type: ignore
+import plotly.graph_objects as go
 from cactus_runner import __version__ as cactus_runner_version
 from cactus_test_definitions import __version__ as cactus_test_definitions_version
 from reportlab.lib.colors import Color, HexColor
@@ -40,7 +41,7 @@ class ConditionalSpacer(Spacer):
     the requested height of the spacer.
     """
 
-    def wrap(self, aW: float, aH: float) -> tuple[float, float]:
+    def wrap(self, aW: float, aH: float) -> tuple[float, float]:  # noqa: N803
         height = min(self.height, aH - 1e-8)
         return (aW, height)
 
@@ -133,12 +134,15 @@ def get_stylesheet() -> StyleSheet:
             leading=22,
             spaceAfter=3,
         ),
-        heading=sample_style_sheet.get("Heading2"),  # type: ignore
-        subheading=sample_style_sheet.get("Heading3"),  # type: ignore
-        normal=sample_style_sheet.get("Normal"),  # type: ignore
+        heading=cast(ParagraphStyle, sample_style_sheet["Heading2"]),
+        subheading=cast(ParagraphStyle, sample_style_sheet["Heading3"]),
+        normal=cast(ParagraphStyle, sample_style_sheet["Normal"]),
         overview_table=ParagraphStyle(
-            name="OverviewTable", parent=sample_style_sheet["Normal"], fontSize=8, fontName="Helvetica"
-        ),  # type: ignore
+            name="OverviewTable",
+            parent=sample_style_sheet["Normal"],
+            fontSize=8,
+            fontName="Helvetica",
+        ),
         table=DEFAULT_TABLE_STYLE,
         table_width=MAX_CONTENT_WIDTH,
         spacer=DEFAULT_SPACER,
@@ -179,7 +183,11 @@ def first_page_template(canvas: Canvas, doc: BaseDocTemplate, compliance_id: str
     # Footer left
     canvas.drawString(MARGIN, footer_offset, f"Compliance No. #{compliance_id}")
     # Footer mid
-    canvas.drawCentredString(PAGE_WIDTH / 2.0, footer_offset, f"CSIP-Aus {csip_aus_version} Compliance Report")
+    canvas.drawCentredString(
+        PAGE_WIDTH / 2.0,
+        footer_offset,
+        f"CSIP-Aus {csip_aus_version} Compliance Report",
+    )
     # Footer right
     canvas.drawRightString(PAGE_WIDTH - MARGIN, footer_offset, f"Page {doc.page}")
     canvas.restoreState()
@@ -198,7 +206,9 @@ def first_page_template(canvas: Canvas, doc: BaseDocTemplate, compliance_id: str
         f"Cactus Test Definitions v{cactus_test_definitions_version}",
     )
     canvas.drawRightString(
-        PAGE_WIDTH - MARGIN, PAGE_HEIGHT - BANNER_HEIGHT - 0.5 * inch, f"Cactus Runner v{cactus_runner_version}"
+        PAGE_WIDTH - MARGIN,
+        PAGE_HEIGHT - BANNER_HEIGHT - 0.5 * inch,
+        f"Cactus Runner v{cactus_runner_version}",
     )
     # canvas.drawRightString(
     #     PAGE_WIDTH - MARGIN, PAGE_HEIGHT - BANNER_HEIGHT - 0.65 * inch, f"CSIP Aus {csip_aus_version}"
@@ -218,19 +228,27 @@ def later_pages_template(canvas: Canvas, doc: BaseDocTemplate, compliance_id: st
     # Footer left
     canvas.drawString(MARGIN, footer_offset, f"Compliance No. #{compliance_id}")
     # Footer mid
-    canvas.drawCentredString(PAGE_WIDTH / 2.0, footer_offset, f"CSIP-Aus {csip_aus_version} Compliance Report")
+    canvas.drawCentredString(
+        PAGE_WIDTH / 2.0,
+        footer_offset,
+        f"CSIP-Aus {csip_aus_version} Compliance Report",
+    )
     # Footer right
     canvas.drawRightString(PAGE_WIDTH - MARGIN, footer_offset, f"Page {doc.page}")
     canvas.restoreState()
 
 
 def fig_to_image(fig: go.Figure, content_width: float) -> Image:
-    UPSCALE_FACTOR = 4
-    img_bytes = fig.to_image(format="png", scale=UPSCALE_FACTOR)  # Scale up figure so it's high enough resolution
+    upscale_factor = 4
+    img_bytes = fig.to_image(format="png", scale=upscale_factor)  # Scale up figure so it's high enough resolution
     pil_image = PilImage.open(io.BytesIO(img_bytes))
     buffer = io.BytesIO(img_bytes)
     scale_factor = pil_image.width / content_width  # rescale image to width of page content
-    return Image(buffer, width=pil_image.width / scale_factor, height=pil_image.height / scale_factor)
+    return Image(
+        buffer,
+        width=pil_image.width / scale_factor,
+        height=pil_image.height / scale_factor,
+    )
 
 
 def generate_overview_section(
@@ -251,17 +269,26 @@ def generate_overview_section(
     overview_data = [
         [
             "User",
-            Paragraph(f"{user.user_name} <i>(ID {user.user_id})</i>", style=stylesheet.overview_table),
+            Paragraph(
+                f"{user.user_name} <i>(ID {user.user_id})</i>",
+                style=stylesheet.overview_table,
+            ),
             "",
             "Generated on",
             f"{compliance_record.created_at}",
         ],
         [
             "Run group",
-            Paragraph(f"{run_group.name} <i>(ID {run_group.run_group_id})</i>", style=stylesheet.overview_table),
+            Paragraph(
+                f"{run_group.name} <i>(ID {run_group.run_group_id})</i>",
+                style=stylesheet.overview_table,
+            ),
             "",
             "by",
-            Paragraph(f"{requester.user_name} <i>(ID {requester.user_id})</i>", style=stylesheet.overview_table),
+            Paragraph(
+                f"{requester.user_name} <i>(ID {requester.user_id})</i>",
+                style=stylesheet.overview_table,
+            ),
         ],
     ]
 
@@ -326,11 +353,9 @@ def generate_compliance_summary(
     elements.append(Paragraph("Compliance Summary", stylesheet.heading))
     elements.append(
         Paragraph(
-            (
-                "The following compliance classes defined under"
-                f" <b>CSIP-Aus {run_group.csip_aus_version}</b> have been attained by"
-                f" <b>{run_group.name}</b> on <i>{compliance_record.created_at}</i>."
-            )
+            "The following compliance classes defined under"
+            f" <b>CSIP-Aus {run_group.csip_aus_version}</b> have been attained by"
+            f" <b>{run_group.name}</b> on <i>{compliance_record.created_at}</i>."
         )
     )
     elements.append(stylesheet.spacer)
@@ -482,7 +507,11 @@ def pdf_report_as_bytes(
         compliance_id=compliance_id,
         csip_aus_version=csip_aus_version,
     )
-    later_pages = partial(later_pages_template, compliance_id=compliance_id, csip_aus_version=csip_aus_version)
+    later_pages = partial(
+        later_pages_template,
+        compliance_id=compliance_id,
+        csip_aus_version=csip_aus_version,
+    )
 
     with io.BytesIO() as buffer:
         doc = SimpleDocTemplate(

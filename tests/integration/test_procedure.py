@@ -69,7 +69,7 @@ async def test_get_test_procedures_by_id(client, valid_jwt_user1, run_id, status
     # Assert
     assert res.status_code == status
     if status == 200:
-        res.headers["Content-Type"] == "application/yaml"
+        assert res.headers["Content-Type"] == "application/yaml"
         assert len(res.text) > 10
 
 
@@ -115,14 +115,15 @@ async def test_procedure_run_summaries_for_group(
         assert res.status_code == HTTPStatus.OK
         items = TestProcedureRunSummaryResponse.from_json(res.text)
         assert isinstance(items, list)
-        assert (
-            len(items) > 10
-        ), "Not every test is visible to every version (RunGroup) but there should be more tests than records in the DB"
+        assert len(items) > 10, (
+            "Not every test is visible to every version (RunGroup) "
+            "but there should be more tests than records in the DB"
+        )
 
         counts_by_procedure_id = {procedure: count for procedure, count in expected_id_counts}
 
-        assert all((i.category for i in items)), "Should not be empty"
-        assert all((i.description for i in items)), "Should not be empty"
+        assert all(i.category for i in items), "Should not be empty"
+        assert all(i.description for i in items), "Should not be empty"
 
         for summary in items:
             assert summary.run_count == counts_by_procedure_id.get(summary.test_procedure_id, 0)

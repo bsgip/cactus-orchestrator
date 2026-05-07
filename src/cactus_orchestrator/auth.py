@@ -1,10 +1,11 @@
 import base64
 import json
 import logging
-from datetime import datetime, timedelta, timezone
+from collections.abc import Callable, Coroutine
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from http import HTTPStatus
-from typing import Any, Callable, Coroutine, cast
+from typing import Any, cast
 
 import httpx
 import jwt
@@ -62,15 +63,15 @@ class JWTValidator:
 
     def __init__(self, cache_length: timedelta) -> None:
         self.cache_length = cache_length  # How long should the
-        self._settings = JWTAuthSettings()  # type: ignore  [call-arg]
+        self._settings = JWTAuthSettings()  # ty: ignore[missing-argument]
         self._rsa_jwk_cache = AsyncCache(self._update_rsa_jwk_cache, force_update_delay_seconds=10)
 
     def _reload_settings(self) -> None:
         """Not threadsafe / designed for normal - designed for tests to reload the settings. We will need to rework
         the depends/auth to support proper dependency injection to remove this cruft"""
-        self._settings = JWTAuthSettings()  # type: ignore  [call-arg]
+        self._settings = JWTAuthSettings()  # ty: ignore[missing-argument]
 
-    async def _update_rsa_jwk_cache(self, _: Any) -> dict[str, ExpiringValue[str]]:
+    async def _update_rsa_jwk_cache(self, _: object) -> dict[str, ExpiringValue[str]]:
         """Fetchs a single JWK (RSA public key only) from the auth server.
 
         Returns:
@@ -82,10 +83,10 @@ class JWTValidator:
                 response.raise_for_status()
         except httpx.HTTPError as e:
             logger.error(f"Failed to update JWK cache. jwks_url={self._settings.jwks_url}", exc_info=e)
-            raise JWKError(f"Failed to fetch JWKS: {str(e)}")
+            raise JWKError(f"Failed to fetch JWKS: {str(e)}") from e
 
         jwks = response.json().get("keys", [])
-        now = datetime.now(tz=timezone.utc)
+        now = datetime.now(tz=UTC)
         cache_expiry = now + self.cache_length
         new_cache: dict[str, ExpiringValue[str]] = {}
         for key in jwks:
@@ -94,9 +95,7 @@ class JWTValidator:
 
                 pem_key = rsa_key.public_bytes(
                     encoding=serialization.Encoding.PEM, format=serialization.PublicFormat.SubjectPublicKeyInfo
-                ).decode(
-                    "utf-8"
-                )  # NOTE: deserialising here fore cache
+                ).decode("utf-8")  # NOTE: deserialising here fore cache
 
                 kid = key["kid"]
                 logger.debug(f"JWK Cache entry update kid={kid} expiring={cache_expiry}")
@@ -175,7 +174,7 @@ class JWTValidator:
         """Wrap this method in Depends e.g. Depends(jwt_validator.verify_jwt_and_check_perms({"perm1"}))"""
 
         async def _verify_and_check_permissions(
-            auth: HTTPAuthorizationCredentials = Security(security),
+            auth: HTTPAuthorizationCredentials = Security(security),  # noqa: B008
         ) -> UserContext:
             token = auth.credentials
 
@@ -185,13 +184,13 @@ class JWTValidator:
                 permissions = [AuthPerm(p) for p in validated.permissions]
             except Exception as exc:  # It's difficult to know what exception jwt.decode will raise so use catch-all
                 logger.debug(
-                    f"jwks_url='{self._settings.jwks_url}' issuer='{self._settings.issuer}' audience='{self._settings.audience}'"  # noqa: 501
+                    f"jwks_url='{self._settings.jwks_url}' issuer='{self._settings.issuer}' audience='{self._settings.audience}'"  # noqa: E501
                 )
                 logger.error(
                     f"Failure validating JWT claims. required_permissions={required_permissions}.",
                     exc_info=exc,
                 )
-                raise HTTPException(status_code=HTTPStatus.UNAUTHORIZED, detail="Invalid token")
+                raise HTTPException(status_code=HTTPStatus.UNAUTHORIZED, detail="Invalid token") from exc
             return UserContext(subject_id=validated.sub, issuer_id=validated.iss, permissions=permissions)
 
         return _verify_and_check_permissions

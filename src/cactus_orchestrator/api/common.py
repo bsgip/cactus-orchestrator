@@ -3,14 +3,14 @@ from http import HTTPStatus
 
 from cactus_schema.orchestrator import PlaylistRunInfo, RunResponse, RunStatusResponse
 from cactus_test_definitions.client.test_procedures import TestProcedure, TestProcedureId
-
-from cactus_orchestrator.procedures import get_filtered_test_procedures
 from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
+
 from cactus_orchestrator.auth import UserContext
 from cactus_orchestrator.crud import insert_user, select_run_group_for_user, select_run_groups_for_user, select_user
 from cactus_orchestrator.k8s.resource import generate_envoy_dcap_uri, get_resource_names
 from cactus_orchestrator.model import Run, RunGroup, RunStatus, User
+from cactus_orchestrator.procedures import get_filtered_test_procedures
 
 logger = logging.getLogger(__name__)
 
