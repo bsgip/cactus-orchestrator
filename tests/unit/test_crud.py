@@ -718,10 +718,38 @@ async def test_insert_compliance_request(pg_compliance_config):
 
 @pytest.mark.asyncio
 async def test_update_compliance_request(pg_compliance_config):
+    # Arrange
+    compliance_request_id = 1
+    USER_ID = 1  # admin
+    new_compliance_values = {
+        "csip_aus_version": "v1.2",
+        "witness_test": datetime.now(timezone.utc),
+        "der_brand": "new_der_brand",
+        "der_oem": "new_der_oem",
+        "der_series": "new_der_series",
+        "der_representative_models": "new_der_representative_models",
+        "software_client_type": "new_software_client_type",
+        "software_client_providers": "new_software_client_providers",
+        "software_client_versions": "new_software_client_versions",
+        "onsite_hardware_details": "new_onsite_hardware_details",
+    }
+
+    # Act
     async with generate_async_session(pg_compliance_config) as session:
-        request = await select_compliance_request(session=session, compliance_request_id=1)
+        request = await select_compliance_request(session=session, compliance_request_id=compliance_request_id)
         assert request is not None
-        # result = await update_compliance_request(session=session, compliance_request=request)
+        await update_compliance_request(
+            session=session, user_id=USER_ID, compliance_request=request, **new_compliance_values
+        )
+        await session.commit()
+
+    # Assert
+    async with generate_async_session(pg_compliance_config) as session:
+        request = await select_compliance_request(session=session, compliance_request_id=compliance_request_id)
+        assert request is not None
+
+        for field, value in new_compliance_values.items():
+            assert getattr(request, field) == value
 
 
 @pytest.mark.asyncio

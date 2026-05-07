@@ -481,16 +481,41 @@ async def insert_compliance_request(
     return compliance_request
 
 
-async def update_compliance_request(session: AsyncSession, compliance_request_id: int) -> ComplianceRequest:
-    raise NotImplementedError
-    # stmt = update(ComplianceRequest).where(ComplianceRequest.compliance_request_id == compliance_request_id).values()
-    # await session.execute(stmt)
+async def update_compliance_request(
+    session: AsyncSession,
+    user_id: int,
+    compliance_request: ComplianceRequest,
+    csip_aus_version: str,
+    witness_test: datetime,
+    der_brand: str,
+    der_oem: str,
+    der_series: str,
+    der_representative_models: str,
+    software_client_type: str,
+    software_client_providers: str,
+    software_client_versions: str,
+    onsite_hardware_details: str,
+):
+    """Updates the compliance request data
 
-    # run.run_artifact_id = run_artifact_id
-    # run.finalised_at = finalised_at
-    # run.run_status = run_status
-    # run.all_criteria_met = all_criteria_met
-    # await session.flush()
+    This function does not update 'status', 'classes' or 'runs'. Instead use 'update_compliance_status', 'update_compliance_classes' and 'update_compliance_runs'.
+    """
+    compliance_request.csip_aus_version = csip_aus_version
+    compliance_request.witness_test = witness_test
+    compliance_request.der_brand = der_brand
+    compliance_request.der_oem = der_oem
+    compliance_request.der_series = der_series
+    compliance_request.der_representative_models = der_representative_models
+    compliance_request.software_client_type = software_client_type
+    compliance_request.software_client_providers = software_client_providers
+    compliance_request.software_client_versions = software_client_versions
+    compliance_request.onsite_hardware_details = onsite_hardware_details
+
+    # update table metadata
+    compliance_request.updated_at = datetime.now(timezone.utc)
+    compliance_request.updated_by = user_id
+
+    await session.flush()
 
 
 async def update_compliance_request_status(
