@@ -33,11 +33,11 @@ async def patch_user_name(
     try:
         await update_user_name(session=db.session, user_id=user.user_id, user_name=body.user_name)
         await db.session.commit()
-    except Exception as e:
-        logger.error("Exception occurred when updating user name", exc_info=e)
+    except Exception as err:
+        logger.error("Exception occurred when updating user name")
         raise HTTPException(
             status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
             detail=f"Unable to update username of '{user_context.subject_id}.",
-        )
+        ) from err
 
     return True

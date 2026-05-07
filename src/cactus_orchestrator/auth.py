@@ -5,7 +5,7 @@ from collections.abc import Callable, Coroutine
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from http import HTTPStatus
-from typing import cast
+from typing import Any, cast
 
 import httpx
 import jwt

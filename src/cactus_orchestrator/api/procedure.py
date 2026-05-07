@@ -95,11 +95,11 @@ async def get_test_procedure_yaml(
         with resources.as_file(file_name) as yaml_file:
             with open(yaml_file) as fp:
                 text = fp.read()
-    except Exception as exc:
-        logger.error(f"Error reading test procedure {test_procedure_id}", exc_info=exc)
+    except Exception as err:
+        logger.error(f"Error reading test procedure {test_procedure_id}")
         raise HTTPException(
             status_code=HTTPStatus.NOT_FOUND, detail=f"{test_procedure_id} isn't available on this instance"
-        )
+        ) from err
 
     return Response(content=text, status_code=200, media_type="application/yaml")
 

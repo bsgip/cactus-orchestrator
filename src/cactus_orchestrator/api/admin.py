@@ -303,9 +303,8 @@ async def admin_regenerate_report_and_get_run_artifact(
 
     try:
         run = await select_user_run_with_artifact(db.session, user.user_id, run_id)
-    except NoResultFound as exc:
-        logger.debug(exc)
-        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Run does not exist.")
+    except NoResultFound as err:
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Run does not exist.") from err
 
     if run.run_artifact is None:
         raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="RunArtifact does not exist.")
@@ -315,10 +314,10 @@ async def admin_regenerate_report_and_get_run_artifact(
 
     try:
         await regenerate_run_artifact(session=db.session, run_artifact=run.run_artifact)
-    except ValueError as exc:
+    except ValueError as err:
         raise HTTPException(
-            status_code=HTTPStatus.INTERNAL_SERVER_ERROR, detail=f"Unable to regenerate pdf run report ({exc})"
-        )
+            status_code=HTTPStatus.INTERNAL_SERVER_ERROR, detail="Unable to regenerate pdf run report"
+        ) from err
     await db.session.commit()
 
     # Get the download data
@@ -344,17 +343,16 @@ async def admin_get_run_power_limit_chart(
 
     try:
         run = await select_user_run_with_artifact(db.session, user.user_id, run_id)
-    except NoResultFound as exc:
-        logger.debug(exc)
-        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Run does not exist.")
+    except NoResultFound as err:
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Run does not exist.") from err
 
     if run.run_artifact is None:
         raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="RunArtifact does not exist.")
 
     try:
         html = await generate_power_limit_chart(run.run_artifact, video_start_seconds=video_start_seconds)
-    except ValueError as exc:
-        raise HTTPException(status_code=HTTPStatus.CONFLICT, detail=str(exc))
+    except ValueError as err:
+        raise HTTPException(status_code=HTTPStatus.CONFLICT, detail="Chart generation failed.") from err
 
     if html is None:
         raise HTTPException(
@@ -387,7 +385,7 @@ async def admin_get_group_runs_paginated(
     run_group_id: int,
     _: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.admin_all}))],
     finalised: bool | None = Query(default=None),
-    created_after: datetime = Query(default=None),
+    created_after: datetime = Query(default=None),  # noqa: B008
 ) -> Page[RunResponse]:
 
     # get runs
@@ -423,9 +421,8 @@ async def admin_get_run_status(
     # get the run - make sure it's still "running"
     try:
         run = await select_user_run(db.session, user.user_id, run_id)
-    except NoResultFound as exc:
-        logger.debug(exc)
-        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Run does not exist.")
+    except NoResultFound as err:
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Run does not exist.") from err
     if run.run_status not in ACTIVE_RUN_STATUSES:
         raise HTTPException(
             status_code=HTTPStatus.GONE,
@@ -441,15 +438,14 @@ async def admin_get_run_status(
     ) as s:
         try:
             return await RunnerClient.status(s)
-        except Exception as exc:
+        except Exception as err:
             logger.error(
                 f"Error fetching runner status for run {run.run_id} @ {run_resource_names.runner_base_url}.",
-                exc_info=exc,
             )
             raise HTTPException(
                 status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
                 detail=f"Unable to connect to run {run.run_id}'s pod to fetch status.",
-            )
+            ) from err
 
 
 @router.get(uri.AdminRunProceed, status_code=HTTPStatus.OK)
@@ -471,9 +467,8 @@ async def admin_proceed_proxy(
 
     try:
         run = await select_user_run(db.session, user.user_id, run_id)
-    except NoResultFound as exc:
-        logger.debug(exc)
-        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Run does not exist.")
+    except NoResultFound as err:
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Run does not exist.") from err
 
     if run.run_status not in ACTIVE_RUN_STATUSES:
         raise HTTPException(
@@ -488,10 +483,10 @@ async def admin_proceed_proxy(
     ) as s:
         try:
             return await RunnerClient.proceed(s)
-        except Exception as exc:
+        except Exception as err:
             msg = f"Error sending proceed to run {run.run_id}."
-            logger.error(msg, exc_info=exc)
-            raise HTTPException(status_code=HTTPStatus.INTERNAL_SERVER_ERROR, detail=msg)
+            logger.error(msg)
+            raise HTTPException(status_code=HTTPStatus.INTERNAL_SERVER_ERROR, detail=msg) from err
 
 
 @router.get(uri.AdminRun, status_code=HTTPStatus.OK)
@@ -514,9 +509,8 @@ async def admin_get_individual_run(
     # get run
     try:
         run = await select_user_run(db.session, user.user_id, run_id)
-    except NoResultFound as exc:
-        logger.debug(exc)
-        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Not Found")
+    except NoResultFound as err:
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Not Found") from err
 
     return map_run_to_run_response(run)
 
@@ -536,21 +530,21 @@ async def admin_get_group_run_compliance_artifact(
         compliance_record = await insert_compliance_generation_record(
             session=db.session, run_group_id=run_group_id, requester_id=requester_id
         )
-    except Exception as e:
-        logger.error(e)
+    except Exception as err:
         raise HTTPException(
             status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
             detail=f"Unable to insert ComplianceRecord for {run_group_id=} and {requester_id=}",
-        )
+        ) from err
 
     # Generate compliance report
     try:
         run_group_artifact = await artifact.generate_run_group_artifact(
             session=db.session, run_group_id=run_group_id, requester=requester, compliance_record=compliance_record
         )
-    except NoResultFound as e:
-        logger.error(e)
-        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail=f"Run group {run_group_id} does not exist.")
+    except NoResultFound as err:
+        raise HTTPException(
+            status_code=HTTPStatus.NOT_FOUND, detail=f"Run group {run_group_id} does not exist."
+        ) from err
 
     if run_group_artifact is None:
         raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="RunGroupArtifact does not exist.")
@@ -560,14 +554,13 @@ async def admin_get_group_run_compliance_artifact(
         await update_compliance_generation_record_with_file_data(
             db.session, compliance_record=compliance_record, file_data=run_group_artifact.file_data
         )
-    except Exception as e:
-        logger.error(e)
+    except Exception as err:
         raise HTTPException(
             status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
             detail=(
                 f"Unable to update ComplianceRecord with compliance file data for {run_group_id=} and {requester_id=}"
             ),
-        )
+        ) from err
 
     await db.session.commit()
 

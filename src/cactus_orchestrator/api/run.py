@@ -126,9 +126,8 @@ async def get_run_artifact_response_for_user(user: User, run_id: int) -> Respons
     # get run
     try:
         run = await select_user_run_with_artifact(db.session, user.user_id, run_id)
-    except NoResultFound as exc:
-        logger.debug(exc)
-        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Run does not exist.")
+    except NoResultFound as err:
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Run does not exist.") from err
 
     if run.run_artifact is None:
         raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="RunArtifact does not exist.")
@@ -156,7 +155,7 @@ async def get_group_runs_paginated(
     run_group_id: int,
     user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.user_all}))],
     finalised: bool | None = Query(default=None),
-    created_after: datetime = Query(default=None),
+    created_after: datetime = Query(default=None),  # noqa: B008
 ) -> Page[RunResponse]:
     # check permissions
     await select_user_run_group_or_raise(db.session, user_context, run_group_id)
@@ -175,7 +174,7 @@ async def get_group_runs_paginated(
     uri.RunGroupRunList,
     status_code=HTTPStatus.CREATED,
 )
-async def spawn_teststack_and_init_run(
+async def spawn_teststack_and_init_run(  # noqa: C901
     test: InitRunRequest,
     run_group_id: int,
     user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.user_all}))],
@@ -347,10 +346,10 @@ async def spawn_teststack_and_init_run(
         # finally, include new service in ingress rule
         await add_ingress_rule(run_resource_names, user_identifier)
 
-    except (CactusOrchestratorError, RunnerClientError) as exc:
-        logger.info("Failure to initialise runner. Will teardown any resources.", exc_info=exc)
+    except (CactusOrchestratorError, RunnerClientError) as err:
+        logger.info("Failure to initialise runner. Will teardown any resources.")
         await teardown_teststack(run_resource_names)
-        raise HTTPException(HTTPStatus.INTERNAL_SERVER_ERROR, detail="Internal Server Error")
+        raise HTTPException(HTTPStatus.INTERNAL_SERVER_ERROR, detail="Internal Server Error") from err
 
     # commit DB changes - update first run status
     new_run_status = RunStatus.started if init_result.is_started else RunStatus.initialised
@@ -398,9 +397,8 @@ async def start_run(
     # get run
     try:
         run = await select_user_run(db.session, user.user_id, run_id)
-    except NoResultFound as exc:
-        logger.debug(exc)
-        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Not Found")
+    except NoResultFound as err:
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Not Found") from err
 
     # For playlist runs, validate this is the current active test
     if run.playlist_execution_id:
@@ -428,26 +426,24 @@ async def start_run(
     ) as s:
         try:
             await RunnerClient.start(s)
-        except RunnerClientError as exc:
+        except RunnerClientError as err:
             # Runner uses 412 to indicate unmet app-level preconditions (i.e. init phase steps not completed),
             # we 'proxy' this through.
-            if exc.http_status_code == HTTPStatus.PRECONDITION_FAILED:
-                logger.info(
-                    f"Received a precondition failure on start for user {user.user_id} run {run_id}", exc_info=exc
-                )
+            if err.http_status_code == HTTPStatus.PRECONDITION_FAILED:
+                logger.info(f"Received a precondition failure on start for user {user.user_id} run {run_id}")
                 error_message = (
                     "One or more preconditions are incomplete or invalid"
-                    if exc.error_message is None
-                    else exc.error_message
+                    if err.error_message is None
+                    else err.error_message
                 )
-                raise HTTPException(HTTPStatus.PRECONDITION_FAILED, error_message)
+                raise HTTPException(HTTPStatus.PRECONDITION_FAILED, error_message) from err
 
             # raising server error as default
-            logger.error(f"Received an unexpected failure on start for user {user.user_id} run {run_id}", exc_info=exc)
-            raise HTTPException(HTTPStatus.INTERNAL_SERVER_ERROR)
-        except Exception as exc:
-            logger.error(f"Unexpected connection error on start for user {user.user_id} run {run_id}", exc_info=exc)
-            raise HTTPException(HTTPStatus.INTERNAL_SERVER_ERROR)
+            logger.error(f"Received an unexpected failure on start for user {user.user_id} run {run_id}")
+            raise HTTPException(HTTPStatus.INTERNAL_SERVER_ERROR) from err
+        except Exception as err:
+            logger.error(f"Unexpected connection error on start for user {user.user_id} run {run_id}")
+            raise HTTPException(HTTPStatus.INTERNAL_SERVER_ERROR) from err
 
     # update status
     await update_run_run_status(session=db.session, run_id=run.run_id, run_status=RunStatus.started)
@@ -558,9 +554,8 @@ async def get_individual_run(
     # get run
     try:
         run = await select_user_run(db.session, user.user_id, run_id)
-    except NoResultFound as exc:
-        logger.debug(exc)
-        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Not Found")
+    except NoResultFound as err:
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Not Found") from err
 
     # Fetch playlist_runs if this is a playlist run
     playlist_runs = None
@@ -588,9 +583,8 @@ async def delete_individual_run(
     # get run
     try:
         run = await select_user_run(db.session, user.user_id, run_id)
-    except NoResultFound as exc:
-        logger.debug(exc)
-        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Not Found")
+    except NoResultFound as err:
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Not Found") from err
 
     logger.info(f"Delete requested for run {run_id} by user {user.subject_id}")
 
@@ -612,7 +606,7 @@ async def delete_individual_run(
 
 
 @router.post(uri.RunFinalise, status_code=HTTPStatus.OK)
-async def finalise_run_and_teardown_teststack(
+async def finalise_run_and_teardown_teststack(  # noqa: C901
     run_id: int,
     user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.user_all}))],
 ) -> Response:
@@ -629,9 +623,8 @@ async def finalise_run_and_teardown_teststack(
     # get run
     try:
         run = await select_user_run_with_artifact(db.session, user.user_id, run_id)
-    except NoResultFound as exc:
-        logger.debug(exc)
-        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Not Found")
+    except NoResultFound as err:
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Not Found") from err
 
     # Don't attempt to cleanup / teardown if this has already been finalised
     if run.run_status in ACTIVE_RUN_STATUSES:
@@ -725,9 +718,8 @@ async def finalise_playlist(
 
     try:
         run = await select_user_run_with_artifact(db.session, user.user_id, run_id)
-    except NoResultFound as exc:
-        logger.debug(exc)
-        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Not Found")
+    except NoResultFound as err:
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Not Found") from err
 
     if not run.playlist_execution_id:
         raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail="Run is not part of a playlist")
@@ -793,16 +785,16 @@ async def get_run_power_limit_chart(
 
     try:
         run = await select_user_run_with_artifact(db.session, user.user_id, run_id)
-    except NoResultFound:
-        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Run does not exist.")
+    except NoResultFound as err:
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Run does not exist.") from err
 
     if run.run_artifact is None:
         raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="RunArtifact does not exist.")
 
     try:
         html = await generate_power_limit_chart(run.run_artifact, video_start_seconds=video_start_seconds)
-    except ValueError as exc:
-        raise HTTPException(status_code=HTTPStatus.CONFLICT, detail=str(exc))
+    except ValueError as err:
+        raise HTTPException(status_code=HTTPStatus.CONFLICT, detail="Chart generation failed.") from err
 
     if html is None:
         raise HTTPException(
@@ -864,9 +856,8 @@ async def get_run_status(
     # get the run - make sure it's still "running"
     try:
         run = await select_user_run(db.session, user.user_id, run_id)
-    except NoResultFound as exc:
-        logger.debug(exc)
-        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Run does not exist.")
+    except NoResultFound as err:
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Run does not exist.") from err
     if run.run_status not in ACTIVE_RUN_STATUSES:
         raise HTTPException(
             status_code=HTTPStatus.GONE,
@@ -882,15 +873,14 @@ async def get_run_status(
     ) as s:
         try:
             return await RunnerClient.status(s)
-        except Exception as exc:
+        except Exception as err:
             logger.error(
                 f"Error fetching runner status for run {run.run_id} @ {run_resource_names.runner_base_url}.",
-                exc_info=exc,
             )
             raise HTTPException(
                 status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
                 detail=f"Unable to connect to run {run.run_id}'s pod to fetch status.",
-            )
+            ) from err
 
 
 @router.get(uri.RunRequestList, status_code=HTTPStatus.OK)
@@ -907,9 +897,8 @@ async def get_run_request_list(
     # get the run - make sure it's still "running"
     try:
         run = await select_user_run(db.session, user.user_id, run_id)
-    except NoResultFound as exc:
-        logger.debug(exc)
-        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Run does not exist.")
+    except NoResultFound as err:
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Run does not exist.") from err
     if run.run_status not in ACTIVE_RUN_STATUSES:
         raise HTTPException(
             status_code=HTTPStatus.GONE,
@@ -925,15 +914,14 @@ async def get_run_request_list(
     ) as s:
         try:
             return await RunnerClient.list_requests(s)
-        except Exception as exc:
+        except Exception as err:
             logger.error(
                 f"Error fetching runner request list for run {run.run_id} @ {run_resource_names.runner_base_url}.",
-                exc_info=exc,
             )
             raise HTTPException(
                 status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
                 detail=f"Unable to connect to run {run.run_id}'s pod to fetch request list.",
-            )
+            ) from err
 
 
 @router.get(uri.RunRequest, status_code=HTTPStatus.OK)
@@ -952,9 +940,8 @@ async def get_run_request_data(
     # get the run - make sure it's still "running"
     try:
         run = await select_user_run(db.session, user.user_id, run_id)
-    except NoResultFound as exc:
-        logger.debug(exc)
-        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Run does not exist.")
+    except NoResultFound as err:
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Run does not exist.") from err
     if run.run_status not in ACTIVE_RUN_STATUSES:
         raise HTTPException(
             status_code=HTTPStatus.GONE,
@@ -970,15 +957,14 @@ async def get_run_request_data(
     ) as s:
         try:
             return await RunnerClient.get_request(s, request_id)
-        except Exception as exc:
+        except Exception as err:
             logger.error(
                 f"Error fetching runner req {request_id} for run {run.run_id} @ {run_resource_names.runner_base_url}.",
-                exc_info=exc,
             )
             raise HTTPException(
                 status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
                 detail=f"Unable to connect to run {run.run_id}'s pod to fetch request {request_id}.",
-            )
+            ) from err
 
 
 @router.get(uri.RunProceed, status_code=HTTPStatus.OK)
@@ -994,9 +980,8 @@ async def proceed_proxy(
     # get the run - make sure it's still "running"
     try:
         run = await select_user_run(db.session, user.user_id, run_id)
-    except NoResultFound as exc:
-        logger.debug(exc)
-        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Run does not exist.")
+    except NoResultFound as err:
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Run does not exist.") from err
 
     if run.run_status not in ACTIVE_RUN_STATUSES:
         raise HTTPException(
@@ -1011,7 +996,7 @@ async def proceed_proxy(
     ) as s:
         try:
             return await RunnerClient.proceed(s)
-        except Exception as exc:
+        except Exception as err:
             msg = f"Error sending proceed to run {run.run_id}."
-            logger.error(msg, exc_info=exc)
-            raise HTTPException(status_code=HTTPStatus.INTERNAL_SERVER_ERROR, detail=msg)
+            logger.error(msg)
+            raise HTTPException(status_code=HTTPStatus.INTERNAL_SERVER_ERROR, detail=msg) from err
