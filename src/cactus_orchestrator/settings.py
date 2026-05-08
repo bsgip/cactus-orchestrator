@@ -5,8 +5,8 @@ from kubernetes import client, config
 from pydantic import PostgresDsn
 from pydantic_settings import BaseSettings
 
-TLS_SERVER_SECRET_NAME_FORMAT = "tls-server-{domain}"  # noqa: S105, nosec B105
-TLS_CA_SECRET_NAME_FORMAT = "tls-ca-{ingress_name}"  # noqa: S105, nosec B105
+TLS_SERVER_SECRET_NAME_FORMAT = "tls-server-{domain}"  # noqa: S105 # nosec B105
+TLS_CA_SECRET_NAME_FORMAT = "tls-ca-{ingress_name}"  # noqa: S105 # nosec B105
 # NOTE: follwing two must be kept similar
 DEFAULT_INGRESS_PATH_FORMAT = "/{svc_name}/(.*)"
 TEST_EXECUTION_URL_FORMAT = "https://{fqdn}/{svc_name}"
@@ -44,16 +44,26 @@ class CactusOrchestratorSettings(BaseSettings):
     test_execution_namespace: str = "test-execution"
     test_execution_ingress_name: str = "test-execution-ingress"
     teststack_service_port: int = 80
-    test_execution_comms_timeout_seconds: int = 120  # The default timeout to use when making requests to the test stack
+    test_execution_comms_timeout_seconds: int = (
+        120  # The default timeout to use when making requests to the test stack
+    )
 
     # teststack templates
     teststack_templates_namespace: str = "teststack-templates"
-    template_service_name_prefix: str = "envoy-svc-"  # Will be combined with CSIP-Aus Version identifier / uuid
-    template_app_name_prefix: str = "envoy-"  # Will be combined with CSIP-Aus Version identifier / uuid
-    template_statefulset_name_prefix: str = "envoy-set-"  # Will be combined with CSIP-Aus Version identifier  / uuid
+    template_service_name_prefix: str = (
+        "envoy-svc-"  # Will be combined with CSIP-Aus Version identifier / uuid
+    )
+    template_app_name_prefix: str = (
+        "envoy-"  # Will be combined with CSIP-Aus Version identifier / uuid
+    )
+    template_statefulset_name_prefix: str = (
+        "envoy-set-"  # Will be combined with CSIP-Aus Version identifier  / uuid
+    )
 
     # certificates
-    cert_serca_secret_name: str = "cert-serca"  # The raw SERCA root certificate (no key) under ca.crt
+    cert_serca_secret_name: str = (
+        "cert-serca"  # The raw SERCA root certificate (no key) under ca.crt
+    )
     cert_mca_secret_name: str = (
         "cert-mca-cactus"  # The Manufacturer CA certificate (no key) under ca.crt (signed by serca)
     )
@@ -66,7 +76,9 @@ class CactusOrchestratorSettings(BaseSettings):
     # teardown
     idleteardowntask_enable: bool = True
     idleteardowntask_max_lifetime_seconds: int = 3600 * 24 * 4  # 4 days
-    idleteardowntask_idle_timeout_seconds: int = 7200  # 2 hour (some tests have 1 hour poll/post rate)
+    idleteardowntask_idle_timeout_seconds: int = (
+        7200  # 2 hour (some tests have 1 hour poll/post rate)
+    )
     idleteardowntask_repeat_every_seconds: int = 120
 
     # readiness
