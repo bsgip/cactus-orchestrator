@@ -132,7 +132,8 @@ async def test_regenerate_pdf_report_raises_exception(run_artifact: RunArtifact)
     original_reporting_data = run_artifact.reporting_data
 
     with pytest.raises(ValueError) as excinfo:
-        await regenerate_pdf_report(file_data=run_artifact.file_data, raw_reporting_data=None, version=None)
+        # Ignore the weird typing here - we are explicitly trying to break things
+        await regenerate_pdf_report(file_data=run_artifact.file_data, raw_reporting_data=None, version=None)  # ty:ignore[invalid-argument-type]
     assert "Failed to convert json" in str(excinfo.value)
 
     with pytest.raises(ValueError) as excinfo:

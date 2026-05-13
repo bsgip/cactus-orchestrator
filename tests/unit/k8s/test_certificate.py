@@ -48,7 +48,7 @@ def test_calculate_rfc5280_subject_key_identifier_method_2(private_key: bytes, e
 
     """
     ec_private_key = serialization.load_pem_private_key(private_key, password=None)
-    actual = calculate_rfc5280_subject_key_identifier_method_2(ec_private_key.public_key())
+    actual = calculate_rfc5280_subject_key_identifier_method_2(ec_private_key.public_key())  # ty:ignore[invalid-argument-type]
     assert isinstance(actual, bytes)
     assert actual == expected_ski
 
@@ -72,6 +72,7 @@ def test_generate_client_p12_ec(mica_cert_key_pair):
 
     # Check that the new cert is signed by mica
     mica_public_key = mica_cert.public_key()
+    assert cl_cert.signature_hash_algorithm is not None
     mica_public_key.verify(cl_cert.signature, cl_cert.tbs_certificate_bytes, ec.ECDSA(cl_cert.signature_hash_algorithm))
     assert (
         cl_cert.extensions.get_extension_for_class(x509.AuthorityKeyIdentifier).value.key_identifier

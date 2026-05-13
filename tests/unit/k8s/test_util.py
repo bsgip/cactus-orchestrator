@@ -34,6 +34,7 @@ async def test_async_k8s_api_retry_takes_args():
         return arg, kwarg
 
     result = await arg_function("hi", kwarg="kwarg1")
+    assert result is not None
     assert result[0] == "hi"
     assert result[1] == "kwarg1"
 

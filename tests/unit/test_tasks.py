@@ -113,6 +113,7 @@ async def test_teardown_idle_teststack(k8s_mock, pg_base_config, client):
         )
         for r in finalised_runs:
             assert r.run_status == RunStatus.finalised_by_timeout
+            assert r.finalised_at is not None
             assert_nowish(r.finalised_at)
 
     # Check we cleared up k8's
