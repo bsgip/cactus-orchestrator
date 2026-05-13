@@ -1,7 +1,7 @@
 import asyncio
+from collections.abc import Generator
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from typing import Generator
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 from uuid import uuid4
 
@@ -45,9 +45,9 @@ def k8s_mock() -> Generator[MockedK8s, None, None]:
 @pytest.mark.parametrize(
     ("idle", "created_at", "expect_teardown"),
     [
-        (True, datetime.now(tz=timezone.utc), True),  # idle timeout,
-        (False, datetime(2025, 1, 1, tzinfo=timezone.utc), True),  # max lifetime
-        (False, datetime.now(tz=timezone.utc), False),
+        (True, datetime.now(tz=UTC), True),  # idle timeout,
+        (False, datetime(2025, 1, 1, tzinfo=UTC), True),  # max lifetime
+        (False, datetime.now(tz=UTC), False),
     ],
 )
 @patch("cactus_orchestrator.crud.select_nonfinalised_runs", spec=AsyncMock)
@@ -116,7 +116,6 @@ async def test_teardown_idle_teststack(k8s_mock, pg_base_config, client):
             assert_nowish(r.finalised_at)
 
     # Check we cleared up k8's
-    Mock.call_count
     assert k8s_mock.last_interaction.call_count == len(expected_finalised_run_ids)
     assert k8s_mock.delete_service.call_count == len(expected_finalised_run_ids)
     assert k8s_mock.delete_statefulset.call_count == len(expected_finalised_run_ids)
@@ -140,7 +139,7 @@ async def test_teardown_idle_teststack_with_playlist(mock_finalize_runs, mock_te
             run_group_id=1,
             teststack_id="playlist-teststack",
             testprocedure_id="ALL-01",
-            created_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
+            created_at=datetime(2024, 1, 1, tzinfo=UTC),
             finalised_at=None,
             run_status=RunStatus.started,
             playlist_execution_id=playlist_execution_id,

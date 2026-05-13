@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from http import HTTPStatus
 
 import pytest
@@ -35,7 +35,7 @@ async def test_get_groups_paginated(client, pg_base_config, valid_jwt_user1):
     assert items[1].total_runs == 1
     assert items[0].is_device_cert is True
     assert items[1].is_device_cert is None
-    assert items[0].certificate_created_at == datetime(2023, 1, 1, 0, 1, 0, tzinfo=timezone.utc)
+    assert items[0].certificate_created_at == datetime(2023, 1, 1, 0, 1, 0, tzinfo=UTC)
     assert items[1].certificate_created_at is None
     assert items[0].certificate_id == 11
     assert items[1].certificate_id == 0

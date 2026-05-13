@@ -8,7 +8,6 @@ from assertical.fixtures.postgres import generate_async_session
 from cactus_runner.models import (
     ActiveTestProcedure,
     CheckResult,
-    ReportingData,
     ReportingData_v1,
     ResourceAnnotations,
     RunnerState,
@@ -52,7 +51,7 @@ async def test_replace_pdf_in_zip_data_no_existing_pdf():
 @pytest.mark.asyncio
 @pytest.mark.parametrize("original_data, replacement_data", [(b"before", b"after"), (b"before", b"before")])
 async def test_replace_pdf_in_zip_data(original_data: bytes, replacement_data: bytes):
-    PDF_FILENAME = f"CactusTestProcedureReport.pdf"
+    PDF_FILENAME = "CactusTestProcedureReport.pdf"
     TXT_FILENAME = "other_file.txt"
     TXT_DATA = b"other"
 
@@ -84,7 +83,7 @@ async def test_replace_pdf_in_zip_data(original_data: bytes, replacement_data: b
 
 @pytest.fixture
 def run_artifact() -> RunArtifact:
-    PDF_FILENAME = f"CactusTestProcedureReport.pdf"
+    PDF_FILENAME = "CactusTestProcedureReport.pdf"
     TXT_FILENAME = "other_file.txt"
     PDF_DATA = b"before"
     TXT_DATA = b"other"

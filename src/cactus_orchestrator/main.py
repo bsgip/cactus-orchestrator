@@ -24,7 +24,7 @@ from cactus_orchestrator.tasks import lifespan
 # Setup logs
 logconf_fp = "./logconf.json"
 if os.path.exists(logconf_fp):
-    with open(logconf_fp, "r") as f:
+    with open(logconf_fp) as f:
         logging.config.dictConfig(json.load(f))
 else:
     logging.basicConfig(level=logging.INFO)

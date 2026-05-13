@@ -9,11 +9,11 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.types import CertificateIssuerPrivateKeyTypes
 from kubernetes import client
 
-from cactus_orchestrator.settings import CactusOrchestratorException, get_current_settings, v1_core_api
+from cactus_orchestrator.settings import CactusOrchestratorError, get_current_settings, v1_core_api
 
 
 class SecretString:
-    def __init__(self, secret: str):
+    def __init__(self, secret: str) -> None:
         self._secret = secret
 
     def __str__(self) -> str:
@@ -45,13 +45,11 @@ async def fetch_certificate_key_pair(
     namespace = namespace or get_current_settings().test_execution_namespace
 
     # Read secret
-    res: ApplyResult = v1_core_api.read_namespaced_secret(
-        secret_name, namespace=namespace, async_req=True
-    )  # type: ignore
+    res: ApplyResult = v1_core_api.read_namespaced_secret(secret_name, namespace=namespace, async_req=True)  # type: ignore
     secret: client.V1Secret = await asyncio.to_thread(res.get)
 
     if secret is None or secret.data is None:
-        raise CactusOrchestratorException(f"secret {secret_name} not found in namespace {namespace}")
+        raise CactusOrchestratorError(f"secret {secret_name} not found in namespace {namespace}")
 
     # Decode b64 encoded cert and key
     crt_bytes = base64.b64decode(secret.data["tls.crt"])
@@ -68,20 +66,18 @@ async def fetch_certificate_key_pair(
     if not isinstance(private_key, tuple(get_args(CertificateIssuerPrivateKeyTypes))):
         raise TypeError(f"Invalid private key type for {secret_name}")
 
-    return certificate, private_key  # type: ignore
+    return certificate, private_key
 
 
 async def fetch_certificate_only(secret_name: str, namespace: str | None = None) -> x509.Certificate:
     namespace = namespace or get_current_settings().test_execution_namespace
 
     # Read secret
-    res: ApplyResult = v1_core_api.read_namespaced_secret(
-        secret_name, namespace=namespace, async_req=True
-    )  # type: ignore
+    res: ApplyResult = v1_core_api.read_namespaced_secret(secret_name, namespace=namespace, async_req=True)  # type: ignore
     secret: client.V1Secret = await asyncio.to_thread(res.get)
 
     if secret is None or secret.data is None:
-        raise CactusOrchestratorException(f"secret {secret_name} not found in namespace {namespace}")
+        raise CactusOrchestratorError(f"secret {secret_name} not found in namespace {namespace}")
 
     # Decode b64 encoded cert
     crt_bytes = base64.b64decode(secret.data["ca.crt"])

@@ -16,7 +16,7 @@ OID_POLICY_TEST = "1.3.6.1.4.1.40732.2.1"  # Defined in 2030.5:2018 - Section 6.
 class ServiceProviderIdentifier(univ.Sequence):
     """ASN.1 Structure 2030.5"""
 
-    componentType = namedtype.NamedTypes(
+    componentType = namedtype.NamedTypes(  # noqa: N815
         namedtype.NamedType("oid", univ.ObjectIdentifier()),
         namedtype.NamedType("value", univ.OctetString()),
     )

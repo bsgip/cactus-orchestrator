@@ -1,7 +1,7 @@
 import io
 import logging
 import zipfile
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from http import HTTPStatus
 from typing import Annotated
 
@@ -17,7 +17,7 @@ from cactus_orchestrator.api.common import select_user_run_group_or_raise, selec
 from cactus_orchestrator.auth import AuthPerm, UserContext, jwt_validator
 from cactus_orchestrator.k8s.certificate.create import generate_client_p12_ec
 from cactus_orchestrator.k8s.certificate.fetch import fetch_certificate_key_pair, fetch_certificate_only
-from cactus_orchestrator.settings import CactusOrchestratorException, get_current_settings
+from cactus_orchestrator.settings import CactusOrchestratorError, get_current_settings
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +42,7 @@ async def fetch_current_certificate_authority_der(
     """Fetches a PEM encoded SERCA certificate (trust anchor for the signing chain)"""
     serca_cert = await fetch_certificate_only(get_current_settings().cert_serca_secret_name)
     if serca_cert is None:
-        raise CactusOrchestratorException("SERCA certificate not found.")
+        raise CactusOrchestratorError("SERCA certificate not found.")
 
     return Response(
         content=serca_cert.public_bytes(serialization.Encoding.PEM),
@@ -111,7 +111,7 @@ async def generate_shared_aggregator_certificate(
     # Get the user / run_groups
     user, run_groups = await select_user_run_groups_or_raise(db.session, user_context)
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     # Determine csip aus version identifier
     csip_aus_versions = [run_group.csip_aus_version for run_group in run_groups]
@@ -199,7 +199,7 @@ async def generate_client_certificate(
     # Get the user / run_group
     user, run_group = await select_user_run_group_or_raise(db.session, user_context, run_group_id, with_cert=True)
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     # Generate the cert
     cert_counter = run_group.certificate_id + 1
