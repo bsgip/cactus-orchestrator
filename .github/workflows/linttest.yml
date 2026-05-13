@@ -23,7 +23,7 @@ jobs:
           python-version: ${{ matrix.pyver }}
       - name: Install Dependencies
         run: |
-          pip install .[dev, test]
+          pip install .[dev,test]
       - name: Lint (ruff)
         run: ruff check .
       - name: Format check
