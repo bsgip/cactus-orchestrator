@@ -55,7 +55,7 @@ test = [
     "pytest-env",
     "pytest-postgresql",
     "psycopg",
-    "assertical",
+    "assertical >= 0.4.0",
     "pytest-asyncio",
     "asgi_lifespan",
 ]
@@ -92,7 +92,7 @@ markers = [
 ]
 
 [tool.ty.src]
-exclude = ["tests", "alembic"]
+include = ["src", "tests"]
 
 
 [tool.setuptools.dynamic]

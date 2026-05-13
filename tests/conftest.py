@@ -3,7 +3,6 @@ import inspect
 import os
 from collections.abc import Generator
 from datetime import UTC, datetime, timedelta
-from typing import Any
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import jwt
@@ -13,8 +12,8 @@ from assertical.fixtures.environment import environment_snapshot
 from assertical.fixtures.fastapi import start_app_with_client
 from assertical.fixtures.postgres import generate_async_conn_str_from_connection
 from cryptography import x509
-from cryptography.hazmat.primitives import asymmetric, hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec, rsa
 from cryptography.x509.oid import NameOID
 from envoy.server.alembic import upgrade as envoy_upgrade
 from kubernetes.client import V1Secret
@@ -184,11 +183,11 @@ def client_cert_expired_pem_bytes(client_cert_key_pair_expired) -> bytes:
 
 @pytest.fixture(scope="session")
 def rsa_key():
-    return asymmetric.rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    return rsa.generate_private_key(public_exponent=65537, key_size=2048)
 
 
 @pytest.fixture(scope="session")
-def kid_and_jwks_stub(rsa_key) -> tuple[str, dict[str, list[str, Any]]]:
+def kid_and_jwks_stub(rsa_key) -> tuple[str, dict[str, list[dict[str, str]]]]:
     public_key = rsa_key.public_key()
     kid = "test-kid"
     public_numbers = public_key.public_numbers()
@@ -323,7 +322,7 @@ def execute_test_sql_file(cfg: Connection, path_to_sql_file: str) -> None:
     with open(path_to_sql_file) as f:
         sql = f.read()
     with cfg.cursor() as cursor:
-        cursor.execute(sql)
+        cursor.execute(sql)  # ty:ignore[no-matching-overload]
         cfg.commit()
 
 

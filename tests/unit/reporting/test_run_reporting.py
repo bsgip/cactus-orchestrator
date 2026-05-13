@@ -9,6 +9,7 @@ from assertical.fake.generator import generate_class_instance
 from cactus_runner.app.envoy_common import ReadingLocation
 from cactus_runner.app.timeline import Timeline, TimelineDataStream
 from cactus_runner.models import ActiveTestProcedure, CheckResult, ReadingType, RunnerState, StepInfo
+from cactus_runner.models import Site as CactusRunnerSite
 from cactus_schema.runner import ClientInteraction, ClientInteractionType, RequestEntry
 from cactus_test_definitions.client import TestProcedureId, get_test_procedure
 from envoy.server.model import Site, SiteDER, SiteDERAvailability, SiteDERRating, SiteDERSetting, SiteDERStatus
@@ -393,7 +394,7 @@ def test_pdf_report_everything_set():
 
     site_list = [
         generate_class_instance(
-            Site,
+            CactusRunnerSite,
             site_ders=site_ders,
             nmi="NMI0000001",
             timezone_id="Australia/Sydney",
@@ -450,7 +451,7 @@ def test_validate_cell_with_int_enums(col_idx, field_name, valid_value, enum_mem
         "phase": PhaseCode.PHASE_ABC.value,
     }
     overrides = {field_name: valid_value}
-    kwargs = defaults | overrides
+    kwargs: dict = defaults | overrides
     reading_type_int = generate_class_instance(
         ReadingType,
         **kwargs,
@@ -461,7 +462,7 @@ def test_validate_cell_with_int_enums(col_idx, field_name, valid_value, enum_mem
     assert error is None, f"Expected no error for int {field_name} value {valid_value}"
 
     overrides = {field_name: enum_member}
-    kwargs = defaults | overrides
+    kwargs: dict = defaults | overrides
     # Test with enum member (should also work the same)
     reading_type_enum = generate_class_instance(
         ReadingType,

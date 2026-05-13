@@ -97,6 +97,7 @@ async def test_generate_new_certificate_and_fetch(
     cert_chain = x509.load_pem_x509_certificates(cert_chain_bytes)
     cert = cert_chain[0]  # Extract cert from the chain as we no longer save to zip
     pfx_key, pfx_cert, pfx_additional_certs = pkcs12.load_key_and_certificates(pfx_bytes, None)
+    assert pfx_key is not None
 
     # Do some basic sanity checks
     assert cert_chain == [cert, mica_cert_key_pair[0], mca_cert_key_pair[0]]
@@ -120,6 +121,7 @@ async def test_generate_new_certificate_and_fetch(
         ).scalar_one()
         cert_bytes = cert.public_bytes(Encoding.PEM)
         assert run_group.certificate_pem == cert_bytes
+        assert run_group.certificate_generated_at is not None
         assert_nowish(run_group.certificate_generated_at)
         assert run_group.is_device_cert == is_device_cert
         assert run_group.certificate_id == (original_cert_id + 1)
@@ -233,6 +235,7 @@ async def test_generate_shared_aggregator_certificate_and_fetch(
     cert_chain = x509.load_pem_x509_certificates(cert_chain_bytes)
     cert = cert_chain[0]  # Extract cert from the chain as we no longer save to zip
     pfx_key, pfx_cert, pfx_additional_certs = pkcs12.load_key_and_certificates(pfx_bytes, None)
+    assert pfx_key is not None
 
     # Do some basic sanity checks
     assert cert_chain == [cert, mica_cert_key_pair[0], mca_cert_key_pair[0]]
@@ -257,6 +260,7 @@ async def test_generate_shared_aggregator_certificate_and_fetch(
             ).scalar_one()
             cert_bytes = cert.public_bytes(Encoding.PEM)
             assert run_group.certificate_pem == cert_bytes
+            assert run_group.certificate_generated_at is not None
             assert_nowish(run_group.certificate_generated_at)
             assert not run_group.is_device_cert  # must be an aggregator cert if shared
             assert run_group.certificate_id == max_original_certificate_id + 1
