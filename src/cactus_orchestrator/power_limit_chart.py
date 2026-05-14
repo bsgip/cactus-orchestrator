@@ -24,24 +24,9 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 import plotly.graph_objects as go  # type: ignore[import-untyped]
-from cactus_runner.app.envoy_common import (
-    get_active_site,
-    get_site_control_group_defaults_with_archive,
-    get_site_controls_active_archived,
-)
 from cactus_schema.runner.schema import RequestEntry
-from envoy.server.model.archive.doe import (
-    ArchiveDynamicOperatingEnvelope,
-    ArchiveSiteControlGroupDefault,
-)
-from envoy.server.model.doe import (
-    DynamicOperatingEnvelope,
-    SiteControlGroup,
-    SiteControlGroupDefault,
-)
-from envoy.server.model.site import SiteDERSetting
-from envoy.server.model.subscription import Subscription, SubscriptionResource
-from sqlalchemy import select
+from envoy.server.model.subscription import SubscriptionResource
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
@@ -61,9 +46,6 @@ _POST_DISCONNECT_WGRA_SECONDS: float = 6 * 60.0
 # Matches /edev/{n}/derp/{group_id}/derc (with optional query string)
 _DERC_PATH_RE = re.compile(r"/edev/\d+/derp/(\d+)/derc")
 
-# Type alias for default control models (active or archived)
-_DefaultLike = SiteControlGroupDefault | ArchiveSiteControlGroupDefault
-
 # Cycling colour palette for step-name bands (semi-transparent fills)
 _STEP_PALETTE = [
     "rgba(130,179,255,0.45)",
@@ -75,14 +57,73 @@ _STEP_PALETTE = [
 ]
 
 
+# ─── Raw DB row types ─────────────────────────────────────────────────────────
+
+
+@dataclass
+class _RawDERSetting:
+    max_w_value: int
+    max_w_multiplier: int
+
+
+@dataclass
+class _RawControlGroup:
+    site_control_group_id: int
+    primacy: int
+
+
+@dataclass
+class _RawDOE:
+    """Minimal DOE columns fetched from either the active or archive DOE table.
+
+    Changing this has backwards compatibility considerations with old versions of the envoy DB schema"""
+
+    dynamic_operating_envelope_id: int
+    site_control_group_id: int
+    created_time: datetime
+    start_time: datetime
+    duration_seconds: int
+    superseded: bool
+    export_limit_watts: float | None
+    generation_limit_active_watts: float | None
+    import_limit_active_watts: float | None
+    load_limit_active_watts: float | None
+    set_connected: bool | None
+    set_energized: bool | None
+    ramp_time_seconds: float | None
+    is_archive: bool
+    deleted_time: datetime | None  # archive rows only
+    archive_time: datetime | None  # archive rows only
+
+
+@dataclass
+class _RawDefault:
+    """Minimal site-control-default columns from the active or archive default table.
+
+    Changing this has backwards compatibility considerations with old versions of the envoy DB schema"""
+
+    site_control_group_id: int
+    changed_time: datetime
+    export_limit_active_watts: float | None
+    generation_limit_active_watts: float | None
+    import_limit_active_watts: float | None
+    load_limit_active_watts: float | None
+    ramp_rate_percent_per_second: int | None
+    is_archive: bool
+    archive_time: datetime | None  # archive rows only
+
+
 # ─── Internal data types ──────────────────────────────────────────────────────
+
+# Type alias kept for readability in function signatures.
+_DefaultLike = _RawDefault
 
 
 @dataclass
 class _EnrichedControl:
     """DERControl with receipt time and effective window pre-computed."""
 
-    doe: DynamicOperatingEnvelope | ArchiveDynamicOperatingEnvelope
+    doe: _RawDOE
     site_control_group_id: int
     primacy: int
     receipt_time: datetime
@@ -92,23 +133,19 @@ class _EnrichedControl:
 
     @property
     def export_limit(self) -> float | None:
-        v = self.doe.export_limit_watts
-        return float(v) if v is not None else None
+        return self.doe.export_limit_watts
 
     @property
     def gen_limit(self) -> float | None:
-        v = self.doe.generation_limit_active_watts
-        return float(v) if v is not None else None
+        return self.doe.generation_limit_active_watts
 
     @property
     def import_limit(self) -> float | None:
-        v = self.doe.import_limit_active_watts
-        return float(v) if v is not None else None
+        return self.doe.import_limit_active_watts
 
     @property
     def load_limit(self) -> float | None:
-        v = self.doe.load_limit_active_watts
-        return float(v) if v is not None else None
+        return self.doe.load_limit_active_watts
 
     @property
     def set_connected(self) -> bool | None:
@@ -120,8 +157,7 @@ class _EnrichedControl:
 
     @property
     def ramp_time_seconds(self) -> float | None:
-        v = self.doe.ramp_time_seconds
-        return float(v) if v is not None else None
+        return self.doe.ramp_time_seconds
 
 
 @dataclass
@@ -147,19 +183,27 @@ class _ReceiptMarker:
 # ─── DB queries ───────────────────────────────────────────────────────────────
 
 
-async def _get_der_setting(session: AsyncSession) -> SiteDERSetting | None:
-    site = await get_active_site(session, include_der_settings=True)
-    if site is None:
+async def _get_der_setting(session: AsyncSession) -> _RawDERSetting | None:
+    result = await session.execute(
+        text(
+            """
+SELECT sds.max_w_value, sds.max_w_multiplier
+FROM site_der_setting sds
+JOIN site_der sd ON sd.site_der_id = sds.site_der_id
+WHERE sd.site_id = (SELECT site_id FROM site ORDER BY changed_time DESC LIMIT 1)
+LIMIT 1
+            """
+        )
+    )
+    row = result.first()
+    if row is None:
         return None
-    for der in site.site_ders:
-        if der.site_der_setting is not None:
-            return der.site_der_setting
-    return None
+    return _RawDERSetting(max_w_value=row.max_w_value, max_w_multiplier=row.max_w_multiplier)
 
 
-async def _get_control_groups(session: AsyncSession) -> list[SiteControlGroup]:
-    result = await session.execute(select(SiteControlGroup))
-    return list(result.scalars().all())
+async def _get_control_groups(session: AsyncSession) -> list[_RawControlGroup]:
+    result = await session.execute(text("SELECT site_control_group_id, primacy FROM site_control_group"))
+    return [_RawControlGroup(site_control_group_id=row.site_control_group_id, primacy=row.primacy) for row in result]
 
 
 async def _get_subscribed_group_ids(session: AsyncSession) -> set[int]:
@@ -167,12 +211,143 @@ async def _get_subscribed_group_ids(session: AsyncSession) -> set[int]:
     Only subscriptions with an explicit resource_id are considered; 0 subscriptions is valid
     (device relies entirely on polling)."""
     result = await session.execute(
-        select(Subscription).where(
-            Subscription.resource_type == SubscriptionResource.DYNAMIC_OPERATING_ENVELOPE,
-            Subscription.resource_id.is_not(None),
+        text("SELECT resource_id FROM subscription WHERE resource_type = :rtype AND resource_id IS NOT NULL"),
+        {"rtype": SubscriptionResource.DYNAMIC_OPERATING_ENVELOPE.value},
+    )
+    return {row.resource_id for row in result}
+
+
+async def _get_does(session: AsyncSession) -> list[_RawDOE]:
+    """Fetch all active and archived DOEs for the active site using explicit column selection."""
+    result = await session.execute(
+        text(
+            """
+SELECT
+    dynamic_operating_envelope_id,
+    site_control_group_id,
+    created_time,
+    start_time,
+    duration_seconds,
+    superseded,
+    export_limit_watts,
+    generation_limit_active_watts,
+    import_limit_active_watts,
+    load_limit_active_watts,
+    set_connected,
+    set_energized,
+    ramp_time_seconds,
+    false AS is_archive,
+    NULL AS deleted_time,
+    NULL AS archive_time
+    FROM dynamic_operating_envelope
+    WHERE site_id = (SELECT site_id FROM site ORDER BY changed_time DESC LIMIT 1)
+UNION ALL
+SELECT
+    dynamic_operating_envelope_id,
+    site_control_group_id,
+    created_time,
+    start_time,
+    duration_seconds,
+    superseded,
+    export_limit_watts,
+    generation_limit_active_watts,
+    import_limit_active_watts,
+    load_limit_active_watts,
+    set_connected,
+    set_energized,
+    ramp_time_seconds,
+    true AS is_archive,
+    deleted_time,
+    archive_time
+    FROM archive_dynamic_operating_envelope
+    WHERE site_id = (SELECT site_id FROM site ORDER BY changed_time DESC LIMIT 1)
+            """
         )
     )
-    return {sub.resource_id for sub in result.scalars().all() if sub.resource_id is not None}
+    does: list[_RawDOE] = []
+    for row in result:
+        does.append(
+            _RawDOE(
+                dynamic_operating_envelope_id=row.dynamic_operating_envelope_id,
+                site_control_group_id=row.site_control_group_id,
+                created_time=row.created_time,
+                start_time=row.start_time,
+                duration_seconds=row.duration_seconds,
+                superseded=bool(row.superseded),
+                export_limit_watts=float(row.export_limit_watts) if row.export_limit_watts is not None else None,
+                generation_limit_active_watts=float(row.generation_limit_active_watts)
+                if row.generation_limit_active_watts is not None
+                else None,
+                import_limit_active_watts=float(row.import_limit_active_watts)
+                if row.import_limit_active_watts is not None
+                else None,
+                load_limit_active_watts=float(row.load_limit_active_watts)
+                if row.load_limit_active_watts is not None
+                else None,
+                set_connected=row.set_connected,
+                set_energized=row.set_energized,
+                ramp_time_seconds=float(row.ramp_time_seconds) if row.ramp_time_seconds is not None else None,
+                is_archive=bool(row.is_archive),
+                deleted_time=row.deleted_time,
+                archive_time=row.archive_time,
+            )
+        )
+    return does
+
+
+async def _get_defaults(session: AsyncSession) -> list[_RawDefault]:
+    """Fetch all active and archived SiteControlGroupDefaults using explicit column selection."""
+    result = await session.execute(
+        text("""
+SELECT
+    site_control_group_id,
+    changed_time,
+    export_limit_active_watts,
+    generation_limit_active_watts,
+    import_limit_active_watts,
+    load_limit_active_watts,
+    ramp_rate_percent_per_second,
+    false AS is_archive,
+    NULL AS archive_time
+    FROM site_control_group_default
+UNION ALL
+SELECT
+    site_control_group_id,
+    changed_time,
+    export_limit_active_watts,
+    generation_limit_active_watts,
+    import_limit_active_watts,
+    load_limit_active_watts,
+    ramp_rate_percent_per_second,
+    true AS is_archive,
+    archive_time
+    FROM archive_site_control_group_default
+        """)
+    )
+    defaults: list[_RawDefault] = []
+    for row in result:
+        defaults.append(
+            _RawDefault(
+                site_control_group_id=row.site_control_group_id,
+                changed_time=row.changed_time,
+                export_limit_active_watts=float(row.export_limit_active_watts)
+                if row.export_limit_active_watts is not None
+                else None,
+                generation_limit_active_watts=float(row.generation_limit_active_watts)
+                if row.generation_limit_active_watts is not None
+                else None,
+                import_limit_active_watts=float(row.import_limit_active_watts)
+                if row.import_limit_active_watts is not None
+                else None,
+                load_limit_active_watts=float(row.load_limit_active_watts)
+                if row.load_limit_active_watts is not None
+                else None,
+                ramp_rate_percent_per_second=row.ramp_rate_percent_per_second,
+                is_archive=bool(row.is_archive),
+                archive_time=row.archive_time,
+            )
+        )
+    return defaults
 
 
 # ─── Control-interval and receipt-marker helpers ──────────────────────────────
@@ -180,7 +355,7 @@ async def _get_subscribed_group_ids(session: AsyncSession) -> set[int]:
 
 def _compute_active_control_intervals(  # noqa: C901
     event_times: list[datetime],
-    sorted_groups: list[SiteControlGroup],
+    sorted_groups: list[_RawControlGroup],
     enriched: list[_EnrichedControl],
     defaults_by_group: dict[int, list[_DefaultLike]],
     test_end: datetime,
@@ -261,7 +436,7 @@ def _build_receipt_markers(
 
 
 def _compute_receipt_time_and_step(
-    doe: DynamicOperatingEnvelope | ArchiveDynamicOperatingEnvelope,
+    doe: _RawDOE,
     group_id: int,
     subscribed_group_ids: set[int],
     sorted_requests: list[RequestEntry],
@@ -305,12 +480,10 @@ def _compute_receipt_time_and_step(
 # ─── Control enrichment ───────────────────────────────────────────────────────
 
 
-def _effective_end_for_doe(
-    doe: DynamicOperatingEnvelope | ArchiveDynamicOperatingEnvelope,
-) -> datetime | None:
+def _effective_end_for_doe(doe: _RawDOE) -> datetime | None:
     """Returns the effective end time for a DOE, or None if no valid window exists."""
     base_end = doe.start_time + timedelta(seconds=doe.duration_seconds)
-    if isinstance(doe, ArchiveDynamicOperatingEnvelope):
+    if doe.is_archive:
         if doe.deleted_time is not None and doe.deleted_time > doe.start_time:
             return min(base_end, doe.deleted_time)
         if doe.archive_time is not None and doe.archive_time > doe.start_time:
@@ -320,9 +493,9 @@ def _effective_end_for_doe(
 
 
 def _build_enriched_controls(
-    all_does: list[DynamicOperatingEnvelope | ArchiveDynamicOperatingEnvelope],
+    all_does: list[_RawDOE],
     test_start: datetime,
-    groups_by_id: dict[int, SiteControlGroup],
+    groups_by_id: dict[int, _RawControlGroup],
     subscribed_group_ids: set[int],
     request_history: list[RequestEntry],
     doe_tags: dict[int, str],
@@ -380,7 +553,7 @@ def _build_enriched_controls(
 def _default_active_window(d: _DefaultLike) -> tuple[datetime, datetime] | None:
     """Returns the (start, end) time window during which this default was active.
     Returns None if the archive_time is missing (should not happen; silently ignored)."""
-    if isinstance(d, ArchiveSiteControlGroupDefault):
+    if d.is_archive:
         if d.archive_time is None:
             return None
         return d.changed_time, d.archive_time
@@ -461,9 +634,7 @@ def _find_active_control_at(
         if best is None:
             best = ctrl
         # Archive records take priority over active (they represent confirmed historical windows)
-        elif isinstance(ctrl.doe, ArchiveDynamicOperatingEnvelope) and not isinstance(
-            best.doe, ArchiveDynamicOperatingEnvelope
-        ):
+        elif ctrl.doe.is_archive and not best.doe.is_archive:
             best = ctrl
     return best
 
@@ -486,7 +657,7 @@ def _find_active_default_at(
 
 def _resolve_type_limit(
     t: datetime,
-    sorted_groups: list[SiteControlGroup],
+    sorted_groups: list[_RawControlGroup],
     enriched: list[_EnrichedControl],
     defaults_by_group: dict[int, list[_DefaultLike]],
     get_ctrl_val: Callable[[_EnrichedControl], float | None],
@@ -521,7 +692,7 @@ def _resolve_type_limit(
 
 def _get_effective_upper_at(
     t: datetime,
-    sorted_groups: list[SiteControlGroup],
+    sorted_groups: list[_RawControlGroup],
     enriched: list[_EnrichedControl],
     defaults_by_group: dict[int, list[_DefaultLike]],
 ) -> tuple[float | None, object | None]:
@@ -536,7 +707,7 @@ def _get_effective_upper_at(
         enriched,
         defaults_by_group,
         lambda c: c.export_limit,
-        lambda d: float(d.export_limit_active_watts) if d.export_limit_active_watts is not None else None,
+        lambda d: d.export_limit_active_watts,
     )
     gen_val, gen_src = _resolve_type_limit(
         t,
@@ -544,7 +715,7 @@ def _get_effective_upper_at(
         enriched,
         defaults_by_group,
         lambda c: c.gen_limit,
-        lambda d: float(d.generation_limit_active_watts) if d.generation_limit_active_watts is not None else None,
+        lambda d: d.generation_limit_active_watts,
     )
     if exp_val is not None and gen_val is not None:
         return (exp_val, exp_src) if exp_val <= gen_val else (gen_val, gen_src)
@@ -557,7 +728,7 @@ def _get_effective_upper_at(
 
 def _get_effective_lower_at(
     t: datetime,
-    sorted_groups: list[SiteControlGroup],
+    sorted_groups: list[_RawControlGroup],
     enriched: list[_EnrichedControl],
     defaults_by_group: dict[int, list[_DefaultLike]],
 ) -> tuple[float | None, object | None]:
@@ -573,7 +744,7 @@ def _get_effective_lower_at(
         enriched,
         defaults_by_group,
         lambda c: c.import_limit,
-        lambda d: float(d.import_limit_active_watts) if d.import_limit_active_watts is not None else None,
+        lambda d: d.import_limit_active_watts,
     )
     load_val, load_src = _resolve_type_limit(
         t,
@@ -581,7 +752,7 @@ def _get_effective_lower_at(
         enriched,
         defaults_by_group,
         lambda c: c.load_limit,
-        lambda d: float(d.load_limit_active_watts) if d.load_limit_active_watts is not None else None,
+        lambda d: d.load_limit_active_watts,
     )
     if imp_val is not None and load_val is not None:
         return (imp_val, imp_src) if imp_val <= load_val else (load_val, load_src)
@@ -677,7 +848,7 @@ def _collect_event_times(
 def _build_limit_events(
     is_upper: bool,
     event_times: list[datetime],
-    sorted_groups: list[SiteControlGroup],
+    sorted_groups: list[_RawControlGroup],
     enriched: list[_EnrichedControl],
     defaults_by_group: dict[int, list[_DefaultLike]],
     disconnect_intervals: list[tuple[datetime, datetime]],
@@ -1285,8 +1456,8 @@ async def generate_power_limit_chart_html(
     groups_by_id = {g.site_control_group_id: g for g in control_groups}
     sorted_groups = sorted(control_groups, key=lambda g: g.primacy)
 
-    all_does = await get_site_controls_active_archived(session)
-    all_defaults = await get_site_control_group_defaults_with_archive(session)
+    all_does = await _get_does(session)
+    all_defaults = await _get_defaults(session)
     defaults_by_group = _build_defaults_by_group(all_defaults)
 
     subscribed_group_ids = await _get_subscribed_group_ids(session)
