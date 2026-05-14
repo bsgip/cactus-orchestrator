@@ -454,6 +454,8 @@ async def select_user_compliance_requests(session: AsyncSession, user_id: int) -
     stmt = (
         select(ComplianceRequest).where(ComplianceRequest.created_by == user_id).order_by(ComplianceRequest.created_at)
     )
+    stmt = stmt.options(selectinload(ComplianceRequest.classes))
+    stmt = stmt.options(selectinload(ComplianceRequest.runs))
     result = await session.execute(stmt)
     return result.scalars().all()
 
@@ -485,8 +487,8 @@ async def insert_compliance_request(
         created_by=created_by,
         updated_by=created_by,
         status=ComplianceRequestStatus.SUBMITTED,
-        classes=[ComplianceRequestClass(compliance_class=c) for c in classes],
-        runs=[ComplianceRequestRun(compliance_run_id=r) for r in runs],
+        classes={ComplianceRequestClass(compliance_class=c) for c in classes},
+        runs={ComplianceRequestRun(compliance_run_id=r) for r in runs},
         csip_aus_version=csip_aus_version,
         witnessed_at=witnessed_at,
         der_brand=der_brand,
@@ -506,80 +508,24 @@ async def insert_compliance_request(
 
 
 async def update_compliance_request(
-    session: AsyncSession,
-    user_id: int,
-    compliance_request: ComplianceRequest,
-    csip_aus_version: str,
-    witnessed_at: datetime,
-    der_brand: str,
-    der_oem: str,
-    der_series: str,
-    der_representative_models: str,
-    software_client_type: str,
-    software_client_providers: str,
-    software_client_versions: str,
-    onsite_hardware_details: str,
+    session: AsyncSession, user_id: int, compliance_request: ComplianceRequest, **kwargs
 ):
-    """Updates the compliance request data
+    """Updates the compliance request data"""
+    for key, value in kwargs.items():
+        if hasattr(compliance_request, key):
+            # Classes and runs are stored in their own table so we need to
+            # turn the serialized form (str for class, int for run) into the corresponding ORM model
+            if key == "classes":
+                value = {ComplianceRequestClass(compliance_class=c) for c in value}
+            if key == "runs":
+                value = {ComplianceRequestRun(compliance_run_id=r) for r in value}
 
-    This function does not update 'status', 'classes' or 'runs'. Instead use 'update_compliance_status', 'update_compliance_classes' and 'update_compliance_runs'.
-    """
-    compliance_request.csip_aus_version = csip_aus_version
-    compliance_request.witnessed_at = witnessed_at
-    compliance_request.der_brand = der_brand
-    compliance_request.der_oem = der_oem
-    compliance_request.der_series = der_series
-    compliance_request.der_representative_models = der_representative_models
-    compliance_request.software_client_type = software_client_type
-    compliance_request.software_client_providers = software_client_providers
-    compliance_request.software_client_versions = software_client_versions
-    compliance_request.onsite_hardware_details = onsite_hardware_details
+            setattr(compliance_request, key, value)
 
     # update table metadata
     compliance_request.updated_at = datetime.now(timezone.utc)
     compliance_request.updated_by = user_id
 
-    await session.flush()
-
-
-async def update_compliance_request_status(
-    session: AsyncSession, compliance_request: ComplianceRequest, user_id: int, new_status: ComplianceRequestStatus
-):
-    compliance_request.status = new_status
-    compliance_request.updated_at = datetime.now(timezone.utc)
-    compliance_request.updated_by = user_id
-    await session.flush()
-
-
-async def update_compliance_request_classes(
-    session: AsyncSession, compliance_request: ComplianceRequest, user_id: int, classes: set[str]
-):
-    # The cascade settings on the classes relationship of the ComplianceRequest model
-    # with handle removing the existing classes.
-    # NOTE: For classes that are 'preserved' (present before and after the update), the existing row
-    # in the table is deleted and a new row added.
-    # (i.e. the id for that class will change, everything else will be the same).
-    compliance_request.classes = [ComplianceRequestClass(compliance_class=c) for c in classes]
-
-    # update metadata
-    compliance_request.updated_at = datetime.now(timezone.utc)
-    compliance_request.updated_by = user_id
-    await session.flush()
-
-
-async def update_compliance_request_runs(
-    session: AsyncSession, compliance_request: ComplianceRequest, user_id: int, runs: set[int]
-):
-    # The cascade settings on the runs relationship of the ComplianceRequest model
-    # with handle removing the existing runs.
-    # NOTE: For runs that are 'preserved' (present before and after the update), the existing row
-    # in the table is deleted and a new row added.
-    # (i.e. the id for that ComplianceRequestRun will appear to change, everything else will be the same).
-    compliance_request.runs = [ComplianceRequestRun(compliance_run_id=r) for r in runs]
-
-    # Update metadata
-    compliance_request.updated_at = datetime.now(timezone.utc)
-    compliance_request.updated_by = user_id
     await session.flush()
 
 

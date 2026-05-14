@@ -73,6 +73,7 @@ async def test_update_group(
 
     if expected_status == HTTPStatus.OK:
         response_data = RunGroupResponse.from_json(response.text)
+        assert not isinstance(response_data, list)
         assert response_data.run_group_id == run_group_id
         assert response_data.name == expected_name
 

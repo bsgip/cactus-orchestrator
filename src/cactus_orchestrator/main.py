@@ -12,6 +12,7 @@ from fastapi_pagination import add_pagination
 from cactus_orchestrator.api import (
     admin_router,
     certificate_router,
+    compliance_router,
     config_router,
     procedure_router,
     run_group_router,
@@ -50,6 +51,7 @@ def generate_app(new_main_settings: CactusOrchestratorSettings) -> FastAPI:
     app.include_router(procedure_router)
     app.include_router(config_router)
     app.include_router(admin_router)
+    app.include_router(compliance_router)
 
     return app
 
