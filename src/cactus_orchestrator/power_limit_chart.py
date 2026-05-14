@@ -56,9 +56,6 @@ _STEP_PALETTE = [
     "rgba(120,220,220,0.45)",
 ]
 
-# Subquery that resolves the active site — most recently modified site row.
-_ACTIVE_SITE_ID_SQL = "(SELECT site_id FROM site ORDER BY changed_time DESC LIMIT 1)"
-
 
 # ─── Raw DB row types ─────────────────────────────────────────────────────────
 
@@ -77,7 +74,9 @@ class _RawControlGroup:
 
 @dataclass
 class _RawDOE:
-    """Minimal DOE columns fetched from either the active or archive DOE table."""
+    """Minimal DOE columns fetched from either the active or archive DOE table.
+
+    Changing this has backwards compatibility considerations with old versions of the envoy DB schema"""
 
     dynamic_operating_envelope_id: int
     site_control_group_id: int
@@ -99,7 +98,9 @@ class _RawDOE:
 
 @dataclass
 class _RawDefault:
-    """Minimal default-control columns from the active or archive default table."""
+    """Minimal site-control-default columns from the active or archive default table.
+
+    Changing this has backwards compatibility considerations with old versions of the envoy DB schema"""
 
     site_control_group_id: int
     changed_time: datetime
@@ -185,11 +186,13 @@ class _ReceiptMarker:
 async def _get_der_setting(session: AsyncSession) -> _RawDERSetting | None:
     result = await session.execute(
         text(
-            f"SELECT sds.max_w_value, sds.max_w_multiplier"
-            f" FROM site_der_setting sds"
-            f" JOIN site_der sd ON sd.site_der_id = sds.site_der_id"
-            f" WHERE sd.site_id = {_ACTIVE_SITE_ID_SQL}"
-            f" LIMIT 1"
+            """
+SELECT sds.max_w_value, sds.max_w_multiplier
+FROM site_der_setting sds
+JOIN site_der sd ON sd.site_der_id = sds.site_der_id
+WHERE sd.site_id = (SELECT site_id FROM site ORDER BY changed_time DESC LIMIT 1)
+LIMIT 1
+            """
         )
     )
     row = result.first()
@@ -199,13 +202,8 @@ async def _get_der_setting(session: AsyncSession) -> _RawDERSetting | None:
 
 
 async def _get_control_groups(session: AsyncSession) -> list[_RawControlGroup]:
-    result = await session.execute(
-        text("SELECT site_control_group_id, primacy FROM site_control_group")
-    )
-    return [
-        _RawControlGroup(site_control_group_id=row.site_control_group_id, primacy=row.primacy)
-        for row in result
-    ]
+    result = await session.execute(text("SELECT site_control_group_id, primacy FROM site_control_group"))
+    return [_RawControlGroup(site_control_group_id=row.site_control_group_id, primacy=row.primacy) for row in result]
 
 
 async def _get_subscribed_group_ids(session: AsyncSession) -> set[int]:
@@ -213,10 +211,7 @@ async def _get_subscribed_group_ids(session: AsyncSession) -> set[int]:
     Only subscriptions with an explicit resource_id are considered; 0 subscriptions is valid
     (device relies entirely on polling)."""
     result = await session.execute(
-        text(
-            "SELECT resource_id FROM subscription"
-            " WHERE resource_type = :rtype AND resource_id IS NOT NULL"
-        ),
+        text("SELECT resource_id FROM subscription WHERE resource_type = :rtype AND resource_id IS NOT NULL"),
         {"rtype": SubscriptionResource.DYNAMIC_OPERATING_ENVELOPE.value},
     )
     return {row.resource_id for row in result}
@@ -226,45 +221,47 @@ async def _get_does(session: AsyncSession) -> list[_RawDOE]:
     """Fetch all active and archived DOEs for the active site using explicit column selection."""
     result = await session.execute(
         text(
-            f"SELECT"
-            f"  dynamic_operating_envelope_id,"
-            f"  site_control_group_id,"
-            f"  created_time,"
-            f"  start_time,"
-            f"  duration_seconds,"
-            f"  superseded,"
-            f"  export_limit_watts,"
-            f"  generation_limit_active_watts,"
-            f"  import_limit_active_watts,"
-            f"  load_limit_active_watts,"
-            f"  set_connected,"
-            f"  set_energized,"
-            f"  ramp_time_seconds,"
-            f"  false AS is_archive,"
-            f"  NULL AS deleted_time,"
-            f"  NULL AS archive_time"
-            f" FROM dynamic_operating_envelope"
-            f" WHERE site_id = {_ACTIVE_SITE_ID_SQL}"
-            f" UNION ALL"
-            f" SELECT"
-            f"  dynamic_operating_envelope_id,"
-            f"  site_control_group_id,"
-            f"  created_time,"
-            f"  start_time,"
-            f"  duration_seconds,"
-            f"  superseded,"
-            f"  export_limit_watts,"
-            f"  generation_limit_active_watts,"
-            f"  import_limit_active_watts,"
-            f"  load_limit_active_watts,"
-            f"  set_connected,"
-            f"  set_energized,"
-            f"  ramp_time_seconds,"
-            f"  true AS is_archive,"
-            f"  deleted_time,"
-            f"  archive_time"
-            f" FROM archive_dynamic_operating_envelope"
-            f" WHERE site_id = {_ACTIVE_SITE_ID_SQL}"
+            """
+SELECT
+    dynamic_operating_envelope_id,
+    site_control_group_id,
+    created_time,
+    start_time,
+    duration_seconds,
+    superseded,
+    export_limit_watts,
+    generation_limit_active_watts,
+    import_limit_active_watts,
+    load_limit_active_watts,
+    set_connected,
+    set_energized,
+    ramp_time_seconds,
+    false AS is_archive,
+    NULL AS deleted_time,
+    NULL AS archive_time
+    FROM dynamic_operating_envelope
+    WHERE site_id = (SELECT site_id FROM site ORDER BY changed_time DESC LIMIT 1)
+UNION ALL
+SELECT
+    dynamic_operating_envelope_id,
+    site_control_group_id,
+    created_time,
+    start_time,
+    duration_seconds,
+    superseded,
+    export_limit_watts,
+    generation_limit_active_watts,
+    import_limit_active_watts,
+    load_limit_active_watts,
+    set_connected,
+    set_energized,
+    ramp_time_seconds,
+    true AS is_archive,
+    deleted_time,
+    archive_time
+    FROM archive_dynamic_operating_envelope
+    WHERE site_id = (SELECT site_id FROM site ORDER BY changed_time DESC LIMIT 1)
+            """
         )
     )
     does: list[_RawDOE] = []
@@ -278,9 +275,15 @@ async def _get_does(session: AsyncSession) -> list[_RawDOE]:
                 duration_seconds=row.duration_seconds,
                 superseded=bool(row.superseded),
                 export_limit_watts=float(row.export_limit_watts) if row.export_limit_watts is not None else None,
-                generation_limit_active_watts=float(row.generation_limit_active_watts) if row.generation_limit_active_watts is not None else None,
-                import_limit_active_watts=float(row.import_limit_active_watts) if row.import_limit_active_watts is not None else None,
-                load_limit_active_watts=float(row.load_limit_active_watts) if row.load_limit_active_watts is not None else None,
+                generation_limit_active_watts=float(row.generation_limit_active_watts)
+                if row.generation_limit_active_watts is not None
+                else None,
+                import_limit_active_watts=float(row.import_limit_active_watts)
+                if row.import_limit_active_watts is not None
+                else None,
+                load_limit_active_watts=float(row.load_limit_active_watts)
+                if row.load_limit_active_watts is not None
+                else None,
                 set_connected=row.set_connected,
                 set_energized=row.set_energized,
                 ramp_time_seconds=float(row.ramp_time_seconds) if row.ramp_time_seconds is not None else None,
@@ -295,31 +298,31 @@ async def _get_does(session: AsyncSession) -> list[_RawDOE]:
 async def _get_defaults(session: AsyncSession) -> list[_RawDefault]:
     """Fetch all active and archived SiteControlGroupDefaults using explicit column selection."""
     result = await session.execute(
-        text(
-            "SELECT"
-            "  site_control_group_id,"
-            "  changed_time,"
-            "  export_limit_active_watts,"
-            "  generation_limit_active_watts,"
-            "  import_limit_active_watts,"
-            "  load_limit_active_watts,"
-            "  ramp_rate_percent_per_second,"
-            "  false AS is_archive,"
-            "  NULL AS archive_time"
-            " FROM site_control_group_default"
-            " UNION ALL"
-            " SELECT"
-            "  site_control_group_id,"
-            "  changed_time,"
-            "  export_limit_active_watts,"
-            "  generation_limit_active_watts,"
-            "  import_limit_active_watts,"
-            "  load_limit_active_watts,"
-            "  ramp_rate_percent_per_second,"
-            "  true AS is_archive,"
-            "  archive_time"
-            " FROM archive_site_control_group_default"
-        )
+        text("""
+SELECT
+    site_control_group_id,
+    changed_time,
+    export_limit_active_watts,
+    generation_limit_active_watts,
+    import_limit_active_watts,
+    load_limit_active_watts,
+    ramp_rate_percent_per_second,
+    false AS is_archive,
+    NULL AS archive_time
+    FROM site_control_group_default
+UNION ALL
+SELECT
+    site_control_group_id,
+    changed_time,
+    export_limit_active_watts,
+    generation_limit_active_watts,
+    import_limit_active_watts,
+    load_limit_active_watts,
+    ramp_rate_percent_per_second,
+    true AS is_archive,
+    archive_time
+    FROM archive_site_control_group_default
+        """)
     )
     defaults: list[_RawDefault] = []
     for row in result:
@@ -327,10 +330,18 @@ async def _get_defaults(session: AsyncSession) -> list[_RawDefault]:
             _RawDefault(
                 site_control_group_id=row.site_control_group_id,
                 changed_time=row.changed_time,
-                export_limit_active_watts=float(row.export_limit_active_watts) if row.export_limit_active_watts is not None else None,
-                generation_limit_active_watts=float(row.generation_limit_active_watts) if row.generation_limit_active_watts is not None else None,
-                import_limit_active_watts=float(row.import_limit_active_watts) if row.import_limit_active_watts is not None else None,
-                load_limit_active_watts=float(row.load_limit_active_watts) if row.load_limit_active_watts is not None else None,
+                export_limit_active_watts=float(row.export_limit_active_watts)
+                if row.export_limit_active_watts is not None
+                else None,
+                generation_limit_active_watts=float(row.generation_limit_active_watts)
+                if row.generation_limit_active_watts is not None
+                else None,
+                import_limit_active_watts=float(row.import_limit_active_watts)
+                if row.import_limit_active_watts is not None
+                else None,
+                load_limit_active_watts=float(row.load_limit_active_watts)
+                if row.load_limit_active_watts is not None
+                else None,
                 ramp_rate_percent_per_second=row.ramp_rate_percent_per_second,
                 is_archive=bool(row.is_archive),
                 archive_time=row.archive_time,

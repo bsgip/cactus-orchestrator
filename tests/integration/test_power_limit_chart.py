@@ -11,17 +11,29 @@ Run with:
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from http import HTTPStatus
+from itertools import product
 from pathlib import Path
 
 import pytest
-from assertical.fake.generator import generate_class_instance
+from assertical.asserts.generator import assert_class_instance_equality
+from assertical.fake.generator import clone_class_instance, generate_class_instance
 from assertical.fixtures.postgres import generate_async_session
 from cactus_schema.runner.schema import HTTPMethod, RequestEntry
+from envoy.server.model.archive.doe import ArchiveDynamicOperatingEnvelope, ArchiveSiteControlGroupDefault
 from envoy.server.model.doe import DynamicOperatingEnvelope, SiteControlGroup, SiteControlGroupDefault
 from envoy.server.model.site import Site, SiteDER, SiteDERSetting
 from envoy.server.model.subscription import Subscription, SubscriptionResource
 
-from cactus_orchestrator.power_limit_chart import generate_power_limit_chart_html
+from cactus_orchestrator.power_limit_chart import (
+    _get_control_groups,
+    _get_defaults,
+    _get_der_setting,
+    _get_does,
+    _get_subscribed_group_ids,
+    _RawDefault,
+    _RawDOE,
+    generate_power_limit_chart_html,
+)
 
 OUTPUT_DIR = Path("/tmp/cactus_charts")
 
@@ -89,7 +101,7 @@ def _make_doe(
     )
 
 
-def _make_der_site(aggregator_id: int, max_w: int = 10000, grad_w: int = 28) -> Site:
+def _make_site_with_setting(aggregator_id: int, max_w: int = 10000, grad_w: int = 28, seed: int = 1) -> Site:
     """Build a Site with one SiteDER and SiteDERSetting."""
     der_setting = generate_class_instance(
         SiteDERSetting,
@@ -100,16 +112,505 @@ def _make_der_site(aggregator_id: int, max_w: int = 10000, grad_w: int = 28) -> 
         grad_w=grad_w,
         soft_grad_w=None,
     )
-    der = generate_class_instance(SiteDER, seed=1, site_id=None, site_der_setting=der_setting)
-    site = generate_class_instance(Site, seed=1, site_id=1, aggregator_id=aggregator_id)
+    der = generate_class_instance(SiteDER, seed=seed, site_id=None, site_der_setting=der_setting)
+    site = generate_class_instance(Site, seed=seed, aggregator_id=aggregator_id)
     site.site_ders = [der]
     return site
+
+
+def _make_archive_doe(
+    site_id: int,
+    group_id: int,
+    doe_id: int,
+    start: datetime,
+    duration_seconds: int,
+    *,
+    export_limit: Decimal | None = None,
+    import_limit: Decimal | None = None,
+    ramp_time_seconds: Decimal | None = None,
+    superseded: bool = False,
+    archive_time: datetime | None = None,
+    deleted_time: datetime | None = None,
+    seed: int = 1,
+) -> ArchiveDynamicOperatingEnvelope:
+    end = start + timedelta(seconds=duration_seconds)
+    return generate_class_instance(
+        ArchiveDynamicOperatingEnvelope,
+        seed=seed,
+        archive_id=None,
+        dynamic_operating_envelope_id=doe_id,
+        site_id=site_id,
+        site_control_group_id=group_id,
+        calculation_log_id=None,
+        start_time=start,
+        end_time=end,
+        duration_seconds=duration_seconds,
+        created_time=start - timedelta(seconds=30),
+        changed_time=start - timedelta(seconds=30),
+        export_limit_watts=export_limit,
+        import_limit_active_watts=import_limit,
+        generation_limit_active_watts=None,
+        load_limit_active_watts=None,
+        ramp_time_seconds=ramp_time_seconds,
+        set_connected=None,
+        set_energized=None,
+        superseded=superseded,
+        set_point_percentage=None,
+        randomize_start_seconds=None,
+        display_id=None,
+        archive_time=archive_time,
+        deleted_time=deleted_time,
+    )
+
+
+def _make_subscription(
+    group_id: int | None, *, resource_type: SubscriptionResource = SubscriptionResource.DYNAMIC_OPERATING_ENVELOPE
+) -> Subscription:
+    sub = Subscription()
+    sub.aggregator_id = 1
+    sub.changed_time = T0
+    sub.resource_type = resource_type
+    sub.resource_id = group_id
+    sub.scoped_site_id = None
+    sub.notification_uri = "https://example.com/notify"
+    sub.entity_limit = 100
+    return sub
+
+
+# ─── _get_der_setting ─────────────────────────────────────────────────────────
+
+
+async def test_get_der_setting_no_site(pg_envoy_base_config):
+    """Returns None when no sites exist in the DB."""
+    async with generate_async_session(pg_envoy_base_config) as session:
+        result = await _get_der_setting(session)
+    assert result is None
+
+
+async def test_get_der_setting_no_der_setting(pg_envoy_base_config):
+    """Returns None when a site exists but has no SiteDER/SiteDERSetting attached."""
+    async with generate_async_session(pg_envoy_base_config) as session:
+        site = generate_class_instance(Site, seed=1, aggregator_id=1)
+        site.site_ders = []
+        session.add(site)
+        await session.commit()
+
+    async with generate_async_session(pg_envoy_base_config) as session:
+        result = await _get_der_setting(session)
+
+    assert result is None
+
+
+async def test_get_der_setting_returns_max_w_fields(pg_envoy_base_config):
+    """Returns the correct max_w_value and max_w_multiplier from the active site's DER setting."""
+    async with generate_async_session(pg_envoy_base_config) as session:
+        site = _make_site_with_setting(aggregator_id=1, max_w=7500)
+        session.add(site)
+        await session.commit()
+
+    async with generate_async_session(pg_envoy_base_config) as session:
+        result = await _get_der_setting(session)
+
+    assert result is not None
+    assert result.max_w_value == 7500
+    assert result.max_w_multiplier == 0
+
+
+async def test_get_der_setting_uses_most_recently_changed_site(pg_envoy_base_config):
+    """When multiple sites exist, returns the DER setting belonging to the site with the latest changed_time."""
+    async with generate_async_session(pg_envoy_base_config) as session:
+        old_site = _make_site_with_setting(aggregator_id=1, max_w=1000, seed=1)
+        old_site.changed_time = T0 - timedelta(hours=2)
+        session.add(old_site)
+        await session.flush()
+
+        new_site = _make_site_with_setting(aggregator_id=1, max_w=9000, seed=2)
+        new_site.changed_time = T0 - timedelta(hours=1)
+        session.add(new_site)
+        await session.commit()
+
+    async with generate_async_session(pg_envoy_base_config) as session:
+        result = await _get_der_setting(session)
+
+    assert result is not None
+    assert result.max_w_value == 9000
+
+
+# ─── _get_control_groups ──────────────────────────────────────────────────────
+
+
+async def test_get_control_groups_empty(pg_envoy_base_config):
+    """Returns an empty list when no SiteControlGroups exist."""
+    async with generate_async_session(pg_envoy_base_config) as session:
+        result = await _get_control_groups(session)
+    assert result == []
+
+
+async def test_get_control_groups_returns_all_with_correct_fields(pg_envoy_base_config):
+    """Returns all groups with the correct site_control_group_id and primacy values."""
+    async with generate_async_session(pg_envoy_base_config) as session:
+        grp1 = generate_class_instance(SiteControlGroup, seed=1, site_control_group_id=1, primacy=10)
+        grp2 = generate_class_instance(SiteControlGroup, seed=2, site_control_group_id=2, primacy=20)
+        session.add_all([grp1, grp2])
+        await session.commit()
+
+    async with generate_async_session(pg_envoy_base_config) as session:
+        result = await _get_control_groups(session)
+
+    assert len(result) == 2
+    by_id = {g.site_control_group_id: g for g in result}
+    assert by_id[1].primacy == 10
+    assert by_id[2].primacy == 20
+
+
+# ─── _get_subscribed_group_ids ────────────────────────────────────────────────
+
+
+async def test_get_subscribed_group_ids_empty(pg_envoy_base_config):
+    """Returns an empty set when no subscriptions exist."""
+    async with generate_async_session(pg_envoy_base_config) as session:
+        result = await _get_subscribed_group_ids(session)
+    assert result == set()
+
+
+async def test_get_subscribed_group_ids_returns_doe_resource_ids(pg_envoy_base_config):
+    """Returns the resource_ids for DOE subscriptions that have a non-null resource_id."""
+    async with generate_async_session(pg_envoy_base_config) as session:
+        session.add(_make_subscription(group_id=1))
+        session.add(_make_subscription(group_id=2))
+        await session.commit()
+
+    async with generate_async_session(pg_envoy_base_config) as session:
+        result = await _get_subscribed_group_ids(session)
+
+    assert result == {1, 2}
+
+
+async def test_get_subscribed_group_ids_excludes_null_resource_id(pg_envoy_base_config):
+    """DOE subscriptions with resource_id=None (subscribe-all) are excluded."""
+    async with generate_async_session(pg_envoy_base_config) as session:
+        session.add(_make_subscription(group_id=5))
+        session.add(_make_subscription(group_id=None))  # subscribe-all, no specific group
+        await session.commit()
+
+    async with generate_async_session(pg_envoy_base_config) as session:
+        result = await _get_subscribed_group_ids(session)
+
+    assert result == {5}
+
+
+async def test_get_subscribed_group_ids_excludes_non_doe_subscriptions(pg_envoy_base_config):
+    """Non-DOE subscription types are not included even when they have a resource_id."""
+    async with generate_async_session(pg_envoy_base_config) as session:
+        session.add(_make_subscription(group_id=7))
+        session.add(_make_subscription(group_id=99, resource_type=SubscriptionResource.SITE))
+        await session.commit()
+
+    async with generate_async_session(pg_envoy_base_config) as session:
+        result = await _get_subscribed_group_ids(session)
+
+    assert result == {7}
+
+
+# ─── _get_does ────────────────────────────────────────────────────────────────
+
+
+async def test_get_does_empty(pg_envoy_base_config):
+    """Returns an empty list when no DOEs exist."""
+    async with generate_async_session(pg_envoy_base_config) as session:
+        result = await _get_does(session)
+    assert result == []
+
+
+@pytest.mark.parametrize("seed, optional_is_none", product([101, 202], [True, False]))
+async def test_get_does_active_doe_fields(pg_envoy_base_config, seed: int, optional_is_none: bool):
+    """Active DOE rows are returned with is_archive=False and correct field values."""
+
+    async with generate_async_session(pg_envoy_base_config) as session:
+        site = _make_site_with_setting(aggregator_id=1)
+        session.add(site)
+        grp = generate_class_instance(SiteControlGroup, seed=1, site_control_group_id=1, primacy=1)
+        session.add(grp)
+        doe = generate_class_instance(
+            DynamicOperatingEnvelope,
+            seed=seed,
+            optional_is_none=optional_is_none,
+            site=site,
+            site_control_group=grp,
+            calculation_log_id=None,
+        )
+        session.add(doe)
+        await session.flush()
+
+        original_doe = clone_class_instance(doe)
+        await session.commit()
+
+    async with generate_async_session(pg_envoy_base_config) as session:
+        result = await _get_does(session)
+
+    assert len(result) == 1
+    row = result[0]
+    assert_class_instance_equality(
+        _RawDOE, original_doe, row, ignored_properties={"is_archive", "deleted_time", "archive_time"}
+    )
+    assert row.is_archive is False
+    assert row.deleted_time is None
+    assert row.archive_time is None
+
+
+@pytest.mark.parametrize("seed, optional_is_none", product([101, 202], [True, False]))
+async def test_get_does_archive_doe_fields(pg_envoy_base_config, seed: int, optional_is_none: bool):
+    """Archive DOE rows are returned with is_archive=True and correct field values."""
+
+    async with generate_async_session(pg_envoy_base_config) as session:
+        site = _make_site_with_setting(aggregator_id=1)
+        session.add(site)
+        grp = generate_class_instance(SiteControlGroup, seed=1, site_control_group_id=1, primacy=1)
+        session.add(grp)
+        archive_doe = generate_class_instance(
+            ArchiveDynamicOperatingEnvelope,
+            seed=seed,
+            optional_is_none=optional_is_none,
+            calculation_log_id=None,
+            site_id=site.site_id,
+            site_control_group_id=grp.site_control_group_id,
+        )
+        session.add(archive_doe)
+        await session.flush()
+
+        original__archive_doe = clone_class_instance(archive_doe)
+        await session.commit()
+
+    async with generate_async_session(pg_envoy_base_config) as session:
+        result = await _get_does(session)
+
+    assert len(result) == 1
+    row = result[0]
+    assert_class_instance_equality(_RawDOE, original__archive_doe, row, ignored_properties={"is_archive"})
+    assert row.is_archive is True
+
+
+async def test_get_does_combines_active_and_archive(pg_envoy_base_config):
+    """Both active and archive DOEs are returned together; is_archive distinguishes them."""
+    doe_start = T0 + timedelta(minutes=5)
+    duration = 300
+
+    async with generate_async_session(pg_envoy_base_config) as session:
+        site = _make_site_with_setting(aggregator_id=1)
+        session.add(site)
+        grp = generate_class_instance(SiteControlGroup, seed=1, site_control_group_id=1, primacy=1)
+        session.add(grp)
+        active_doe = generate_class_instance(
+            DynamicOperatingEnvelope,
+            seed=2,
+            site=site,
+            site_control_group=grp,
+            calculation_log_id=None,
+            start_time=doe_start,
+            end_time=doe_start + timedelta(seconds=duration),
+            duration_seconds=duration,
+            created_time=doe_start - timedelta(seconds=30),
+            changed_time=doe_start - timedelta(seconds=30),
+            export_limit_watts=Decimal("2000"),
+            import_limit_active_watts=None,
+            generation_limit_active_watts=None,
+            load_limit_active_watts=None,
+            ramp_time_seconds=None,
+            set_connected=None,
+            superseded=False,
+            set_energized=None,
+            set_point_percentage=None,
+            randomize_start_seconds=None,
+        )
+        session.add(active_doe)
+        await session.flush()
+        site_id = site.site_id
+
+        archive_doe = _make_archive_doe(
+            site_id=site_id,
+            group_id=1,
+            doe_id=999,
+            start=doe_start + timedelta(minutes=10),
+            duration_seconds=300,
+            export_limit=Decimal("8000"),
+            archive_time=doe_start + timedelta(minutes=15),
+            seed=3,
+        )
+        session.add(archive_doe)
+        await session.commit()
+
+    async with generate_async_session(pg_envoy_base_config) as session:
+        result = await _get_does(session)
+
+    assert len(result) == 2
+    archive_flags = {row.dynamic_operating_envelope_id: row.is_archive for row in result}
+    active_id = next(r.dynamic_operating_envelope_id for r in result if not r.is_archive)
+    assert archive_flags[active_id] is False
+    assert archive_flags[999] is True
+
+
+async def test_get_does_scoped_to_active_site(pg_envoy_base_config):
+    """Only DOEs belonging to the most-recently-changed site are returned."""
+
+    async with generate_async_session(pg_envoy_base_config) as session:
+        # Older site — its DOEs should NOT be returned
+        old_site = _make_site_with_setting(aggregator_id=1, seed=1)
+        old_site.changed_time = T0 - timedelta(hours=2)
+        session.add(old_site)
+
+        # Newer site — the "active" site whose DOEs should be returned
+        new_site = _make_site_with_setting(aggregator_id=1, seed=2)
+        new_site.changed_time = T0 - timedelta(hours=1)
+        session.add(new_site)
+
+        grp = generate_class_instance(SiteControlGroup, seed=1, site_control_group_id=1, primacy=1)
+        session.add(grp)
+        await session.flush()
+
+        old_doe = generate_class_instance(
+            DynamicOperatingEnvelope,
+            seed=11,
+            site=old_site,
+            site_control_group=grp,
+            calculation_log_id=None,
+            export_limit_watts=Decimal("1111"),
+        )
+        new_doe = generate_class_instance(
+            DynamicOperatingEnvelope,
+            seed=22,
+            site=new_site,
+            site_control_group=grp,
+            calculation_log_id=None,
+            export_limit_watts=Decimal("9999"),
+        )
+        session.add_all([old_doe, new_doe])
+        await session.commit()
+
+    async with generate_async_session(pg_envoy_base_config) as session:
+        result = await _get_does(session)
+
+    assert len(result) == 1
+    assert result[0].export_limit_watts == pytest.approx(9999.0)
+
+
+# ─── _get_defaults ────────────────────────────────────────────────────────────
+
+
+async def test_get_defaults_empty(pg_envoy_base_config):
+    """Returns an empty list when no SiteControlGroupDefaults exist."""
+    async with generate_async_session(pg_envoy_base_config) as session:
+        result = await _get_defaults(session)
+    assert result == []
+
+
+@pytest.mark.parametrize("seed, optional_is_none", product([101, 202], [True, False]))
+async def test_get_defaults_active_default_fields(pg_envoy_base_config, seed: int, optional_is_none: bool):
+    """Active default rows are returned with is_archive=False and correct field values."""
+
+    async with generate_async_session(pg_envoy_base_config) as session:
+        grp = generate_class_instance(SiteControlGroup, seed=1, site_control_group_id=3, primacy=1)
+        session.add(grp)
+        default = generate_class_instance(
+            SiteControlGroupDefault, seed=seed, optional_is_none=optional_is_none, site_control_group=grp
+        )
+        session.add(default)
+
+        original_default = clone_class_instance(default)
+        await session.commit()
+
+    async with generate_async_session(pg_envoy_base_config) as session:
+        result = await _get_defaults(session)
+
+    assert len(result) == 1
+    row = result[0]
+
+    assert_class_instance_equality(
+        _RawDefault, original_default, row, ignored_properties={"is_archive", "archive_time"}
+    )
+    assert row.is_archive is False
+    assert row.archive_time is None
+
+
+@pytest.mark.parametrize("seed, optional_is_none", product([101, 202], [True, False]))
+async def test_get_defaults_archive_default_fields(pg_envoy_base_config, seed: int, optional_is_none: bool):
+    """Archive default rows are returned with is_archive=True and archive_time populated."""
+
+    archive_time = datetime(2022, 11, 14, tzinfo=UTC)
+    async with generate_async_session(pg_envoy_base_config) as session:
+        archive_default = generate_class_instance(
+            ArchiveSiteControlGroupDefault, seed=seed, optional_is_none=optional_is_none, archive_time=archive_time
+        )
+        session.add(archive_default)
+
+        original_archive_default = clone_class_instance(archive_default)
+
+        await session.commit()
+
+    async with generate_async_session(pg_envoy_base_config) as session:
+        result = await _get_defaults(session)
+
+    assert len(result) == 1
+    row = result[0]
+    assert_class_instance_equality(_RawDefault, original_archive_default, row, ignored_properties={"is_archive"})
+    assert row.is_archive is True
+
+
+async def test_get_defaults_combines_active_and_archive(pg_envoy_base_config):
+    """Both active and archive defaults are returned together; is_archive distinguishes them."""
+
+    async with generate_async_session(pg_envoy_base_config) as session:
+        grp = generate_class_instance(SiteControlGroup, seed=1, site_control_group_id=1, primacy=1)
+        session.add(grp)
+        active_default = generate_class_instance(
+            SiteControlGroupDefault,
+            seed=1,
+            site_control_group=grp,
+            export_limit_active_watts=Decimal("5000"),
+        )
+        session.add(active_default)
+
+        archive_default = generate_class_instance(
+            ArchiveSiteControlGroupDefault,
+            seed=2,
+            site_control_group_id=2,
+            export_limit_active_watts=Decimal("7000"),
+        )
+        session.add(archive_default)
+        await session.commit()
+
+    async with generate_async_session(pg_envoy_base_config) as session:
+        result = await _get_defaults(session)
+
+    assert len(result) == 2
+    by_group = {r.site_control_group_id: r for r in result}
+    assert by_group[1].is_archive is False
+    assert by_group[1].export_limit_active_watts == pytest.approx(5000.0)
+    assert by_group[2].is_archive is True
+    assert by_group[2].export_limit_active_watts == pytest.approx(7000.0)
+
+
+async def test_get_defaults_not_scoped_to_site(pg_envoy_base_config):
+    """Defaults are returned regardless of which site is active (no site scoping)."""
+    async with generate_async_session(pg_envoy_base_config) as session:
+        # No site in the DB — yet defaults should still be returned
+        archive_default = generate_class_instance(
+            ArchiveSiteControlGroupDefault,
+            site_control_group_id=42,
+            export_limit_active_watts=Decimal("1234"),
+        )
+        session.add(archive_default)
+        await session.commit()
+
+    async with generate_async_session(pg_envoy_base_config) as session:
+        result = await _get_defaults(session)
+
+    assert len(result) == 1
+    assert result[0].site_control_group_id == 42
 
 
 # ─── Scenario A: Single program, export curtailment steps with AS4777 ramps ──
 
 
-@pytest.mark.anyio
 async def test_chart_single_program_export_curtailment(pg_envoy_base_config):
     """
     One DERProgram (primacy 1). Export is stepped down and back up over 40 minutes.
@@ -127,7 +628,7 @@ async def test_chart_single_program_export_curtailment(pg_envoy_base_config):
     created_times: list[datetime] = []
 
     async with generate_async_session(pg_envoy_base_config) as session:
-        site = _make_der_site(aggregator_id=1)
+        site = _make_site_with_setting(aggregator_id=1)
         session.add(site)
         group = generate_class_instance(SiteControlGroup, seed=1, site_control_group_id=1, primacy=1)
         session.add(group)
@@ -157,7 +658,6 @@ async def test_chart_single_program_export_curtailment(pg_envoy_base_config):
 # ─── Scenario B: Two programs, primacy resolution, import + export limits ─────
 
 
-@pytest.mark.anyio
 async def test_chart_multi_program_primacy(pg_envoy_base_config):
     """
     Two DERPrograms operating simultaneously on different limit types:
@@ -172,7 +672,7 @@ async def test_chart_multi_program_primacy(pg_envoy_base_config):
     created_times: dict[str, datetime] = {}
 
     async with generate_async_session(pg_envoy_base_config) as session:
-        site = _make_der_site(aggregator_id=1)
+        site = _make_site_with_setting(aggregator_id=1)
         session.add(site)
         grp1 = generate_class_instance(SiteControlGroup, seed=1, site_control_group_id=1, primacy=1)
         grp2 = generate_class_instance(SiteControlGroup, seed=2, site_control_group_id=2, primacy=2)
@@ -215,7 +715,6 @@ async def test_chart_multi_program_primacy(pg_envoy_base_config):
 # ─── Scenario C: rampTms on controls, default control as baseline ─────────────
 
 
-@pytest.mark.anyio
 async def test_chart_ramptms_and_defaults(pg_envoy_base_config):
     """
     Demonstrates rampTms (explicit 120s ramp) and a default control baseline.
@@ -236,7 +735,7 @@ async def test_chart_ramptms_and_defaults(pg_envoy_base_config):
     created_times: dict[str, datetime] = {}
 
     async with generate_async_session(pg_envoy_base_config) as session:
-        site = _make_der_site(aggregator_id=1)
+        site = _make_site_with_setting(aggregator_id=1)
         session.add(site)
         grp1 = generate_class_instance(SiteControlGroup, seed=1, site_control_group_id=1, primacy=1)
         session.add(grp1)
@@ -291,7 +790,6 @@ async def test_chart_ramptms_and_defaults(pg_envoy_base_config):
 # ─── Scenario D: opModConnect disconnect and reconnect grace period ───────────
 
 
-@pytest.mark.anyio
 async def test_chart_op_mod_connect(pg_envoy_base_config):
     """
     Demonstrates opModConnect=False disconnect (power=0) and 1-minute grace after explicit
@@ -313,7 +811,7 @@ async def test_chart_op_mod_connect(pg_envoy_base_config):
     created_times: dict[str, datetime] = {}
 
     async with generate_async_session(pg_envoy_base_config) as session:
-        site = _make_der_site(aggregator_id=1)
+        site = _make_site_with_setting(aggregator_id=1)
         session.add(site)
         grp1 = generate_class_instance(SiteControlGroup, seed=1, site_control_group_id=1, primacy=1)
         session.add(grp1)
@@ -363,7 +861,6 @@ async def test_chart_op_mod_connect(pg_envoy_base_config):
 # ─── Scenario D2: opModConnect — expiry-triggered reconnect, no True control ──
 
 
-@pytest.mark.anyio
 async def test_chart_op_mod_connect_expiry(pg_envoy_base_config):
     """
     opModConnect=False control expires with no subsequent True control.
@@ -384,7 +881,7 @@ async def test_chart_op_mod_connect_expiry(pg_envoy_base_config):
     created_times: dict[str, datetime] = {}
 
     async with generate_async_session(pg_envoy_base_config) as session:
-        site = _make_der_site(aggregator_id=1)
+        site = _make_site_with_setting(aggregator_id=1)
         session.add(site)
         grp1 = generate_class_instance(SiteControlGroup, seed=1, site_control_group_id=1, primacy=1)
         session.add(grp1)
@@ -432,7 +929,6 @@ async def test_chart_op_mod_connect_expiry(pg_envoy_base_config):
 # ─── Scenario E: GEN-10 DERC4/5/6 — opModConnect + primacy + supersede ────────
 
 
-@pytest.mark.anyio
 async def test_chart_gen10_derc456(pg_envoy_base_config):
     """
     Approximates the GEN-10 DERC4/5/6 phase (primacy validation for generators).
@@ -472,7 +968,7 @@ async def test_chart_gen10_derc456(pg_envoy_base_config):
     test_end = T0 + timedelta(minutes=20)
 
     async with generate_async_session(pg_envoy_base_config) as session:
-        site = _make_der_site(aggregator_id=1, max_w=10000, grad_w=200)
+        site = _make_site_with_setting(aggregator_id=1, max_w=10000, grad_w=200)
         session.add(site)
         # Group 1 = FSA1 / DERP1, high priority. No export default → group 2 can win after DERC4.
         grp1 = generate_class_instance(SiteControlGroup, seed=1, site_control_group_id=1, primacy=1)
@@ -525,7 +1021,6 @@ async def test_chart_gen10_derc456(pg_envoy_base_config):
 # ─── Scenario E2: GEN-10 DERC4/5/6 — subscription variant (no gap) ───────────
 
 
-@pytest.mark.anyio
 async def test_chart_gen10_derc456_subscribed(pg_envoy_base_config):
     """
     Subscription variant of test_chart_gen10_derc456.
@@ -554,7 +1049,7 @@ async def test_chart_gen10_derc456_subscribed(pg_envoy_base_config):
     test_end = T0 + timedelta(minutes=20)
 
     async with generate_async_session(pg_envoy_base_config) as session:
-        site = _make_der_site(aggregator_id=1, max_w=10000, grad_w=200)
+        site = _make_site_with_setting(aggregator_id=1, max_w=10000, grad_w=200)
         session.add(site)
         grp1 = generate_class_instance(SiteControlGroup, seed=1, site_control_group_id=1, primacy=1)
         grp2 = generate_class_instance(SiteControlGroup, seed=2, site_control_group_id=2, primacy=2)
@@ -568,18 +1063,7 @@ async def test_chart_gen10_derc456_subscribed(pg_envoy_base_config):
         session.add_all([derc4, derc5, derc6])
 
         # Both groups subscribed — receipt = created_time for all controls
-        def _make_sub(resource_id: int) -> Subscription:
-            sub = Subscription()
-            sub.aggregator_id = 1
-            sub.changed_time = T0
-            sub.resource_type = SubscriptionResource.DYNAMIC_OPERATING_ENVELOPE
-            sub.resource_id = resource_id
-            sub.scoped_site_id = None
-            sub.notification_uri = "https://example.com/notify"
-            sub.entity_limit = 100
-            return sub
-
-        session.add_all([_make_sub(1), _make_sub(2)])
+        session.add_all([_make_subscription(1), _make_subscription(2)])
 
         await session.flush()
         ct4, ct6 = derc4.created_time, derc6.created_time
@@ -612,7 +1096,6 @@ async def test_chart_gen10_derc456_subscribed(pg_envoy_base_config):
 # ─── Scenario F: opModEnergise — de-energise and re-energise grace period ─────
 
 
-@pytest.mark.anyio
 async def test_chart_op_mod_energise(pg_envoy_base_config):
     """
     Demonstrates opModEnergise=False de-energise (power=0) and 1-minute grace after
@@ -634,7 +1117,7 @@ async def test_chart_op_mod_energise(pg_envoy_base_config):
     created_times: dict[str, datetime] = {}
 
     async with generate_async_session(pg_envoy_base_config) as session:
-        site = _make_der_site(aggregator_id=1)
+        site = _make_site_with_setting(aggregator_id=1)
         session.add(site)
         grp1 = generate_class_instance(SiteControlGroup, seed=1, site_control_group_id=1, primacy=1)
         session.add(grp1)
