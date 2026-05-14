@@ -1,8 +1,9 @@
 import asyncio
 import logging
+from collections.abc import AsyncIterator, Callable, Coroutine
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
-from typing import Any, AsyncIterator, Callable, Coroutine, Never
+from datetime import UTC, datetime
+from typing import Any, Never
 
 from aiohttp import ClientConnectionError
 from cactus_runner.client import ClientSession, ClientTimeout, RunnerClient
@@ -81,7 +82,7 @@ async def teardown_idle_teststack(
         if run.playlist_execution_id and run.playlist_execution_id in processed_playlists:
             continue
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         run_resource_names = get_resource_names(run.teststack_id)
 
         idle = False

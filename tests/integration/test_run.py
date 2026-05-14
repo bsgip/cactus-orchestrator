@@ -1,7 +1,5 @@
-import io
 import os
-import zipfile
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from http import HTTPMethod, HTTPStatus
 from itertools import product
 from unittest.mock import Mock, patch
@@ -11,7 +9,7 @@ from aiohttp import ClientConnectorDNSError
 from assertical.asserts.time import assert_nowish
 from assertical.fake.generator import generate_class_instance
 from assertical.fixtures.postgres import generate_async_session
-from cactus_runner.client import RunnerClientException
+from cactus_runner.client import RunnerClientError
 from cactus_schema.orchestrator import (
     HEADER_GROUP_ID,
     HEADER_GROUP_NAME,
@@ -23,7 +21,6 @@ from cactus_schema.orchestrator import (
     ProceedResponse,
     RunResponse,
     StartRunResponse,
-    uri,
 )
 from cactus_schema.runner import (
     CriteriaEntry,
@@ -87,7 +84,7 @@ async def test_spawn_teststack_and_init_run_dynamic_uris(
         await session.commit()
 
     # Act
-    req = InitRunRequest(test_procedure_id=TestProcedureId.ALL_01.value)
+    req = InitRunRequest(test_procedure_id=TestProcedureId.ALL_01)
     res = await client.post(
         f"/run_group/{run_group_id}/run", content=req.to_json(), headers={"Authorization": f"Bearer {valid_jwt_user1}"}
     )
@@ -170,7 +167,7 @@ async def test_spawn_teststack_and_init_run_static_uri(
         await session.commit()
 
     # Act
-    req = InitRunRequest(test_procedure_id=TestProcedureId.ALL_01.value)
+    req = InitRunRequest(test_procedure_id=TestProcedureId.ALL_01)
     res = await client.post(
         f"/run_group/{run_group_id}/run", content=req.to_json(), headers={"Authorization": f"Bearer {valid_jwt_user1}"}
     )
@@ -233,7 +230,7 @@ async def test_spawn_teststack_and_init_tolerant_to_status_errors(
     subscription_domain = "abc.def"
     run_group_id = 1
 
-    k8s_mock.health.side_effect = [ClientConnectorDNSError("mock 1", Mock()), False, True]
+    k8s_mock.health.side_effect = [ClientConnectorDNSError("mock 1", Mock()), False, True]  # ty:ignore[invalid-argument-type]
 
     k8s_mock.init.return_value = generate_class_instance(InitResponseBody, is_started=False)
 
@@ -248,7 +245,7 @@ async def test_spawn_teststack_and_init_tolerant_to_status_errors(
         await session.commit()
 
     # Act
-    req = InitRunRequest(test_procedure_id=TestProcedureId.ALL_01.value)
+    req = InitRunRequest(test_procedure_id=TestProcedureId.ALL_01)
     res = await client.post(
         f"/run_group/{run_group_id}/run", content=req.to_json(), headers={"Authorization": f"Bearer {valid_jwt_user1}"}
     )
@@ -267,7 +264,7 @@ async def test_spawn_teststack_and_init_tolerant_to_status_errors(
 
     # Check init/status were called
     k8s_mock.init.assert_awaited_once()
-    k8s_mock.health.call_count == 3
+    assert k8s_mock.health.call_count == 3
 
     # Check the DB
     async with generate_async_session(pg_base_config) as session:
@@ -306,7 +303,7 @@ async def test_spawn_teststack_and_init_too_many_status_errors(
         await session.commit()
 
     # Act
-    req = InitRunRequest(test_procedure_id=TestProcedureId.ALL_01.value)
+    req = InitRunRequest(test_procedure_id=TestProcedureId.ALL_01)
     res = await client.post(
         f"/run_group/{run_group_id}/run",
         content=req.to_json(),
@@ -364,7 +361,7 @@ async def test_spawn_teststack_and_init_run_static_uri_collision(
         await session.commit()
 
     # Act
-    req = InitRunRequest(test_procedure_id=TestProcedureId.ALL_01.value)
+    req = InitRunRequest(test_procedure_id=TestProcedureId.ALL_01)
     res = await client.post(
         f"/run_group/{run_group_id}/run", content=req.to_json(), headers={"Authorization": f"Bearer {valid_jwt_user1}"}
     )
@@ -390,7 +387,7 @@ async def test_spawn_teststack_and_init_run_bad_run_group_id(
     """Can't start a run for a run group outside user's scope"""
 
     # Act
-    req = InitRunRequest(test_procedure_id=TestProcedureId.ALL_01.value)
+    req = InitRunRequest(test_procedure_id=TestProcedureId.ALL_01)
     res = await client.post(
         f"/run_group/{run_group_id}/run", content=req.to_json(), headers={"Authorization": f"Bearer {valid_jwt_user1}"}
     )
@@ -430,7 +427,7 @@ async def test_spawn_teststack_and_init_run_expired_certs(
         await session.commit()
 
     # Act
-    req = InitRunRequest(test_procedure_id=TestProcedureId.ALL_01.value)
+    req = InitRunRequest(test_procedure_id=TestProcedureId.ALL_01)
     res = await client.post(
         f"/run_group/{run_group_id}/run", content=req.to_json(), headers={"Authorization": f"Bearer {valid_jwt_user1}"}
     )
@@ -471,10 +468,10 @@ async def test_spawn_teststack_and_init_run_teardown_on_init_failure(
 
         await session.commit()
 
-    k8s_mock.init.side_effect = RunnerClientException("My mock exception")
+    k8s_mock.init.side_effect = RunnerClientError("My mock exception")
 
     # Act
-    req = InitRunRequest(test_procedure_id=TestProcedureId.ALL_01.value)
+    req = InitRunRequest(test_procedure_id=TestProcedureId.ALL_01)
     res = await client.post(
         f"/run_group/{run_group_id}/run", content=req.to_json(), headers={"Authorization": f"Bearer {valid_jwt_user1}"}
     )
@@ -532,7 +529,7 @@ async def test_start_run_precondition_failed(client, k8s_mock: MockedK8s, pg_bas
 
     # Arrange
     error_message = "my mock error message"
-    k8s_mock.start.side_effect = RunnerClientException(
+    k8s_mock.start.side_effect = RunnerClientError(
         "Some sort of error", http_status_code=HTTPStatus.PRECONDITION_FAILED, error_message=error_message
     )
     run_id = 1
@@ -662,7 +659,7 @@ async def test_delete_individual_run(
                 criteria=[CriteriaEntry(True, "", ""), CriteriaEntry(True, "", "")],
                 request_history=[
                     RequestEntry("", "", HTTPMethod.GET, HTTPStatus.BAD_REQUEST, datetime.now(), "", [], 0),
-                    RequestEntry("", "", HTTPMethod.POST, HTTPStatus.OK, datetime.now(), "", None, 0),
+                    RequestEntry("", "", HTTPMethod.POST, HTTPStatus.OK, datetime.now(), "", [], 0),
                 ],
             ),
             True,
@@ -691,7 +688,7 @@ async def test_delete_individual_run(
                 step_status={},
                 criteria=[CriteriaEntry(True, "", ""), CriteriaEntry(True, "", "")],
                 request_history=[
-                    RequestEntry("", "", HTTPMethod.GET, HTTPStatus.BAD_REQUEST, datetime.now(), "", None, 0),
+                    RequestEntry("", "", HTTPMethod.GET, HTTPStatus.BAD_REQUEST, datetime.now(), "", [], 0),
                     RequestEntry("", "", HTTPMethod.POST, HTTPStatus.OK, datetime.now(), "", ["validation error"], 0),
                 ],
             ),
@@ -703,7 +700,7 @@ async def test_delete_individual_run(
                 step_status={},
                 criteria=[CriteriaEntry(True, "", ""), CriteriaEntry(False, "", "")],
                 request_history=[
-                    RequestEntry("", "", HTTPMethod.GET, HTTPStatus.BAD_REQUEST, datetime.now(), "", None, 0),
+                    RequestEntry("", "", HTTPMethod.GET, HTTPStatus.BAD_REQUEST, datetime.now(), "", [], 0),
                     RequestEntry("", "", HTTPMethod.POST, HTTPStatus.OK, datetime.now(), "", [], 0),
                 ],
             ),
@@ -724,7 +721,9 @@ def test_is_all_criteria_met(runner_status: RunnerStatus | None, expected: bool 
                 RunnerStatus,
                 step_status={},
                 criteria=[CriteriaEntry(True, "", "")],
-                request_history=[RequestEntry("a", "b", "c", HTTPStatus.OK, datetime(2022, 11, 20), "", [], 0)],
+                request_history=[
+                    RequestEntry("a", "b", HTTPMethod.TRACE, HTTPStatus.OK, datetime(2022, 11, 20), "", [], 0)
+                ],
             ),
             True,
         ),
@@ -743,7 +742,7 @@ def test_is_all_criteria_met(runner_status: RunnerStatus | None, expected: bool 
                 step_status={"step1": StepStatus.RESOLVED},
                 criteria=[CriteriaEntry(True, "", "")],
                 request_history=[
-                    RequestEntry("a", "b", "c", HTTPStatus.OK, datetime(2022, 11, 20), "", ["an error"], 0)
+                    RequestEntry("a", "b", HTTPMethod.TRACE, HTTPStatus.OK, datetime(2022, 11, 20), "", ["an error"], 0)
                 ],
             ),
             False,
@@ -761,7 +760,7 @@ async def test_finalise_run_creates_run_artifact_and_updates_run(
 
     k8s_mock.status.return_value = runner_status
     k8s_mock.finalize.return_value = finalize_data
-    finalise_time = datetime(2023, 4, 5, tzinfo=timezone.utc)
+    finalise_time = datetime(2023, 4, 5, tzinfo=UTC)
     timeout_seconds = 10
     regenerate_mock.return_value = finalize_data
 
@@ -804,7 +803,7 @@ async def test_finalise_run_handles_runner_finalize_failure(
 
     k8s_mock.status.return_value = runner_status
     k8s_mock.finalize.side_effect = Exception("mock exception")
-    finalise_time = datetime(2023, 4, 5, tzinfo=timezone.utc)
+    finalise_time = datetime(2023, 4, 5, tzinfo=UTC)
     timeout_seconds = 10
     regenerate_mock.return_value = b""
 
@@ -844,7 +843,7 @@ async def test_finalise_run_handles_runner_status_failure(
 
     k8s_mock.status.side_effect = Exception("my mock exception")
     k8s_mock.finalize.return_value = finalize_data
-    finalise_time = datetime(2023, 4, 5, tzinfo=timezone.utc)
+    finalise_time = datetime(2023, 4, 5, tzinfo=UTC)
     timeout_seconds = 10
     regenerate_mock.return_value = finalize_data
 
@@ -896,6 +895,7 @@ async def test_finalise_run_and_teardown_teststack_success(
             await session.execute(select(Run).where(Run.run_id == 1).options(selectinload(Run.run_artifact)))
         ).scalar_one()
 
+        assert run.finalised_at is not None
         assert_nowish(run.finalised_at)
         assert run.run_status == RunStatus.finalised_by_client
         assert run.all_criteria_met is True
@@ -929,6 +929,7 @@ async def test_finalise_run_and_teardown_teststack_idempotent(
 
         original_finalised_at = run.finalised_at
 
+        assert run.finalised_at is not None
         assert_nowish(run.finalised_at)
         assert run.run_status == RunStatus.finalised_by_client
         assert run.all_criteria_met is True
@@ -1102,7 +1103,6 @@ async def test_get_run_artifact_data(
     # Assert
     assert res.status_code == expected_status
     if expected_status == HTTPStatus.OK:
-
         assert expected_artifact_data == res.read()
 
         assert res.headers[HEADER_USER_NAME] == expected_user
@@ -1134,7 +1134,7 @@ async def test_spawn_teststack_with_playlist(
         await session.commit()
 
     # Act - Create playlist with multiple tests
-    req = InitRunRequest(test_procedure_ids=[TestProcedureId.ALL_01.value, TestProcedureId.ALL_02.value])
+    req = InitRunRequest(test_procedure_ids=[TestProcedureId.ALL_01, TestProcedureId.ALL_02])
     res = await client.post(
         f"/run_group/{run_group_id}/run", content=req.to_json(), headers={"Authorization": f"Bearer {valid_jwt_user1}"}
     )
@@ -1199,7 +1199,7 @@ async def test_backwards_compatibility_single_run(
         await session.commit()
 
     # Act - Use old single test_procedure_id format
-    req = InitRunRequest(test_procedure_id=TestProcedureId.ALL_01.value)
+    req = InitRunRequest(test_procedure_id=TestProcedureId.ALL_01)
     res = await client.post(
         f"/run_group/{run_group_id}/run", content=req.to_json(), headers={"Authorization": f"Bearer {valid_jwt_user1}"}
     )
@@ -1230,7 +1230,7 @@ async def create_playlist_for_test(
     pg_base_config,
     client_cert_pem_bytes: bytes,
     valid_jwt: str,
-    test_procedure_ids: list[str],
+    test_procedure_ids: list[TestProcedureId],
     run_group_id: int = 1,
 ) -> InitRunResponse:
     """Helper to set up k8s mocks, configure user/run_group, and create a playlist."""
@@ -1266,8 +1266,9 @@ async def test_playlist_finalize_advances_to_next_test(
         pg_base_config,
         client_cert_pem_bytes,
         valid_jwt_user1,
-        [TestProcedureId.ALL_01.value, TestProcedureId.ALL_02.value],
+        [TestProcedureId.ALL_01, TestProcedureId.ALL_02],
     )
+    assert response_model.playlist_runs is not None
     first_run_id = response_model.playlist_runs[0].run_id
     second_run_id = response_model.playlist_runs[1].run_id
 
@@ -1313,8 +1314,9 @@ async def test_playlist_finalize_teardown_on_last_test(
         pg_base_config,
         client_cert_pem_bytes,
         valid_jwt_user1,
-        [TestProcedureId.ALL_01.value, TestProcedureId.ALL_02.value],
+        [TestProcedureId.ALL_01, TestProcedureId.ALL_02],
     )
+    assert response_model.playlist_runs is not None
     first_run_id = response_model.playlist_runs[0].run_id
     second_run_id = response_model.playlist_runs[1].run_id
 
@@ -1361,8 +1363,9 @@ async def test_delete_playlist_run_deletes_all_siblings(
         pg_base_config,
         client_cert_pem_bytes,
         valid_jwt_user1,
-        [TestProcedureId.ALL_01.value, TestProcedureId.ALL_02.value, TestProcedureId.ALL_03.value],
+        [TestProcedureId.ALL_01, TestProcedureId.ALL_02, TestProcedureId.ALL_03],
     )
+    assert response_model.playlist_runs is not None
     run_ids = [r.run_id for r in response_model.playlist_runs]
 
     # Verify runs exist
@@ -1394,10 +1397,11 @@ async def test_get_individual_run_returns_playlist_runs(
         pg_base_config,
         client_cert_pem_bytes,
         valid_jwt_user1,
-        [TestProcedureId.ALL_01.value, TestProcedureId.ALL_02.value, TestProcedureId.ALL_03.value],
+        [TestProcedureId.ALL_01, TestProcedureId.ALL_02, TestProcedureId.ALL_03],
     )
 
     # Get first run details
+    assert response_model.playlist_runs is not None
     first_run_id = response_model.playlist_runs[0].run_id
     response = await client.get(f"/run/{first_run_id}", headers={"Authorization": f"Bearer {valid_jwt_user1}"})
     assert response.status_code == HTTPStatus.OK
@@ -1419,8 +1423,9 @@ async def test_start_run_rejects_out_of_order_playlist_run(
         pg_base_config,
         client_cert_pem_bytes,
         valid_jwt_user1,
-        [TestProcedureId.ALL_01.value, TestProcedureId.ALL_02.value],
+        [TestProcedureId.ALL_01, TestProcedureId.ALL_02],
     )
+    assert response_model.playlist_runs is not None
     first_run_id = response_model.playlist_runs[0].run_id
     second_run_id = response_model.playlist_runs[1].run_id
 

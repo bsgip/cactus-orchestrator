@@ -72,10 +72,10 @@ async def create_group(
 
     try:
         csip_aus_version = CSIPAusVersion(group_request.csip_aus_version)
-    except Exception:
+    except Exception as err:
         raise HTTPException(
             HTTPStatus.BAD_REQUEST, detail=f"'{group_request.csip_aus_version}' doesn't map to a known CSIPAusVersion"
-        )
+        ) from err
 
     # get runs
     run_group = await insert_run_group(db.session, user.user_id, csip_aus_version.value)

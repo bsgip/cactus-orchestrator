@@ -1,11 +1,16 @@
-# mypy: ignore-errors
 import base64
+from typing import Any
 
 from cryptography import x509
 from cryptography.hazmat.backends import default_backend
 from kubernetes import client
 
-from cactus_orchestrator.settings import TLS_SERVER_SECRET_NAME_FORMAT, main_settings, v1_core_api, v1_net_api
+from cactus_orchestrator.settings import (
+    TLS_SERVER_SECRET_NAME_FORMAT,
+    get_current_settings,
+    v1_core_api,
+    v1_net_api,
+)
 
 
 def extract_domain_from_cert(cert_data: bytes) -> str:
@@ -50,13 +55,13 @@ def create_or_update_k8s_tls_secret(
         if exc.status == 409:  # Conflict - secret already exists, so we update it
             v1_core_api.replace_namespaced_secret(secret_name, namespace, secret)
         else:
-            raise RuntimeError(f"Failed to create/update TLS secret: {exc}")
+            raise RuntimeError(f"Failed to create/update TLS secret: {exc}") from exc
 
 
 def enable_mtls_on_ingress(*, ingress_name: str, ca_secret_name: str, namespace: str) -> None:
     """Patch an Ingress resource to enable client certificate validation using CA cert."""
     # Fetch existing Ingress
-    ingress = v1_net_api.read_namespaced_ingress(ingress_name, namespace)
+    ingress: Any = v1_net_api.read_namespaced_ingress(ingress_name, namespace)
 
     # Ensure annotations exist
     if ingress.metadata.annotations is None:
@@ -80,15 +85,18 @@ def install_server_certificate(
     cert_data: bytes, key_data: bytes, ingress_name: str, namespace: str | None = None
 ) -> None:
     """Creates a TLS secret and updates the Ingress with it."""
-    namespace = namespace or main_settings.test_execution_namespace
+    namespace = namespace or get_current_settings().test_execution_namespace
 
     domain = extract_domain_from_cert(cert_data)
     secret_name = TLS_SERVER_SECRET_NAME_FORMAT.format(domain=domain.replace(".", "-"))
     create_or_update_k8s_tls_secret(
-        secret_name=secret_name, cert_data=cert_data, key_data=key_data, namespace=namespace
+        secret_name=secret_name,
+        cert_data=cert_data,
+        key_data=key_data,
+        namespace=namespace,
     )
 
-    ingress = v1_net_api.read_namespaced_ingress(ingress_name, namespace)
+    ingress: Any = v1_net_api.read_namespaced_ingress(ingress_name, namespace)
     if not ingress.spec.tls:
         ingress.spec.tls = []
 

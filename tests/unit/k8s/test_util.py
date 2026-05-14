@@ -10,7 +10,7 @@ from cactus_orchestrator.k8s.resource import (
     get_resource_names,
     get_template_names,
 )
-from cactus_orchestrator.settings import CactusOrchestratorException
+from cactus_orchestrator.settings import CactusOrchestratorError
 
 
 @pytest.mark.asyncio
@@ -34,6 +34,7 @@ async def test_async_k8s_api_retry_takes_args():
         return arg, kwarg
 
     result = await arg_function("hi", kwarg="kwarg1")
+    assert result is not None
     assert result[0] == "hi"
     assert result[1] == "kwarg1"
 
@@ -64,7 +65,7 @@ async def test_async_k8s_api_retry_exceeds_retries():
     async def sample_function():
         raise ApiException(status=500, reason="Internal Server Error")
 
-    with pytest.raises(CactusOrchestratorException, match="Failed action: sample_function"):
+    with pytest.raises(CactusOrchestratorError, match="Failed action: sample_function"):
         await sample_function()
 
 

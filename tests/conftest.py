@@ -1,8 +1,8 @@
 import base64
 import inspect
 import os
-from datetime import datetime, timedelta, timezone
-from typing import Any, Generator
+from collections.abc import Generator
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import jwt
@@ -11,11 +11,11 @@ from assertical.fake.generator import generate_class_instance
 from assertical.fixtures.environment import environment_snapshot
 from assertical.fixtures.fastapi import start_app_with_client
 from assertical.fixtures.postgres import generate_async_conn_str_from_connection
-from envoy.server.alembic import upgrade as envoy_upgrade
 from cryptography import x509
-from cryptography.hazmat.primitives import asymmetric, hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec, rsa
 from cryptography.x509.oid import NameOID
+from envoy.server.alembic import upgrade as envoy_upgrade
 from kubernetes.client import V1Secret
 from psycopg import Connection
 from sqlalchemy import NullPool, create_engine
@@ -81,8 +81,8 @@ def serca_cert_key_pair() -> tuple[x509.Certificate, ec.EllipticCurvePrivateKey]
         .issuer_name(subject)
         .public_key(serca_key.public_key())
         .serial_number(x509.random_serial_number())
-        .not_valid_before(datetime.now(timezone.utc))
-        .not_valid_after(datetime.now(timezone.utc) + timedelta(days=365))
+        .not_valid_before(datetime.now(UTC))
+        .not_valid_after(datetime.now(UTC) + timedelta(days=365))
         .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
         .add_extension(ski, critical=False)
         .sign(serca_key, hashes.SHA256())  # Self signed
@@ -108,8 +108,8 @@ def mca_cert_key_pair(serca_cert_key_pair) -> tuple[x509.Certificate, ec.Ellipti
         .issuer_name(subject)
         .public_key(mca_key.public_key())
         .serial_number(x509.random_serial_number())
-        .not_valid_before(datetime.now(timezone.utc))
-        .not_valid_after(datetime.now(timezone.utc) + timedelta(days=365))
+        .not_valid_before(datetime.now(UTC))
+        .not_valid_after(datetime.now(UTC) + timedelta(days=365))
         .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
         .add_extension(ski, critical=False)
         .add_extension(aki, critical=False)
@@ -136,8 +136,8 @@ def mica_cert_key_pair(mca_cert_key_pair) -> tuple[x509.Certificate, ec.Elliptic
         .issuer_name(subject)
         .public_key(mica_key.public_key())
         .serial_number(x509.random_serial_number())
-        .not_valid_before(datetime.now(timezone.utc))
-        .not_valid_after(datetime.now(timezone.utc) + timedelta(days=365))
+        .not_valid_before(datetime.now(UTC))
+        .not_valid_after(datetime.now(UTC) + timedelta(days=365))
         .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
         .add_extension(ski, critical=False)
         .add_extension(aki, critical=False)
@@ -170,8 +170,8 @@ def client_cert_key_pair_expired(mica_cert_key_pair) -> tuple[x509.Certificate, 
         mica_cert,
         456,
         "Expired ID 456",
-        datetime.now(timezone.utc) - timedelta(days=100),
-        datetime.now(timezone.utc),
+        datetime.now(UTC) - timedelta(days=100),
+        datetime.now(UTC),
     )
     return (client_cert, client_key)
 
@@ -183,11 +183,11 @@ def client_cert_expired_pem_bytes(client_cert_key_pair_expired) -> bytes:
 
 @pytest.fixture(scope="session")
 def rsa_key():
-    return asymmetric.rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    return rsa.generate_private_key(public_exponent=65537, key_size=2048)
 
 
 @pytest.fixture(scope="session")
-def kid_and_jwks_stub(rsa_key) -> tuple[str, dict[str, list[str, Any]]]:
+def kid_and_jwks_stub(rsa_key) -> tuple[str, dict[str, list[dict[str, str]]]]:
     public_key = rsa_key.public_key()
     kid = "test-kid"
     public_numbers = public_key.public_numbers()
@@ -233,8 +233,8 @@ def valid_token_for_user(subject: str, ca_key, kid, scope, permissions) -> str:
         "sub": subject,
         "aud": os.environ["JWTAUTH_AUDIENCE"],
         "iss": os.environ["JWTAUTH_ISSUER"],
-        "exp": datetime.now(timezone.utc) + timedelta(hours=1),
-        "iat": datetime.now(timezone.utc),
+        "exp": datetime.now(UTC) + timedelta(hours=1),
+        "iat": datetime.now(UTC),
         "scope": scope,
         "permissions": permissions,
     }
@@ -322,7 +322,7 @@ def execute_test_sql_file(cfg: Connection, path_to_sql_file: str) -> None:
     with open(path_to_sql_file) as f:
         sql = f.read()
     with cfg.cursor() as cursor:
-        cursor.execute(sql)
+        cursor.execute(sql)  # ty:ignore[no-matching-overload]
         cfg.commit()
 
 

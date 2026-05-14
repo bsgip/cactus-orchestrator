@@ -63,7 +63,7 @@ async def generate_power_limit_chart(run_artifact: RunArtifact, video_start_seco
     schema_sql, data_sql = extract_envoy_dumps(run_artifact.file_data)
 
     try:
-        reporting_data = ReportingData.from_json(run_artifact.version, run_artifact.reporting_data)  # type: ignore
+        reporting_data = ReportingData.from_json(run_artifact.version, run_artifact.reporting_data)
     except Exception as exc:
         raise ValueError(f"Failed to deserialize reporting data: {exc}") from exc
 
@@ -88,7 +88,7 @@ async def generate_power_limit_chart(run_artifact: RunArtifact, video_start_seco
     ]
 
     try:
-        pg: testing.postgresql.Postgresql = await asyncio.to_thread(testing.postgresql.Postgresql)  # type: ignore
+        pg: testing.postgresql.Postgresql = await asyncio.to_thread(testing.postgresql.Postgresql)
     except RuntimeError as exc:
         raise ValueError(f"Postgres unavailable (is initdb installed?): {exc}") from exc
     try:
@@ -104,7 +104,10 @@ async def generate_power_limit_chart(run_artifact: RunArtifact, video_start_seco
                 capture_output=True,
             )
             if proc.returncode != 0:
-                logger.error("psql restore failed (exit %d): %s", proc.returncode, proc.stderr.decode(errors="replace"))
+                stderr_str = (
+                    proc.stderr.decode(errors="replace") if isinstance(proc.stderr, bytes) else str(proc.stderr)
+                )
+                logger.error("psql restore failed (exit %d): %s", proc.returncode, stderr_str)
                 proc.check_returncode()
 
         engine = create_async_engine(async_pg_url)

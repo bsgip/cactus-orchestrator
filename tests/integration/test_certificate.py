@@ -1,9 +1,9 @@
 import io
 import zipfile
+from collections.abc import Generator
 from dataclasses import dataclass
 from http import HTTPStatus
 from itertools import product
-from typing import Generator
 from unittest.mock import Mock, patch
 
 import pytest
@@ -97,6 +97,7 @@ async def test_generate_new_certificate_and_fetch(
     cert_chain = x509.load_pem_x509_certificates(cert_chain_bytes)
     cert = cert_chain[0]  # Extract cert from the chain as we no longer save to zip
     pfx_key, pfx_cert, pfx_additional_certs = pkcs12.load_key_and_certificates(pfx_bytes, None)
+    assert pfx_key is not None
 
     # Do some basic sanity checks
     assert cert_chain == [cert, mica_cert_key_pair[0], mca_cert_key_pair[0]]
@@ -120,6 +121,7 @@ async def test_generate_new_certificate_and_fetch(
         ).scalar_one()
         cert_bytes = cert.public_bytes(Encoding.PEM)
         assert run_group.certificate_pem == cert_bytes
+        assert run_group.certificate_generated_at is not None
         assert_nowish(run_group.certificate_generated_at)
         assert run_group.is_device_cert == is_device_cert
         assert run_group.certificate_id == (original_cert_id + 1)
@@ -175,7 +177,7 @@ async def test_fetch_current_certificate_authority_der(
     assert x509.load_pem_x509_certificate(response_2.content, default_backend()) == serca_cert_key_pair[0]
 
     # Assert
-    k8s_mock.fetch_certificate_only.call_count == 2
+    assert k8s_mock.fetch_certificate_only.call_count == 2
 
 
 async def test_generate_shared_aggregator_certificate_and_fetch(
@@ -212,7 +214,7 @@ async def test_generate_shared_aggregator_certificate_and_fetch(
     run_group_ids = [r.run_group_id for r in run_groups]
 
     # Act
-    res = await client.put(f"/run_group/certificate", headers={"Authorization": f"Bearer {valid_jwt_user1}"})
+    res = await client.put("/run_group/certificate", headers={"Authorization": f"Bearer {valid_jwt_user1}"})
 
     # Assert
     assert res.status_code == HTTPStatus.OK
@@ -233,6 +235,7 @@ async def test_generate_shared_aggregator_certificate_and_fetch(
     cert_chain = x509.load_pem_x509_certificates(cert_chain_bytes)
     cert = cert_chain[0]  # Extract cert from the chain as we no longer save to zip
     pfx_key, pfx_cert, pfx_additional_certs = pkcs12.load_key_and_certificates(pfx_bytes, None)
+    assert pfx_key is not None
 
     # Do some basic sanity checks
     assert cert_chain == [cert, mica_cert_key_pair[0], mca_cert_key_pair[0]]
@@ -257,8 +260,9 @@ async def test_generate_shared_aggregator_certificate_and_fetch(
             ).scalar_one()
             cert_bytes = cert.public_bytes(Encoding.PEM)
             assert run_group.certificate_pem == cert_bytes
+            assert run_group.certificate_generated_at is not None
             assert_nowish(run_group.certificate_generated_at)
-            assert run_group.is_device_cert == False  # must be an aggregator cert if shared
+            assert not run_group.is_device_cert  # must be an aggregator cert if shared
             assert run_group.certificate_id == max_original_certificate_id + 1
 
         # Refetch and ensure the cert bytes match what we originally received
