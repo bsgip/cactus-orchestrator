@@ -4,7 +4,6 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pandas as pd
-import psycopg
 import pytest
 from assertical.fake.generator import generate_class_instance
 from cactus_runner.app.envoy_common import ReadingLocation
@@ -28,7 +27,6 @@ from cactus_orchestrator.reporting.run_reporting import (
     device_category_to_string,
     generate_readings_timeline,
     pdf_report_as_bytes,
-    uom_to_string,
     validate_cell,
     validate_reading_duration,
 )
@@ -542,7 +540,7 @@ def test_generate_readings_timeline():
             }
         )
 
-    base_timestamp = datetime.now(timezone.utc)
+    base_timestamp = datetime.now(UTC)
     COUNT = 10
     readings_df = sample_readings([base_timestamp + timedelta(seconds=i) for i in range(COUNT)])
     quantity = "myquantity"

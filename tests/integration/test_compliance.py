@@ -2,7 +2,6 @@ import dataclasses
 from http import HTTPStatus
 
 import pytest
-from assertical.asserts.generator import assert_class_instance_equality
 from assertical.asserts.type import assert_list_type
 from assertical.fake.generator import generate_class_instance
 from cactus_schema.orchestrator import (

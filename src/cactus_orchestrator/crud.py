@@ -509,22 +509,25 @@ async def insert_compliance_request(
 
 
 async def update_compliance_request(
-    session: AsyncSession, user_id: int, compliance_request: ComplianceRequest, **kwargs
-):
+    session: AsyncSession,
+    user_id: int,
+    compliance_request: ComplianceRequest,
+    **kwargs: int | str | datetime | set[int] | set[str],
+) -> None:
     """Updates the compliance request data"""
     for key, value in kwargs.items():
         if hasattr(compliance_request, key):
             # Classes and runs are stored in their own table so we need to
             # turn the serialized form (str for class, int for run) into the corresponding ORM model
-            if key == "classes":
+            if key == "classes" and isinstance(value, set):
                 value = {ComplianceRequestClass(compliance_class=c) for c in value}
-            if key == "runs":
+            if key == "runs" and isinstance(value, set):
                 value = {ComplianceRequestRun(compliance_run_id=r) for r in value}
 
             setattr(compliance_request, key, value)
 
     # update table metadata
-    compliance_request.updated_at = datetime.now(timezone.utc)
+    compliance_request.updated_at = datetime.now(UTC)
     compliance_request.updated_by = user_id
 
     await session.flush()
