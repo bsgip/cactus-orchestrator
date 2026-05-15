@@ -1500,3 +1500,32 @@ async def test_get_run_power_limit_chart_ok(mock_chart, client, pg_base_config, 
     assert res.status_code == HTTPStatus.OK
     assert res.headers["content-type"].startswith("text/html")
     assert "<html>chart</html>" in res.text
+
+
+@pytest.mark.parametrize(
+    "query_params, expected_status_code, expected_run_count, jwt",
+    [
+        ("?passed=true", HTTPStatus.OK, 2, "valid_jwt_user1"),
+        ("?passed=false", HTTPStatus.BAD_REQUEST, None, "valid_jwt_user1"),
+        ("", HTTPStatus.BAD_REQUEST, None, "valid_jwt_user1"),
+        ("?passed=true", HTTPStatus.OK, 0, "valid_jwt_user2"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_get_run_list(
+    query_params: str,
+    expected_status_code: HTTPStatus,
+    expected_run_count: int | None,
+    jwt: str,
+    client,
+    pg_base_config,
+    valid_jwt_user1,
+    valid_jwt_user2,
+):
+
+    res = await client.get(f"/run{query_params}", headers={"Authorization": f"Bearer {eval(jwt)}"})
+    assert res.status_code == expected_status_code
+    if expected_status_code == HTTPStatus.OK:
+        runs = RunResponse.from_json(res.text)
+        assert isinstance(runs, list)
+        assert len(runs) == expected_run_count

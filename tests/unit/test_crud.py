@@ -27,6 +27,7 @@ from cactus_orchestrator.crud import (
     select_group_runs_for_procedure,
     select_next_playlist_run,
     select_nonfinalised_runs,
+    select_passed_runs_for_user,
     select_playlist_runs,
     select_run_group_counts_for_user,
     select_run_group_for_user,
@@ -246,6 +247,25 @@ async def test_select_active_runs_for_user(pg_base_config):
 
         user_dne_runs = await select_active_runs_for_user(session, 99)
         assert_list_type(Run, user_dne_runs, 0)
+
+
+@pytest.mark.asyncio
+async def test_select_passed_runs_for_user(pg_base_config):
+    """Test fetching passed runs across multiple groups for a user"""
+
+    async with generate_async_session(pg_base_config) as session:
+        user_1_runs = await select_passed_runs_for_user(session=session, user_id=1)
+        assert_list_type(Run, user_1_runs, 2)
+        assert [datetime.fromisoformat("2024-01-01T00:03:00Z"), datetime.fromisoformat("2024-01-01T00:02:00Z")] == [
+            r.created_at for r in user_1_runs
+        ]  # check order by created_at
+        assert all([isinstance(r.run_group, RunGroup) for r in user_1_runs])
+
+        user_2_runs = await select_passed_runs_for_user(session=session, user_id=2)
+        assert_list_type(Run, user_2_runs, 0)
+
+        user_3_runs = await select_passed_runs_for_user(session=session, user_id=3)
+        assert_list_type(Run, user_3_runs, 0)
 
 
 @pytest.mark.parametrize("with_cert", [True, False])

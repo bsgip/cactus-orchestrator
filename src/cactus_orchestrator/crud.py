@@ -215,6 +215,24 @@ async def select_active_runs_for_user(session: AsyncSession, user_id: int) -> Se
     return resp.scalars().all()
 
 
+async def select_passed_runs_for_user(session: AsyncSession, user_id: int) -> Sequence[Run]:
+    """Fetches all runs for a user (across all RunGroups) that are in a finalised state AND have met all criteria.
+
+    Will return RunGroup as an include"""
+    stmt = (
+        select(Run)
+        .join(RunGroup)
+        .where(RunGroup.user_id == user_id)
+        .where(Run.run_status.in_(FINALISED_RUN_STATUSES))
+        .where(Run.all_criteria_met == True)  # noqa: E712
+        .options(selectinload(Run.run_group))
+        .order_by(Run.run_id.desc())
+    )
+
+    resp = await session.execute(stmt)
+    return resp.scalars().all()
+
+
 async def select_nonfinalised_runs(session: AsyncSession) -> Sequence[Run]:
     stmt = select(Run).where(Run.run_status.in_(ACTIVE_RUN_STATUSES))
     resp = await session.execute(stmt)
