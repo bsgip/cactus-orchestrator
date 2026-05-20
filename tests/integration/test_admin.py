@@ -14,6 +14,7 @@ from cactus_schema.orchestrator import (
     HEADER_TEST_ID,
     HEADER_USER_NAME,
     ComplianceRequestResponse,
+    ComplianceRequestUpdateRequest,
     ProceedResponse,
     RunGroupResponse,
     RunResponse,
@@ -545,3 +546,25 @@ async def test_admin_get_compliance_request(
     if res.status_code == HTTPStatus.OK:
         compliance_request = ComplianceRequestResponse.from_json(res.text)
         assert compliance_request.compliance_request_id == compliance_request_id
+
+
+@pytest.mark.asyncio
+async def test_update_compliance_request(client, pg_compliance_config, valid_jwt_admin1):
+    # Arrange
+    request_params = generate_class_instance(ComplianceRequestUpdateRequest)
+    attrs_to_set_none = ["der_brand", "der_oem", "der_series", "der_representative_models"]
+    for attr in attrs_to_set_none:
+        setattr(request_params, attr, None)
+
+    assert isinstance(request_params, ComplianceRequestUpdateRequest)
+    compliance_request_id = 1
+
+    # Act
+    res = await client.put(
+        f"/admin/compliance_request/{compliance_request_id}",
+        headers={"Authorization": f"Bearer {valid_jwt_admin1}"},
+        content=request_params.to_json(),
+    )
+
+    # Assert
+    assert res.status_code == HTTPStatus.OK

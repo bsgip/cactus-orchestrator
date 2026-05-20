@@ -128,7 +128,7 @@ async def update_compliance_request_endpoint(
         if getattr(body, field.name) is not None
     }
 
-    await update_compliance_request(session=db.session, user_id=user.user_id, compliance_request=request, **params)
+    await update_compliance_request(session=db.session, updated_by=user.user_id, compliance_request=request, **params)
 
     await db.session.commit()
     return await map_to_compliance_request_response(request)

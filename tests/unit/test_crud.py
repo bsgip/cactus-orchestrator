@@ -773,7 +773,7 @@ async def test_update_compliance_request(pg_compliance_config):
         request = await select_compliance_request(session=session, compliance_request_id=compliance_request_id)
         assert request is not None
         await update_compliance_request(
-            session=session, user_id=USER_ID, compliance_request=request, **new_compliance_values
+            session=session, updated_by=USER_ID, compliance_request=request, **new_compliance_values
         )
         await session.commit()
 

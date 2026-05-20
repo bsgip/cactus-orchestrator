@@ -1,4 +1,5 @@
 import asyncio
+import dataclasses
 import logging
 from datetime import datetime
 from http import HTTPStatus
@@ -9,6 +10,7 @@ from cactus_schema.orchestrator import (
     AdminComplianceRequestResponse,
     AdminStatsResponse,
     ComplianceRequestResponse,
+    ComplianceRequestUpdateRequest,
     ComplianceRequestUser,
     ProceedResponse,
     RunGroupResponse,
@@ -57,6 +59,7 @@ from cactus_orchestrator.crud import (
     select_user_run_with_artifact,
     select_users,
     update_compliance_generation_record_with_file_data,
+    update_compliance_request,
 )
 from cactus_orchestrator.k8s.resource import get_resource_names
 from cactus_orchestrator.model import ComplianceRequest, User
@@ -642,3 +645,38 @@ async def admin_get_compliance_request(
     response = await map_to_compliance_request_response(request=compliance_request)
 
     return response
+
+
+@router.put(uri.AdminComplianceRequest, status_code=HTTPStatus.OK)
+async def admin_update_compliance_request(
+    compliance_request_id: int,
+    body: ComplianceRequestUpdateRequest,
+    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.admin_all}))],
+) -> ComplianceRequestResponse:
+    # Get admin user
+    admin = await select_user_or_raise(db.session, user_context)
+    updated_by = admin.user_id
+
+    # get compliance request
+    try:
+        request = await select_compliance_request(
+            session=db.session,
+            compliance_request_id=compliance_request_id,
+        )
+    except NoResultFound as exc:
+        logger.debug(exc)
+        raise HTTPException(
+            status_code=HTTPStatus.NOT_FOUND, detail=f"Compliance request {compliance_request_id} does not exist."
+        ) from exc
+
+    # Determine which parameters to update (these have a value that isn't None)
+    params = {
+        field.name: getattr(body, field.name)
+        for field in dataclasses.fields(body)
+        if getattr(body, field.name) is not None
+    }
+
+    await update_compliance_request(session=db.session, updated_by=updated_by, compliance_request=request, **params)
+
+    await db.session.commit()
+    return await map_to_compliance_request_response(request)

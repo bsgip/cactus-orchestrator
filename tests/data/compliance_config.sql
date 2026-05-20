@@ -5,7 +5,7 @@ VALUES ('user1', 'https://test-cactus-issuer.example.com', 64, 'user1@cactus.exa
 INSERT INTO user_ (subject_id, issuer_id, pen, user_name)
 VALUES ('user2', 'https://test-cactus-issuer.example.com', 64, 'user2@cactus.example.com');
 INSERT INTO user_ (subject_id, issuer_id, pen, user_name)
-VALUES ('admin1', 'https://test-cactus-issuer.example.com', 64, 'admin1@cactus.example.com');
+VALUES ('admin-user', 'https://test-cactus-issuer.example.com', 64, 'admin1@cactus.example.com');
 
 -- Run Groups
 INSERT INTO run_group (user_id, name, csip_aus_version, is_device_cert, certificate_pem, certificate_generated_at, certificate_id)
