@@ -8,6 +8,7 @@ from cactus_runner.client import ClientSession, ClientTimeout, RunnerClient
 from cactus_schema.orchestrator import (
     AdminComplianceRequestResponse,
     AdminStatsResponse,
+    ComplianceRequestResponse,
     ComplianceRequestUser,
     ProceedResponse,
     RunGroupResponse,
@@ -28,6 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from cactus_orchestrator import artifact
 from cactus_orchestrator.api.common import (
     map_run_to_run_response,
+    map_to_compliance_request_response,
     select_user_or_raise,
     select_user_run_group_or_raise,
     test_procedures_by_id,
@@ -41,6 +43,7 @@ from cactus_orchestrator.crud import (
     ACTIVE_RUN_STATUSES,
     insert_compliance_generation_record,
     select_admin_stats,
+    select_compliance_request,
     select_compliance_requests,
     select_group_runs_aggregated_by_procedure,
     select_group_runs_for_procedure,
@@ -620,3 +623,22 @@ async def admin_get_compliance_requests_paginated(
     else:
         resp = []
     return paginate(resp)
+
+
+@router.get(uri.AdminComplianceRequest, status_code=HTTPStatus.OK)
+async def admin_get_compliance_request(
+    compliance_request_id: int,
+    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.admin_all}))],
+) -> ComplianceRequestResponse | None:
+    try:
+        compliance_request = await select_compliance_request(
+            session=db.session, compliance_request_id=compliance_request_id
+        )
+    except NoResultFound as err:
+        raise HTTPException(
+            status_code=HTTPStatus.NOT_FOUND, detail=f"Compliance request {compliance_request_id} does not exist."
+        ) from err
+
+    response = await map_to_compliance_request_response(request=compliance_request)
+
+    return response
