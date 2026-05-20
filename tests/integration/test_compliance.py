@@ -71,7 +71,7 @@ async def test_create_compliance_request(client, pg_compliance_config, valid_jwt
     # value
     assert not isinstance(request, list)
 
-    assert request.compliance_request_id == 3
+    assert request.compliance_request_id == 4
     # compare each field of values passed create (request_params) with the same values
     # return by POST (request)
     for field in dataclasses.fields(request_params):

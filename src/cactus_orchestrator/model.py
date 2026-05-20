@@ -228,6 +228,8 @@ class ComplianceRequest(Base):
     updated_by: Mapped[int] = mapped_column(
         ForeignKey("user_.id")
     )  # the last user to update the compliance request - could be the client or an admin
+    created_by_user: Mapped[User] = relationship(foreign_keys=created_by, lazy="raise")
+    updated_by_user: Mapped[User] = relationship(foreign_keys=updated_by, lazy="raise")
 
     # Status
     status: Mapped[ComplianceRequestStatus] = mapped_column(Integer, nullable=False)

@@ -23,6 +23,7 @@ from cactus_orchestrator.crud import (
     select_active_runs_for_user,
     select_admin_stats,
     select_compliance_request,
+    select_compliance_requests,
     select_group_runs_aggregated_by_procedure,
     select_group_runs_for_procedure,
     select_next_playlist_run,
@@ -48,6 +49,8 @@ from cactus_orchestrator.crud import (
 )
 from cactus_orchestrator.model import (
     ComplianceRecord,
+    ComplianceRequestClass,
+    ComplianceRequestRun,
     ComplianceRequestStatus,
     Run,
     RunArtifact,
@@ -645,7 +648,7 @@ async def test_select_user_compliance_request(pg_compliance_config):
     # These match the db fixture values in "tests/data/compliance_config.sql"
     CREATED_AT = datetime.fromisoformat("2026-05-04T13:15Z")
     UPDATED_AT = CREATED_AT
-    USER_ID = 2
+    USER_ID = 1
     CLASSES = {"L", "DER-A", "S-G"}
     RUNS = {1, 3, 5}
     WITNESSED_AT = datetime.fromisoformat("2026-05-01T15:30Z")
@@ -661,9 +664,7 @@ async def test_select_user_compliance_request(pg_compliance_config):
     ]
 
     async with generate_async_session(pg_compliance_config) as session:
-        request = await select_user_compliance_request(
-            session=session, user_id=USER_ID, compliance_request_id=1, include_classes=True, include_runs=True
-        )
+        request = await select_user_compliance_request(session=session, user_id=USER_ID, compliance_request_id=1)
 
         assert request is not None
         assert request.created_by == USER_ID
@@ -680,19 +681,35 @@ async def test_select_user_compliance_request(pg_compliance_config):
             assert getattr(request, attribute) == attribute
 
 
+@pytest.mark.parametrize("user_id,expected_compliance_requests_count", [(1, 2), (2, 1)])
 @pytest.mark.asyncio
-async def test_select_user_compliance_requests(pg_compliance_config):
-    USER_ID = 2
+async def test_select_user_compliance_requests(
+    user_id: int, expected_compliance_requests_count: int, pg_compliance_config
+):
     async with generate_async_session(pg_compliance_config) as session:
-        requests = await select_user_compliance_requests(session=session, user_id=USER_ID)
+        requests = await select_user_compliance_requests(session=session, user_id=user_id)
 
-        assert len(requests) == 2
-        assert requests[0].created_at != requests[1].created_at
+        assert len(requests) == expected_compliance_requests_count
+
+
+@pytest.mark.asyncio
+async def test_select_compliance_requests(pg_compliance_config):
+    async with generate_async_session(pg_compliance_config) as session:
+        requests = await select_compliance_requests(session=session)
+
+        for request in requests:
+            for c in request.classes:
+                assert isinstance(c, ComplianceRequestClass)
+            for r in request.runs:
+                assert isinstance(r, ComplianceRequestRun)
+            assert isinstance(request.created_by_user, User)
+            assert isinstance(request.updated_by_user, User)
+        assert len(requests) == 3
 
 
 @pytest.mark.asyncio
 async def test_insert_compliance_request(pg_compliance_config):
-    USER_ID = 2
+    USER_ID = 1
     compliance_values = {
         "created_by": USER_ID,
         "classes": {"A", "DER-A"},
@@ -737,7 +754,7 @@ async def test_insert_compliance_request(pg_compliance_config):
 async def test_update_compliance_request(pg_compliance_config):
     # Arrange
     compliance_request_id = 1
-    USER_ID = 1  # admin
+    USER_ID = 3  # admin
     new_compliance_values = {
         "csip_aus_version": "v1.2",
         "witnessed_at": datetime.now(UTC),

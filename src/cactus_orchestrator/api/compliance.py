@@ -64,8 +64,6 @@ async def get_compliance_request(
             session=db.session,
             user_id=user.user_id,
             compliance_request_id=compliance_request_id,
-            include_classes=True,
-            include_runs=True,
         )
     except NoResultFound as exc:
         logger.debug(exc)
@@ -118,8 +116,6 @@ async def update_compliance_request_endpoint(
             session=db.session,
             user_id=user.user_id,
             compliance_request_id=compliance_request_id,
-            include_classes=True,
-            include_runs=True,
         )
     except NoResultFound as exc:
         logger.debug(exc)

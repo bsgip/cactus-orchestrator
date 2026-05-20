@@ -208,7 +208,7 @@ async def select_active_runs_for_user(session: AsyncSession, user_id: int) -> Se
         # Exclude initialised runs that are part of a playlist (not yet active)
         .where((Run.run_status != RunStatus.initialised) | (Run.playlist_execution_id == None))  # noqa: E711
         .options(selectinload(Run.run_group))
-        .order_by(Run.run_id.desc())
+        .order_by(Run.created_at.desc())
     )
 
     resp = await session.execute(stmt)
@@ -452,29 +452,37 @@ async def select_user_compliance_request(
     session: AsyncSession,
     user_id: int,
     compliance_request_id: int,
-    include_classes: bool = True,
-    include_runs: bool = True,
 ) -> ComplianceRequest:
     stmt = select(ComplianceRequest).where(
         ComplianceRequest.compliance_request_id == compliance_request_id, ComplianceRequest.created_by == user_id
     )
-
-    if include_classes:
-        stmt = stmt.options(selectinload(ComplianceRequest.classes))
-
-    if include_runs:
-        stmt = stmt.options(selectinload(ComplianceRequest.runs))
+    stmt = stmt.options(selectinload(ComplianceRequest.classes))
+    stmt = stmt.options(selectinload(ComplianceRequest.runs))
 
     result = await session.execute(stmt)
     return result.scalar_one()
 
 
 async def select_user_compliance_requests(session: AsyncSession, user_id: int) -> Sequence[ComplianceRequest]:
+    """Get compliance requests for user_id ordered by creation date DESCENDING"""
     stmt = (
-        select(ComplianceRequest).where(ComplianceRequest.created_by == user_id).order_by(ComplianceRequest.created_at)
+        select(ComplianceRequest)
+        .where(ComplianceRequest.created_by == user_id)
+        .order_by(ComplianceRequest.created_at.desc())
     )
     stmt = stmt.options(selectinload(ComplianceRequest.classes))
     stmt = stmt.options(selectinload(ComplianceRequest.runs))
+    result = await session.execute(stmt)
+    return result.scalars().all()
+
+
+async def select_compliance_requests(session: AsyncSession) -> Sequence[ComplianceRequest]:
+    """Get compliance requests for all users ordered by creation date DESCENDING"""
+    stmt = select(ComplianceRequest).order_by(ComplianceRequest.created_at.desc())
+    stmt = stmt.options(selectinload(ComplianceRequest.classes))
+    stmt = stmt.options(selectinload(ComplianceRequest.runs))
+    stmt = stmt.options(joinedload(ComplianceRequest.created_by_user))
+    stmt = stmt.options(joinedload(ComplianceRequest.updated_by_user))
     result = await session.execute(stmt)
     return result.scalars().all()
 

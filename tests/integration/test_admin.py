@@ -493,3 +493,19 @@ async def test_admin_get_run_power_limit_chart_ok(mock_chart, client, pg_base_co
     assert res.status_code == HTTPStatus.OK
     assert res.headers["content-type"].startswith("text/html")
     assert "<html>chart</html>" in res.text
+
+
+@pytest.mark.asyncio
+async def test_admin_get_compliance_requests_paginated(client, pg_compliance_config, valid_jwt_admin1):
+
+    # Arrange
+    expected_compliance_request_ids = [2, 3, 1]  # newest to oldest compliance requests
+
+    # Act
+    res = await client.get("/admin/compliance_request", headers={"Authorization": f"Bearer {valid_jwt_admin1}"})
+    assert res.status_code == HTTPStatus.OK
+
+    data = res.json()
+    assert isinstance(data, dict)
+    assert "items" in data
+    assert expected_compliance_request_ids == [i["compliance_request_id"] for i in data["items"]]
