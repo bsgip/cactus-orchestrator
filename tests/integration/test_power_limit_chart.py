@@ -19,12 +19,14 @@ from assertical.asserts.generator import assert_class_instance_equality
 from assertical.fake.generator import clone_class_instance, generate_class_instance
 from assertical.fixtures.postgres import generate_async_session
 from cactus_schema.runner.schema import HTTPMethod, RequestEntry
+from sqlalchemy import text
 from envoy.server.model.archive.doe import ArchiveDynamicOperatingEnvelope, ArchiveSiteControlGroupDefault
 from envoy.server.model.doe import DynamicOperatingEnvelope, SiteControlGroup, SiteControlGroupDefault
 from envoy.server.model.site import Site, SiteDER, SiteDERSetting
 from envoy.server.model.subscription import Subscription, SubscriptionResource
 
 from cactus_orchestrator.power_limit_chart import (
+    _check_has_storage_target,
     _get_control_groups,
     _get_defaults,
     _get_der_setting,
@@ -318,7 +320,8 @@ async def test_get_subscribed_group_ids_excludes_non_doe_subscriptions(pg_envoy_
 async def test_get_does_empty(pg_envoy_base_config):
     """Returns an empty list when no DOEs exist."""
     async with generate_async_session(pg_envoy_base_config) as session:
-        result = await _get_does(session)
+        has_storage_target = await _check_has_storage_target(session)
+        result = await _get_does(session, has_storage_target=has_storage_target)
     assert result == []
 
 
@@ -346,13 +349,15 @@ async def test_get_does_active_doe_fields(pg_envoy_base_config, seed: int, optio
         await session.commit()
 
     async with generate_async_session(pg_envoy_base_config) as session:
-        result = await _get_does(session)
+        has_storage_target = await _check_has_storage_target(session)
+        result = await _get_does(session, has_storage_target=has_storage_target)
 
     assert len(result) == 1
     row = result[0]
-    assert_class_instance_equality(
-        _RawDOE, original_doe, row, ignored_properties={"is_archive", "deleted_time", "archive_time"}
-    )
+    ignored: set[str] = {"is_archive", "deleted_time", "archive_time"}
+    if not has_storage_target:
+        ignored.add("storage_target_active_watts")
+    assert_class_instance_equality(_RawDOE, original_doe, row, ignored_properties=ignored)
     assert row.is_archive is False
     assert row.deleted_time is None
     assert row.archive_time is None
@@ -382,11 +387,15 @@ async def test_get_does_archive_doe_fields(pg_envoy_base_config, seed: int, opti
         await session.commit()
 
     async with generate_async_session(pg_envoy_base_config) as session:
-        result = await _get_does(session)
+        has_storage_target = await _check_has_storage_target(session)
+        result = await _get_does(session, has_storage_target=has_storage_target)
 
     assert len(result) == 1
     row = result[0]
-    assert_class_instance_equality(_RawDOE, original__archive_doe, row, ignored_properties={"is_archive"})
+    ignored: set[str] = {"is_archive"}
+    if not has_storage_target:
+        ignored.add("storage_target_active_watts")
+    assert_class_instance_equality(_RawDOE, original__archive_doe, row, ignored_properties=ignored)
     assert row.is_archive is True
 
 
@@ -440,7 +449,8 @@ async def test_get_does_combines_active_and_archive(pg_envoy_base_config):
         await session.commit()
 
     async with generate_async_session(pg_envoy_base_config) as session:
-        result = await _get_does(session)
+        has_storage_target = await _check_has_storage_target(session)
+        result = await _get_does(session, has_storage_target=has_storage_target)
 
     assert len(result) == 2
     archive_flags = {row.dynamic_operating_envelope_id: row.is_archive for row in result}
@@ -487,7 +497,8 @@ async def test_get_does_scoped_to_active_site(pg_envoy_base_config):
         await session.commit()
 
     async with generate_async_session(pg_envoy_base_config) as session:
-        result = await _get_does(session)
+        has_storage_target = await _check_has_storage_target(session)
+        result = await _get_does(session, has_storage_target=has_storage_target)
 
     assert len(result) == 1
     assert result[0].export_limit_watts == pytest.approx(9999.0)
@@ -499,7 +510,8 @@ async def test_get_does_scoped_to_active_site(pg_envoy_base_config):
 async def test_get_defaults_empty(pg_envoy_base_config):
     """Returns an empty list when no SiteControlGroupDefaults exist."""
     async with generate_async_session(pg_envoy_base_config) as session:
-        result = await _get_defaults(session)
+        has_storage_target = await _check_has_storage_target(session)
+        result = await _get_defaults(session, has_storage_target=has_storage_target)
     assert result == []
 
 
@@ -519,14 +531,16 @@ async def test_get_defaults_active_default_fields(pg_envoy_base_config, seed: in
         await session.commit()
 
     async with generate_async_session(pg_envoy_base_config) as session:
-        result = await _get_defaults(session)
+        has_storage_target = await _check_has_storage_target(session)
+        result = await _get_defaults(session, has_storage_target=has_storage_target)
 
     assert len(result) == 1
     row = result[0]
 
-    assert_class_instance_equality(
-        _RawDefault, original_default, row, ignored_properties={"is_archive", "archive_time"}
-    )
+    ignored: set[str] = {"is_archive", "archive_time"}
+    if not has_storage_target:
+        ignored.add("storage_target_active_watts")
+    assert_class_instance_equality(_RawDefault, original_default, row, ignored_properties=ignored)
     assert row.is_archive is False
     assert row.archive_time is None
 
@@ -547,11 +561,15 @@ async def test_get_defaults_archive_default_fields(pg_envoy_base_config, seed: i
         await session.commit()
 
     async with generate_async_session(pg_envoy_base_config) as session:
-        result = await _get_defaults(session)
+        has_storage_target = await _check_has_storage_target(session)
+        result = await _get_defaults(session, has_storage_target=has_storage_target)
 
     assert len(result) == 1
     row = result[0]
-    assert_class_instance_equality(_RawDefault, original_archive_default, row, ignored_properties={"is_archive"})
+    ignored: set[str] = {"is_archive"}
+    if not has_storage_target:
+        ignored.add("storage_target_active_watts")
+    assert_class_instance_equality(_RawDefault, original_archive_default, row, ignored_properties=ignored)
     assert row.is_archive is True
 
 
@@ -579,7 +597,8 @@ async def test_get_defaults_combines_active_and_archive(pg_envoy_base_config):
         await session.commit()
 
     async with generate_async_session(pg_envoy_base_config) as session:
-        result = await _get_defaults(session)
+        has_storage_target = await _check_has_storage_target(session)
+        result = await _get_defaults(session, has_storage_target=has_storage_target)
 
     assert len(result) == 2
     by_group = {r.site_control_group_id: r for r in result}
@@ -602,10 +621,134 @@ async def test_get_defaults_not_scoped_to_site(pg_envoy_base_config):
         await session.commit()
 
     async with generate_async_session(pg_envoy_base_config) as session:
-        result = await _get_defaults(session)
+        has_storage_target = await _check_has_storage_target(session)
+        result = await _get_defaults(session, has_storage_target=has_storage_target)
 
     assert len(result) == 1
     assert result[0].site_control_group_id == 42
+
+
+# ─── storage_target_active_watts (v1.3 column, simulated on v1.2 schema) ──────
+
+
+async def test_get_does_reads_storage_target_when_column_present(pg_envoy_base_config):
+    """Adding the v1.3 column via raw SQL causes _check_has_storage_target to return True
+    and _get_does to populate storage_target_active_watts from the DB."""
+    async with generate_async_session(pg_envoy_base_config) as session:
+        await session.execute(
+            text(
+                "ALTER TABLE dynamic_operating_envelope "
+                "ADD COLUMN IF NOT EXISTS storage_target_active_watts DECIMAL(16,2)"
+            )
+        )
+        await session.execute(
+            text(
+                "ALTER TABLE archive_dynamic_operating_envelope "
+                "ADD COLUMN IF NOT EXISTS storage_target_active_watts DECIMAL(16,2)"
+            )
+        )
+        site = _make_site_with_setting(aggregator_id=1)
+        session.add(site)
+        grp = generate_class_instance(SiteControlGroup, seed=1, site_control_group_id=1, primacy=1)
+        session.add(grp)
+        doe = _make_doe(site, grp, offset_minutes=5, duration_minutes=10, export_limit=Decimal("8000"), seed=1)
+        session.add(doe)
+        await session.flush()
+        doe_id = doe.dynamic_operating_envelope_id
+        await session.execute(
+            text(
+                "UPDATE dynamic_operating_envelope "
+                "SET storage_target_active_watts = :val "
+                "WHERE dynamic_operating_envelope_id = :id"
+            ),
+            {"val": 3000, "id": doe_id},
+        )
+        await session.commit()
+
+    async with generate_async_session(pg_envoy_base_config) as session:
+        assert await _check_has_storage_target(session) is True
+        result = await _get_does(session, has_storage_target=True)
+
+    assert len(result) == 1
+    assert result[0].storage_target_active_watts == pytest.approx(3000.0)
+    assert result[0].export_limit_watts == pytest.approx(8000.0)
+
+
+async def test_chart_storage_target_constrains_upper_and_lower_bounds(pg_envoy_base_config):
+    """
+    Simulates v1.3 schema on a v1.2 DB by adding storage_target_active_watts via raw SQL.
+
+    Two DOEs exercise both sign conventions:
+      - T+5m:  storage_target=+4000W, export_limit=9000W → storage target is binding upper bound (4000 < 9000)
+      - T+20m: storage_target=−2500W, no import limit   → storage target is the only lower bound (abs = 2500W)
+
+    Expected: chart generates successfully for both scenarios.
+    """
+    test_end = T0 + timedelta(minutes=40)
+
+    _storage_target_col = "DECIMAL(16,2)"
+    _doe_tables = [
+        "dynamic_operating_envelope",
+        "archive_dynamic_operating_envelope",
+    ]
+    _default_tables = [
+        "site_control_group_default",
+        "archive_site_control_group_default",
+    ]
+
+    async with generate_async_session(pg_envoy_base_config) as session:
+        for tbl in _doe_tables + _default_tables:
+            await session.execute(
+                text(f"ALTER TABLE {tbl} ADD COLUMN IF NOT EXISTS storage_target_active_watts {_storage_target_col}")
+            )
+
+        site = _make_site_with_setting(aggregator_id=1)
+        session.add(site)
+        grp = generate_class_instance(SiteControlGroup, seed=1, site_control_group_id=1, primacy=1)
+        session.add(grp)
+
+        doe_upper = _make_doe(
+            site, grp, offset_minutes=5, duration_minutes=10, export_limit=Decimal("9000"), seed=10
+        )
+        doe_lower = _make_doe(
+            site, grp, offset_minutes=20, duration_minutes=10, seed=20
+        )
+        session.add_all([doe_upper, doe_lower])
+        await session.flush()
+        created_upper = doe_upper.created_time
+        created_lower = doe_lower.created_time
+
+        await session.execute(
+            text(
+                "UPDATE dynamic_operating_envelope "
+                "SET storage_target_active_watts = :val "
+                "WHERE dynamic_operating_envelope_id = :id"
+            ),
+            {"val": 4000, "id": doe_upper.dynamic_operating_envelope_id},
+        )
+        await session.execute(
+            text(
+                "UPDATE dynamic_operating_envelope "
+                "SET storage_target_active_watts = :val "
+                "WHERE dynamic_operating_envelope_id = :id"
+            ),
+            {"val": -2500, "id": doe_lower.dynamic_operating_envelope_id},
+        )
+        await session.commit()
+
+    polls = [
+        _poll(1, created_upper + timedelta(seconds=30), req_id=1),
+        _poll(1, created_lower + timedelta(seconds=30), req_id=2),
+    ]
+
+    async with generate_async_session(pg_envoy_base_config) as session:
+        html = await generate_power_limit_chart_html(session, T0, test_end, polls)
+
+    assert html is not None, "Chart generation returned None"
+    assert "Device Power Chart" in html
+    out = _out("scenario_storage_target_v13.html")
+    out.write_text(html)
+    print(f"\n  ✓ Storage target scenario → {out}")
 
 
 # ─── Scenario A: Single program, export curtailment steps with AS4777 ramps ──

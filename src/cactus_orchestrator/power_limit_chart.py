@@ -91,6 +91,7 @@ class _RawDOE:
     set_connected: bool | None
     set_energized: bool | None
     ramp_time_seconds: float | None
+    storage_target_active_watts: float | None
     is_archive: bool
     deleted_time: datetime | None  # archive rows only
     archive_time: datetime | None  # archive rows only
@@ -109,6 +110,7 @@ class _RawDefault:
     import_limit_active_watts: float | None
     load_limit_active_watts: float | None
     ramp_rate_percent_per_second: int | None
+    storage_target_active_watts: float | None
     is_archive: bool
     archive_time: datetime | None  # archive rows only
 
@@ -146,6 +148,10 @@ class _EnrichedControl:
     @property
     def load_limit(self) -> float | None:
         return self.doe.load_limit_active_watts
+
+    @property
+    def storage_target(self) -> float | None:
+        return self.doe.storage_target_active_watts
 
     @property
     def set_connected(self) -> bool | None:
@@ -217,11 +223,24 @@ async def _get_subscribed_group_ids(session: AsyncSession) -> set[int]:
     return {row.resource_id for row in result}
 
 
-async def _get_does(session: AsyncSession) -> list[_RawDOE]:
-    """Fetch all active and archived DOEs for the active site using explicit column selection."""
+async def _check_has_storage_target(session: AsyncSession) -> bool:
+    """Returns True if the envoy DB schema includes storage_target_active_watts (v1.3+)."""
     result = await session.execute(
         text(
-            """
+            "SELECT 1 FROM information_schema.columns "
+            "WHERE table_name = 'dynamic_operating_envelope' "
+            "AND column_name = 'storage_target_active_watts'"
+        )
+    )
+    return result.first() is not None
+
+
+async def _get_does(session: AsyncSession, has_storage_target: bool) -> list[_RawDOE]:
+    """Fetch all active and archived DOEs for the active site using explicit column selection."""
+    storage_col = "storage_target_active_watts" if has_storage_target else "NULL AS storage_target_active_watts"
+    result = await session.execute(
+        text(
+            f"""
 SELECT
     dynamic_operating_envelope_id,
     site_control_group_id,
@@ -236,6 +255,7 @@ SELECT
     set_connected,
     set_energized,
     ramp_time_seconds,
+    {storage_col},
     false AS is_archive,
     NULL AS deleted_time,
     NULL AS archive_time
@@ -256,6 +276,7 @@ SELECT
     set_connected,
     set_energized,
     ramp_time_seconds,
+    {storage_col},
     true AS is_archive,
     deleted_time,
     archive_time
@@ -287,6 +308,9 @@ SELECT
                 set_connected=row.set_connected,
                 set_energized=row.set_energized,
                 ramp_time_seconds=float(row.ramp_time_seconds) if row.ramp_time_seconds is not None else None,
+                storage_target_active_watts=float(row.storage_target_active_watts)
+                if row.storage_target_active_watts is not None
+                else None,
                 is_archive=bool(row.is_archive),
                 deleted_time=row.deleted_time,
                 archive_time=row.archive_time,
@@ -295,10 +319,11 @@ SELECT
     return does
 
 
-async def _get_defaults(session: AsyncSession) -> list[_RawDefault]:
+async def _get_defaults(session: AsyncSession, has_storage_target: bool) -> list[_RawDefault]:
     """Fetch all active and archived SiteControlGroupDefaults using explicit column selection."""
+    storage_col = "storage_target_active_watts" if has_storage_target else "NULL AS storage_target_active_watts"
     result = await session.execute(
-        text("""
+        text(f"""
 SELECT
     site_control_group_id,
     changed_time,
@@ -307,6 +332,7 @@ SELECT
     import_limit_active_watts,
     load_limit_active_watts,
     ramp_rate_percent_per_second,
+    {storage_col},
     false AS is_archive,
     NULL AS archive_time
     FROM site_control_group_default
@@ -319,6 +345,7 @@ SELECT
     import_limit_active_watts,
     load_limit_active_watts,
     ramp_rate_percent_per_second,
+    {storage_col},
     true AS is_archive,
     archive_time
     FROM archive_site_control_group_default
@@ -343,6 +370,9 @@ SELECT
                 if row.load_limit_active_watts is not None
                 else None,
                 ramp_rate_percent_per_second=row.ramp_rate_percent_per_second,
+                storage_target_active_watts=float(row.storage_target_active_watts)
+                if row.storage_target_active_watts is not None
+                else None,
                 is_archive=bool(row.is_archive),
                 archive_time=row.archive_time,
             )
@@ -717,13 +747,20 @@ def _get_effective_upper_at(
         lambda c: c.gen_limit,
         lambda d: d.generation_limit_active_watts,
     )
-    if exp_val is not None and gen_val is not None:
-        return (exp_val, exp_src) if exp_val <= gen_val else (gen_val, gen_src)
-    if exp_val is not None:
-        return exp_val, exp_src
-    if gen_val is not None:
-        return gen_val, gen_src
-    return None, None
+    stor_val, stor_src = _resolve_type_limit(
+        t,
+        sorted_groups,
+        enriched,
+        defaults_by_group,
+        lambda c: c.storage_target if c.storage_target is not None and c.storage_target > 0 else None,
+        lambda d: d.storage_target_active_watts
+        if d.storage_target_active_watts is not None and d.storage_target_active_watts > 0
+        else None,
+    )
+    candidates = [(v, s) for v, s in [(exp_val, exp_src), (gen_val, gen_src), (stor_val, stor_src)] if v is not None]
+    if not candidates:
+        return None, None
+    return min(candidates, key=lambda x: x[0])
 
 
 def _get_effective_lower_at(
@@ -754,13 +791,20 @@ def _get_effective_lower_at(
         lambda c: c.load_limit,
         lambda d: d.load_limit_active_watts,
     )
-    if imp_val is not None and load_val is not None:
-        return (imp_val, imp_src) if imp_val <= load_val else (load_val, load_src)
-    if imp_val is not None:
-        return imp_val, imp_src
-    if load_val is not None:
-        return load_val, load_src
-    return None, None
+    stor_val, stor_src = _resolve_type_limit(
+        t,
+        sorted_groups,
+        enriched,
+        defaults_by_group,
+        lambda c: abs(c.storage_target) if c.storage_target is not None and c.storage_target < 0 else None,
+        lambda d: abs(d.storage_target_active_watts)
+        if d.storage_target_active_watts is not None and d.storage_target_active_watts < 0
+        else None,
+    )
+    candidates = [(v, s) for v, s in [(imp_val, imp_src), (load_val, load_src), (stor_val, stor_src)] if v is not None]
+    if not candidates:
+        return None, None
+    return min(candidates, key=lambda x: x[0])
 
 
 # ─── Ramp duration computation ────────────────────────────────────────────────
@@ -1456,8 +1500,9 @@ async def generate_power_limit_chart_html(
     groups_by_id = {g.site_control_group_id: g for g in control_groups}
     sorted_groups = sorted(control_groups, key=lambda g: g.primacy)
 
-    all_does = await _get_does(session)
-    all_defaults = await _get_defaults(session)
+    has_storage_target = await _check_has_storage_target(session)
+    all_does = await _get_does(session, has_storage_target)
+    all_defaults = await _get_defaults(session, has_storage_target)
     defaults_by_group = _build_defaults_by_group(all_defaults)
 
     subscribed_group_ids = await _get_subscribed_group_ids(session)
