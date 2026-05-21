@@ -753,9 +753,11 @@ def _get_effective_upper_at(
         enriched,
         defaults_by_group,
         lambda c: c.storage_target if c.storage_target is not None and c.storage_target > 0 else None,
-        lambda d: d.storage_target_active_watts
-        if d.storage_target_active_watts is not None and d.storage_target_active_watts > 0
-        else None,
+        lambda d: (
+            d.storage_target_active_watts
+            if d.storage_target_active_watts is not None and d.storage_target_active_watts > 0
+            else None
+        ),
     )
     candidates = [(v, s) for v, s in [(exp_val, exp_src), (gen_val, gen_src), (stor_val, stor_src)] if v is not None]
     if not candidates:
@@ -797,9 +799,11 @@ def _get_effective_lower_at(
         enriched,
         defaults_by_group,
         lambda c: abs(c.storage_target) if c.storage_target is not None and c.storage_target < 0 else None,
-        lambda d: abs(d.storage_target_active_watts)
-        if d.storage_target_active_watts is not None and d.storage_target_active_watts < 0
-        else None,
+        lambda d: (
+            abs(d.storage_target_active_watts)
+            if d.storage_target_active_watts is not None and d.storage_target_active_watts < 0
+            else None
+        ),
     )
     candidates = [(v, s) for v, s in [(imp_val, imp_src), (load_val, load_src), (stor_val, stor_src)] if v is not None]
     if not candidates:
@@ -1055,14 +1059,6 @@ def _fmt_video_time(seconds: float) -> str:
     return f"{mm}:{ss:02d}"
 
 
-def _choose_tick_interval_seconds(duration_secs: float) -> int:
-    """Pick a sensible tick interval so there are roughly 8-20 ticks."""
-    for interval in [60, 120, 300, 600, 900, 1800, 3600, 7200]:
-        if duration_secs / interval <= 20:
-            return interval
-    return 3600
-
-
 def _assign_completion_lanes(
     completions: list[tuple[str, datetime]], to_rel: Callable[[datetime], float], duration_secs: float
 ) -> list[int]:
@@ -1096,7 +1092,6 @@ def _assign_completion_lanes(
 def _add_receipt_markers(
     fig: go.Figure,
     receipt_markers: list[_ReceiptMarker],
-    to_rel: Callable[[datetime], float],
     set_max_w: float,
 ) -> None:
     for m in receipt_markers:
@@ -1105,8 +1100,8 @@ def _add_receipt_markers(
             type="line",
             xref="x",
             yref="paper",
-            x0=to_rel(m.time),
-            x1=to_rel(m.time),
+            x0=m.time,
+            x1=m.time,
             y0=0.02,
             y1=0.98,
             line=dict(color=color, width=1.5, dash="dot"),
@@ -1131,7 +1126,7 @@ def _add_receipt_markers(
     if receipt_markers:
         fig.add_trace(
             go.Scatter(
-                x=[to_rel(m.time) for m in receipt_markers],
+                x=[m.time for m in receipt_markers],
                 y=[set_max_w * 0.55] * len(receipt_markers),
                 mode="markers",
                 marker=dict(
@@ -1153,34 +1148,33 @@ def _add_receipt_markers(
 def _add_reconnect_markers(
     fig: go.Figure,
     disconnect_intervals: list[tuple[datetime, datetime]],
-    to_rel: Callable[[datetime], float],
-    duration_secs: float,
+    test_end: datetime,
 ) -> None:
     _color = "rgba(120,120,120,0.5)"
-    reconnect_rels = [
-        to_rel(de - timedelta(seconds=_OP_MOD_CONNECT_GRACE_SECONDS))
+    reconnect_times = [
+        de - timedelta(seconds=_OP_MOD_CONNECT_GRACE_SECONDS)
         for _, de in disconnect_intervals
-        if to_rel(de - timedelta(seconds=_OP_MOD_CONNECT_GRACE_SECONDS)) < duration_secs
+        if (de - timedelta(seconds=_OP_MOD_CONNECT_GRACE_SECONDS)) < test_end
     ]
-    for rel in reconnect_rels:
+    for t in reconnect_times:
         fig.add_shape(
             type="line",
             xref="x",
             yref="paper",
-            x0=rel,
-            x1=rel,
+            x0=t,
+            x1=t,
             y0=0,
             y1=1,
             line=dict(color=_color, width=1, dash="dot"),
         )
-    if reconnect_rels:
+    if reconnect_times:
         fig.add_trace(
             go.Scatter(
-                x=reconnect_rels,
-                y=[0] * len(reconnect_rels),
+                x=reconnect_times,
+                y=[0] * len(reconnect_times),
                 mode="markers",
                 marker=dict(symbol="line-ns", size=10, color=_color),
-                customdata=[["60 s AS4777 wGra wait period on reconnection"]] * len(reconnect_rels),
+                customdata=[["60 s AS4777 wGra wait period on reconnection"]] * len(reconnect_times),
                 hovertemplate="Device reconnected — %{customdata[0]}<extra>Reconnect</extra>",
                 showlegend=False,
             )
@@ -1192,20 +1186,19 @@ def _add_completion_markers(
     completions: list[tuple[str, datetime]],
     lanes: list[int],
     lane_y: list[float],
-    duration_secs: float,
-    to_rel: Callable[[datetime], float],
+    test_start: datetime,
+    test_end: datetime,
 ) -> None:
     _completion_color = "#888"
     for (name, t), lane in zip(completions, lanes, strict=False):
-        rel = to_rel(t)
-        if rel < 0 or rel > duration_secs:
+        if t < test_start or t > test_end:
             continue
         fig.add_shape(
             type="line",
             xref="x",
             yref="paper",
-            x0=rel,
-            x1=rel,
+            x0=t,
+            x1=t,
             y0=0,
             y1=1,
             line=dict(color=_completion_color, width=1.5, dash="dash"),
@@ -1215,7 +1208,7 @@ def _add_completion_markers(
         fig.add_annotation(
             xref="x",
             yref="paper",
-            x=rel,
+            x=t,
             y=lane_y[lane],
             text=label,
             showarrow=True,
@@ -1242,7 +1235,6 @@ def _add_completion_markers(
 def _add_step_strips(
     fig: go.Figure,
     step_intervals: list[tuple[str, datetime, datetime]],
-    to_rel: Callable[[datetime], float],
     test_start: datetime,
     test_end: datetime,
 ) -> None:
@@ -1265,8 +1257,8 @@ def _add_step_strips(
         else:
             color = _STEP_PALETTE[palette_idx % len(_STEP_PALETTE)]
             palette_idx += 1
-        x0 = to_rel(max(start, test_start))
-        x1 = to_rel(min(end, test_end))
+        x0 = max(start, test_start)
+        x1 = min(end, test_end)
         if x1 <= x0:
             continue
         fig.add_shape(
@@ -1281,12 +1273,12 @@ def _add_step_strips(
             line=dict(color="rgba(0,0,0,0.18)", width=0.5),
             layer="below",
         )
-        if x1 - x0 >= 20:
+        if (x1 - x0).total_seconds() >= 20:
             label = name if len(name) <= 20 else name[:18] + "…"
             fig.add_annotation(
                 xref="x",
                 yref="paper",
-                x=(x0 + x1) / 2,
+                x=x0 + (x1 - x0) / 2,
                 y=-0.32,
                 text=label,
                 showarrow=False,
@@ -1310,22 +1302,6 @@ def _render_html_chart(
     step_completions: list[tuple[str, datetime]] | None = None,
 ) -> str:
     duration_secs = (test_end - test_start).total_seconds()
-    tick_interval = _choose_tick_interval_seconds(duration_secs)
-
-    tick_vals: list[float] = []
-    bottom_labels: list[str] = []
-
-    t_secs = 0.0
-    while t_secs <= duration_secs + 1:
-        t = test_start + timedelta(seconds=t_secs)
-        tick_vals.append(t_secs)
-        rel_label = (
-            _fmt_video_time(t_secs + video_start_seconds)
-            if video_start_seconds is not None
-            else _duration_label(t_secs)
-        )
-        bottom_labels.append(f"{rel_label}<br>{t.strftime('%H:%M')} UTC")
-        t_secs += tick_interval
 
     def to_rel(t: datetime) -> float:
         return (t - test_start).total_seconds()
@@ -1348,7 +1324,7 @@ def _render_html_chart(
     # ── Main limit traces ────────────────────────────────────────────────────
     fig.add_trace(
         go.Scatter(
-            x=[to_rel(t) for t, _, _ in upper_trace],
+            x=[t for t, _, _ in upper_trace],
             y=[v for _, v, _ in upper_trace],
             mode="lines",
             name="Upper limit (Export / Gen)",
@@ -1359,7 +1335,7 @@ def _render_html_chart(
     )
     fig.add_trace(
         go.Scatter(
-            x=[to_rel(t) for t, _, _ in lower_trace],
+            x=[t for t, _, _ in lower_trace],
             y=[v for _, v, _ in lower_trace],
             mode="lines",
             name="Lower limit (Import / Load)",
@@ -1389,23 +1365,26 @@ def _render_html_chart(
     )
 
     # ── Overlays ─────────────────────────────────────────────────────────────
-    _add_receipt_markers(fig, receipt_markers, to_rel, set_max_w)
-    _add_reconnect_markers(fig, disconnect_intervals, to_rel, duration_secs)
+    _add_receipt_markers(fig, receipt_markers, set_max_w)
+    _add_reconnect_markers(fig, disconnect_intervals, test_end)
     if completions:
-        _add_completion_markers(fig, completions, lanes, lane_y, duration_secs, to_rel)
+        _add_completion_markers(fig, completions, lanes, lane_y, test_start, test_end)
     if has_steps:
-        _add_step_strips(fig, step_intervals, to_rel, test_start, test_end)
+        _add_step_strips(fig, step_intervals, test_start, test_end)
 
     # ── Layout ───────────────────────────────────────────────────────────────
     fig.update_layout(
         title=dict(text="Expected Device Power Limits", font=dict(size=16)),
         height=height,
         xaxis=dict(
-            title="",
-            tickmode="array",
-            tickvals=tick_vals,
-            ticktext=bottom_labels,
-            range=[0, duration_secs],
+            title="Time (UTC)",
+            type="date",
+            range=[test_start, test_end],
+            tickformatstops=[
+                dict(dtickrange=[None, 10000], value="%H:%M:%S"),
+                dict(dtickrange=[10000, None], value="%H:%M"),
+            ],
+            hoverformat="%H:%M:%S",
             showgrid=True,
             gridcolor="rgba(0,0,0,0.08)",
         ),

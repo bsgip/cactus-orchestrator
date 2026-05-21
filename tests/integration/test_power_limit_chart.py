@@ -26,12 +26,17 @@ from envoy.server.model.site import Site, SiteDER, SiteDERSetting
 from envoy.server.model.subscription import Subscription, SubscriptionResource
 
 from cactus_orchestrator.power_limit_chart import (
+    _build_defaults_by_group,
     _check_has_storage_target,
+    _EnrichedControl,
     _get_control_groups,
     _get_defaults,
     _get_der_setting,
     _get_does,
+    _get_effective_lower_at,
+    _get_effective_upper_at,
     _get_subscribed_group_ids,
+    _RawControlGroup,
     _RawDefault,
     _RawDOE,
     generate_power_limit_chart_html,
@@ -749,6 +754,167 @@ async def test_chart_storage_target_constrains_upper_and_lower_bounds(pg_envoy_b
     out = _out("scenario_storage_target_v13.html")
     out.write_text(html)
     print(f"\n  ✓ Storage target scenario → {out}")
+
+
+# ─── Unit tests: _get_effective_upper_at / _get_effective_lower_at ────────────
+#
+# These are pure functions; no DB fixture needed.
+
+
+def _u_doe(
+    *,
+    export_limit: float | None = None,
+    gen_limit: float | None = None,
+    import_limit: float | None = None,
+    load_limit: float | None = None,
+    storage_target: float | None = None,
+    site_control_group_id: int = 1,
+) -> _RawDOE:
+    return _RawDOE(
+        dynamic_operating_envelope_id=1,
+        site_control_group_id=site_control_group_id,
+        created_time=T0,
+        start_time=T0,
+        duration_seconds=3600,
+        superseded=False,
+        export_limit_watts=export_limit,
+        generation_limit_active_watts=gen_limit,
+        import_limit_active_watts=import_limit,
+        load_limit_active_watts=load_limit,
+        set_connected=None,
+        set_energized=None,
+        ramp_time_seconds=None,
+        storage_target_active_watts=storage_target,
+        is_archive=False,
+        deleted_time=None,
+        archive_time=None,
+    )
+
+
+def _u_ctrl(doe: _RawDOE) -> _EnrichedControl:
+    return _EnrichedControl(
+        doe=doe,
+        site_control_group_id=doe.site_control_group_id,
+        primacy=1,
+        receipt_time=T0,
+        effective_start=T0,
+        effective_end=T0 + timedelta(hours=2),
+        step_name="",
+    )
+
+
+def _u_default(
+    *,
+    export_limit: float | None = None,
+    gen_limit: float | None = None,
+    import_limit: float | None = None,
+    load_limit: float | None = None,
+    storage_target: float | None = None,
+    site_control_group_id: int = 1,
+) -> _RawDefault:
+    return _RawDefault(
+        site_control_group_id=site_control_group_id,
+        changed_time=T0,
+        export_limit_active_watts=export_limit,
+        generation_limit_active_watts=gen_limit,
+        import_limit_active_watts=import_limit,
+        load_limit_active_watts=load_limit,
+        ramp_rate_percent_per_second=None,
+        storage_target_active_watts=storage_target,
+        is_archive=False,
+        archive_time=None,
+    )
+
+
+def _u_group(site_control_group_id: int = 1, primacy: int = 1) -> _RawControlGroup:
+    return _RawControlGroup(site_control_group_id=site_control_group_id, primacy=primacy)
+
+
+@pytest.mark.parametrize(
+    "export_limit, gen_limit, storage_target, expected_watts",
+    [
+        (9000.0, None, 4000.0, 4000.0),    # storage binds over export
+        (4000.0, None, 9000.0, 4000.0),    # export binds over storage
+        (None, None, 4000.0, 4000.0),      # storage is the only upper bound
+        (5000.0, None, None, 5000.0),      # only export (baseline, no storage)
+        (5000.0, 3000.0, None, 3000.0),    # gen more restrictive than export (baseline)
+        (None, None, None, None),           # unconstrained
+        (5000.0, None, -3000.0, 5000.0),   # negative storage never constrains upper
+        (5000.0, None, 0.0, 5000.0),       # zero storage never constrains upper
+        (9000.0, 8000.0, 3000.0, 3000.0),  # all three present; storage binds
+        (9000.0, 4000.0, 5000.0, 4000.0),  # all three present; gen binds
+    ],
+)
+def test_get_effective_upper_at_with_active_control(
+    export_limit: float | None,
+    gen_limit: float | None,
+    storage_target: float | None,
+    expected_watts: float | None,
+):
+    t = T0 + timedelta(minutes=30)
+    doe = _u_doe(export_limit=export_limit, gen_limit=gen_limit, storage_target=storage_target)
+    ctrl = _u_ctrl(doe)
+    group = _u_group()
+    val, src = _get_effective_upper_at(t, [group], [ctrl], {})
+    if expected_watts is None:
+        assert val is None
+        assert src is None
+    else:
+        assert val == pytest.approx(expected_watts)
+        assert src is ctrl
+
+
+@pytest.mark.parametrize(
+    "import_limit, load_limit, storage_target, expected_watts",
+    [
+        (None, None, -2500.0, 2500.0),      # storage is the only lower bound
+        (1000.0, None, -2500.0, 1000.0),    # import binds (1000 < 2500)
+        (5000.0, None, -2500.0, 2500.0),    # storage binds (2500 < 5000)
+        (5000.0, None, None, 5000.0),       # only import (baseline, no storage)
+        (5000.0, 3000.0, None, 3000.0),     # load more restrictive than import (baseline)
+        (None, None, None, None),            # unconstrained
+        (None, None, 4000.0, None),          # positive storage never constrains lower
+        (None, None, 0.0, None),             # zero storage never constrains lower
+        (9000.0, 8000.0, -3000.0, 3000.0),  # all three present; storage binds
+    ],
+)
+def test_get_effective_lower_at_with_active_control(
+    import_limit: float | None,
+    load_limit: float | None,
+    storage_target: float | None,
+    expected_watts: float | None,
+):
+    t = T0 + timedelta(minutes=30)
+    doe = _u_doe(import_limit=import_limit, load_limit=load_limit, storage_target=storage_target)
+    ctrl = _u_ctrl(doe)
+    group = _u_group()
+    val, src = _get_effective_lower_at(t, [group], [ctrl], {})
+    if expected_watts is None:
+        assert val is None
+        assert src is None
+    else:
+        assert val == pytest.approx(expected_watts)
+        assert src is ctrl
+
+
+def test_get_effective_upper_at_storage_target_from_default():
+    """Falls back to default when no active control; positive storage target sets upper bound."""
+    t = T0 + timedelta(minutes=30)
+    default = _u_default(storage_target=4000.0)
+    group = _u_group()
+    val, src = _get_effective_upper_at(t, [group], [], _build_defaults_by_group([default]))
+    assert val == pytest.approx(4000.0)
+    assert src is default
+
+
+def test_get_effective_lower_at_storage_target_from_default():
+    """Falls back to default when no active control; negative storage target sets lower bound."""
+    t = T0 + timedelta(minutes=30)
+    default = _u_default(storage_target=-2000.0)
+    group = _u_group()
+    val, src = _get_effective_lower_at(t, [group], [], _build_defaults_by_group([default]))
+    assert val == pytest.approx(2000.0)
+    assert src is default
 
 
 # ─── Scenario A: Single program, export curtailment steps with AS4777 ramps ──
