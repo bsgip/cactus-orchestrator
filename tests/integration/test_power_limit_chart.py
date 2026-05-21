@@ -637,8 +637,7 @@ async def test_get_defaults_not_scoped_to_site(pg_envoy_base_config):
 
 
 async def test_get_does_reads_storage_target_when_column_present(pg_envoy_base_config):
-    """Adding the v1.3 column via raw SQL causes _check_has_storage_target to return True
-    and _get_does to populate storage_target_active_watts from the DB."""
+    """_check_has_storage_target returns True and _get_does reads storage_target_active_watts when the column exists."""
     async with generate_async_session(pg_envoy_base_config) as session:
         await session.execute(
             text(
@@ -681,30 +680,27 @@ async def test_get_does_reads_storage_target_when_column_present(pg_envoy_base_c
 
 async def test_chart_storage_target_constrains_upper_and_lower_bounds(pg_envoy_base_config):
     """
-    Simulates v1.3 schema on a v1.2 DB by adding storage_target_active_watts via raw SQL.
+    Simulates v1.3 schema by adding storage_target_active_watts via raw SQL.
 
     Two DOEs exercise both sign conventions:
-      - T+5m:  storage_target=+4000W, export_limit=9000W → storage target is binding upper bound (4000 < 9000)
-      - T+20m: storage_target=−2500W, no import limit   → storage target is the only lower bound (abs = 2500W)
+      - T+5m:  storage_target=+4000W, export_limit=9000W → storage target binds (upper = 4000W)
+      - T+20m: storage_target=−2500W, no import limit   → storage target is the only lower bound (2500W)
 
-    Expected: chart generates successfully for both scenarios.
+    Expected visual:
+      - Upper trace: steps to 4000W at T+5m
+      - Lower trace: steps to −2500W at T+20m
     """
     test_end = T0 + timedelta(minutes=40)
 
-    _storage_target_col = "DECIMAL(16,2)"
-    _doe_tables = [
-        "dynamic_operating_envelope",
-        "archive_dynamic_operating_envelope",
-    ]
-    _default_tables = [
-        "site_control_group_default",
-        "archive_site_control_group_default",
-    ]
-
     async with generate_async_session(pg_envoy_base_config) as session:
-        for tbl in _doe_tables + _default_tables:
+        for tbl in [
+            "dynamic_operating_envelope",
+            "archive_dynamic_operating_envelope",
+            "site_control_group_default",
+            "archive_site_control_group_default",
+        ]:
             await session.execute(
-                text(f"ALTER TABLE {tbl} ADD COLUMN IF NOT EXISTS storage_target_active_watts {_storage_target_col}")
+                text(f"ALTER TABLE {tbl} ADD COLUMN IF NOT EXISTS storage_target_active_watts DECIMAL(16,2)")
             )
 
         site = _make_site_with_setting(aggregator_id=1)
@@ -757,8 +753,6 @@ async def test_chart_storage_target_constrains_upper_and_lower_bounds(pg_envoy_b
 
 
 # ─── Unit tests: _get_effective_upper_at / _get_effective_lower_at ────────────
-#
-# These are pure functions; no DB fixture needed.
 
 
 def _u_doe(
