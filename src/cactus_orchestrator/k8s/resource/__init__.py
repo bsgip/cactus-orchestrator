@@ -61,7 +61,7 @@ def async_k8s_api_retry[**P, T](
         async def async_retry(*args: P.args, **kwargs: P.kwargs) -> T | None:
             for attempt in range(retries):
                 try:
-                    return await func(*args, **kwargs)  # ty: ignore[invalid-return-type,invalid-argument-type]
+                    return await func(*args, **kwargs)
                 except ApiException as exc:
                     if ignore_status_code is not None:
                         if exc.status == ignore_status_code:
@@ -80,9 +80,9 @@ def async_k8s_api_retry[**P, T](
                         return None
             return None
 
-        return async_retry  # ty: ignore[invalid-return-type]
+        return async_retry
 
-    return decorator  # ty: ignore[invalid-return-type]
+    return decorator
 
 
 def get_template_names(csip_aus_version: str) -> TemplateResourceNames:
