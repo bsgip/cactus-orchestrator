@@ -282,7 +282,7 @@ SELECT
     archive_time
     FROM archive_dynamic_operating_envelope
     WHERE site_id = (SELECT site_id FROM site ORDER BY changed_time DESC LIMIT 1)
-            """
+            """  # noqa: S608
         )
     )
     does: list[_RawDOE] = []
@@ -349,7 +349,7 @@ SELECT
     true AS is_archive,
     archive_time
     FROM archive_site_control_group_default
-        """)
+        """)  # noqa: S608
     )
     defaults: list[_RawDefault] = []
     for row in result:
