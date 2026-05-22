@@ -19,17 +19,31 @@ from assertical.asserts.generator import assert_class_instance_equality
 from assertical.fake.generator import clone_class_instance, generate_class_instance
 from assertical.fixtures.postgres import generate_async_session
 from cactus_schema.runner.schema import HTTPMethod, RequestEntry
-from envoy.server.model.archive.doe import ArchiveDynamicOperatingEnvelope, ArchiveSiteControlGroupDefault
-from envoy.server.model.doe import DynamicOperatingEnvelope, SiteControlGroup, SiteControlGroupDefault
+from envoy.server.model.archive.doe import (
+    ArchiveDynamicOperatingEnvelope,
+    ArchiveSiteControlGroupDefault,
+)
+from envoy.server.model.doe import (
+    DynamicOperatingEnvelope,
+    SiteControlGroup,
+    SiteControlGroupDefault,
+)
 from envoy.server.model.site import Site, SiteDER, SiteDERSetting
 from envoy.server.model.subscription import Subscription, SubscriptionResource
+from sqlalchemy import text
 
 from cactus_orchestrator.power_limit_chart import (
+    _build_defaults_by_group,
+    _check_has_storage_target,
+    _EnrichedControl,
     _get_control_groups,
     _get_defaults,
     _get_der_setting,
     _get_does,
+    _get_effective_lower_at,
+    _get_effective_upper_at,
     _get_subscribed_group_ids,
+    _RawControlGroup,
     _RawDefault,
     _RawDOE,
     generate_power_limit_chart_html,
@@ -164,7 +178,9 @@ def _make_archive_doe(
 
 
 def _make_subscription(
-    group_id: int | None, *, resource_type: SubscriptionResource = SubscriptionResource.DYNAMIC_OPERATING_ENVELOPE
+    group_id: int | None,
+    *,
+    resource_type: SubscriptionResource = SubscriptionResource.DYNAMIC_OPERATING_ENVELOPE,
 ) -> Subscription:
     sub = Subscription()
     sub.aggregator_id = 1
@@ -299,7 +315,9 @@ async def test_get_subscribed_group_ids_excludes_null_resource_id(pg_envoy_base_
     assert result == {5}
 
 
-async def test_get_subscribed_group_ids_excludes_non_doe_subscriptions(pg_envoy_base_config):
+async def test_get_subscribed_group_ids_excludes_non_doe_subscriptions(
+    pg_envoy_base_config,
+):
     """Non-DOE subscription types are not included even when they have a resource_id."""
     async with generate_async_session(pg_envoy_base_config) as session:
         session.add(_make_subscription(group_id=7))
@@ -318,7 +336,8 @@ async def test_get_subscribed_group_ids_excludes_non_doe_subscriptions(pg_envoy_
 async def test_get_does_empty(pg_envoy_base_config):
     """Returns an empty list when no DOEs exist."""
     async with generate_async_session(pg_envoy_base_config) as session:
-        result = await _get_does(session)
+        has_storage_target = await _check_has_storage_target(session)
+        result = await _get_does(session, has_storage_target=has_storage_target)
     assert result == []
 
 
@@ -346,13 +365,15 @@ async def test_get_does_active_doe_fields(pg_envoy_base_config, seed: int, optio
         await session.commit()
 
     async with generate_async_session(pg_envoy_base_config) as session:
-        result = await _get_does(session)
+        has_storage_target = await _check_has_storage_target(session)
+        result = await _get_does(session, has_storage_target=has_storage_target)
 
     assert len(result) == 1
     row = result[0]
-    assert_class_instance_equality(
-        _RawDOE, original_doe, row, ignored_properties={"is_archive", "deleted_time", "archive_time"}
-    )
+    ignored: set[str] = {"is_archive", "deleted_time", "archive_time"}
+    if not has_storage_target:
+        ignored.add("storage_target_active_watts")
+    assert_class_instance_equality(_RawDOE, original_doe, row, ignored_properties=ignored)
     assert row.is_archive is False
     assert row.deleted_time is None
     assert row.archive_time is None
@@ -382,11 +403,15 @@ async def test_get_does_archive_doe_fields(pg_envoy_base_config, seed: int, opti
         await session.commit()
 
     async with generate_async_session(pg_envoy_base_config) as session:
-        result = await _get_does(session)
+        has_storage_target = await _check_has_storage_target(session)
+        result = await _get_does(session, has_storage_target=has_storage_target)
 
     assert len(result) == 1
     row = result[0]
-    assert_class_instance_equality(_RawDOE, original__archive_doe, row, ignored_properties={"is_archive"})
+    ignored: set[str] = {"is_archive"}
+    if not has_storage_target:
+        ignored.add("storage_target_active_watts")
+    assert_class_instance_equality(_RawDOE, original__archive_doe, row, ignored_properties=ignored)
     assert row.is_archive is True
 
 
@@ -440,7 +465,8 @@ async def test_get_does_combines_active_and_archive(pg_envoy_base_config):
         await session.commit()
 
     async with generate_async_session(pg_envoy_base_config) as session:
-        result = await _get_does(session)
+        has_storage_target = await _check_has_storage_target(session)
+        result = await _get_does(session, has_storage_target=has_storage_target)
 
     assert len(result) == 2
     archive_flags = {row.dynamic_operating_envelope_id: row.is_archive for row in result}
@@ -487,7 +513,8 @@ async def test_get_does_scoped_to_active_site(pg_envoy_base_config):
         await session.commit()
 
     async with generate_async_session(pg_envoy_base_config) as session:
-        result = await _get_does(session)
+        has_storage_target = await _check_has_storage_target(session)
+        result = await _get_does(session, has_storage_target=has_storage_target)
 
     assert len(result) == 1
     assert result[0].export_limit_watts == pytest.approx(9999.0)
@@ -499,7 +526,8 @@ async def test_get_does_scoped_to_active_site(pg_envoy_base_config):
 async def test_get_defaults_empty(pg_envoy_base_config):
     """Returns an empty list when no SiteControlGroupDefaults exist."""
     async with generate_async_session(pg_envoy_base_config) as session:
-        result = await _get_defaults(session)
+        has_storage_target = await _check_has_storage_target(session)
+        result = await _get_defaults(session, has_storage_target=has_storage_target)
     assert result == []
 
 
@@ -511,7 +539,10 @@ async def test_get_defaults_active_default_fields(pg_envoy_base_config, seed: in
         grp = generate_class_instance(SiteControlGroup, seed=1, site_control_group_id=3, primacy=1)
         session.add(grp)
         default = generate_class_instance(
-            SiteControlGroupDefault, seed=seed, optional_is_none=optional_is_none, site_control_group=grp
+            SiteControlGroupDefault,
+            seed=seed,
+            optional_is_none=optional_is_none,
+            site_control_group=grp,
         )
         session.add(default)
 
@@ -519,14 +550,16 @@ async def test_get_defaults_active_default_fields(pg_envoy_base_config, seed: in
         await session.commit()
 
     async with generate_async_session(pg_envoy_base_config) as session:
-        result = await _get_defaults(session)
+        has_storage_target = await _check_has_storage_target(session)
+        result = await _get_defaults(session, has_storage_target=has_storage_target)
 
     assert len(result) == 1
     row = result[0]
 
-    assert_class_instance_equality(
-        _RawDefault, original_default, row, ignored_properties={"is_archive", "archive_time"}
-    )
+    ignored: set[str] = {"is_archive", "archive_time"}
+    if not has_storage_target:
+        ignored.add("storage_target_active_watts")
+    assert_class_instance_equality(_RawDefault, original_default, row, ignored_properties=ignored)
     assert row.is_archive is False
     assert row.archive_time is None
 
@@ -538,7 +571,10 @@ async def test_get_defaults_archive_default_fields(pg_envoy_base_config, seed: i
     archive_time = datetime(2022, 11, 14, tzinfo=UTC)
     async with generate_async_session(pg_envoy_base_config) as session:
         archive_default = generate_class_instance(
-            ArchiveSiteControlGroupDefault, seed=seed, optional_is_none=optional_is_none, archive_time=archive_time
+            ArchiveSiteControlGroupDefault,
+            seed=seed,
+            optional_is_none=optional_is_none,
+            archive_time=archive_time,
         )
         session.add(archive_default)
 
@@ -547,11 +583,15 @@ async def test_get_defaults_archive_default_fields(pg_envoy_base_config, seed: i
         await session.commit()
 
     async with generate_async_session(pg_envoy_base_config) as session:
-        result = await _get_defaults(session)
+        has_storage_target = await _check_has_storage_target(session)
+        result = await _get_defaults(session, has_storage_target=has_storage_target)
 
     assert len(result) == 1
     row = result[0]
-    assert_class_instance_equality(_RawDefault, original_archive_default, row, ignored_properties={"is_archive"})
+    ignored: set[str] = {"is_archive"}
+    if not has_storage_target:
+        ignored.add("storage_target_active_watts")
+    assert_class_instance_equality(_RawDefault, original_archive_default, row, ignored_properties=ignored)
     assert row.is_archive is True
 
 
@@ -579,7 +619,8 @@ async def test_get_defaults_combines_active_and_archive(pg_envoy_base_config):
         await session.commit()
 
     async with generate_async_session(pg_envoy_base_config) as session:
-        result = await _get_defaults(session)
+        has_storage_target = await _check_has_storage_target(session)
+        result = await _get_defaults(session, has_storage_target=has_storage_target)
 
     assert len(result) == 2
     by_group = {r.site_control_group_id: r for r in result}
@@ -602,10 +643,301 @@ async def test_get_defaults_not_scoped_to_site(pg_envoy_base_config):
         await session.commit()
 
     async with generate_async_session(pg_envoy_base_config) as session:
-        result = await _get_defaults(session)
+        has_storage_target = await _check_has_storage_target(session)
+        result = await _get_defaults(session, has_storage_target=has_storage_target)
 
     assert len(result) == 1
     assert result[0].site_control_group_id == 42
+
+
+# ─── storage_target_active_watts (v1.3 column, simulated on v1.2 schema) ──────
+
+
+async def test_get_does_reads_storage_target_when_column_present(pg_envoy_base_config):
+    """_check_has_storage_target returns True and _get_does reads storage_target_active_watts when the column exists."""
+    async with generate_async_session(pg_envoy_base_config) as session:
+        await session.execute(
+            text(
+                "ALTER TABLE dynamic_operating_envelope "
+                "ADD COLUMN IF NOT EXISTS storage_target_active_watts DECIMAL(16,2)"
+            )
+        )
+        await session.execute(
+            text(
+                "ALTER TABLE archive_dynamic_operating_envelope "
+                "ADD COLUMN IF NOT EXISTS storage_target_active_watts DECIMAL(16,2)"
+            )
+        )
+        site = _make_site_with_setting(aggregator_id=1)
+        session.add(site)
+        grp = generate_class_instance(SiteControlGroup, seed=1, site_control_group_id=1, primacy=1)
+        session.add(grp)
+        doe = _make_doe(
+            site,
+            grp,
+            offset_minutes=5,
+            duration_minutes=10,
+            export_limit=Decimal("8000"),
+            seed=1,
+        )
+        session.add(doe)
+        await session.flush()
+        doe_id = doe.dynamic_operating_envelope_id
+        await session.execute(
+            text(
+                "UPDATE dynamic_operating_envelope "
+                "SET storage_target_active_watts = :val "
+                "WHERE dynamic_operating_envelope_id = :id"
+            ),
+            {"val": 3000, "id": doe_id},
+        )
+        await session.commit()
+
+    async with generate_async_session(pg_envoy_base_config) as session:
+        assert await _check_has_storage_target(session) is True
+        result = await _get_does(session, has_storage_target=True)
+
+    assert len(result) == 1
+    assert result[0].storage_target_active_watts == pytest.approx(3000.0)
+    assert result[0].export_limit_watts == pytest.approx(8000.0)
+
+
+async def test_chart_storage_target_constrains_upper_and_lower_bounds(
+    pg_envoy_base_config,
+):
+    """
+    Simulates v1.3 schema by adding storage_target_active_watts via raw SQL.
+
+    Two DOEs exercise both sign conventions:
+      - T+5m:  storage_target=+4000W, export_limit=9000W → storage target binds (upper = 4000W)
+      - T+20m: storage_target=−2500W, no import limit   → storage target is the only lower bound (2500W)
+
+    Expected visual:
+      - Upper trace: steps to 4000W at T+5m
+      - Lower trace: steps to −2500W at T+20m
+    """
+    test_end = T0 + timedelta(minutes=40)
+
+    async with generate_async_session(pg_envoy_base_config) as session:
+        for tbl in [
+            "dynamic_operating_envelope",
+            "archive_dynamic_operating_envelope",
+            "site_control_group_default",
+            "archive_site_control_group_default",
+        ]:
+            await session.execute(
+                text(f"ALTER TABLE {tbl} ADD COLUMN IF NOT EXISTS storage_target_active_watts DECIMAL(16,2)")
+            )
+
+        site = _make_site_with_setting(aggregator_id=1)
+        session.add(site)
+        grp = generate_class_instance(SiteControlGroup, seed=1, site_control_group_id=1, primacy=1)
+        session.add(grp)
+
+        doe_upper = _make_doe(
+            site,
+            grp,
+            offset_minutes=5,
+            duration_minutes=10,
+            export_limit=Decimal("9000"),
+            seed=10,
+        )
+        doe_lower = _make_doe(site, grp, offset_minutes=20, duration_minutes=10, seed=20)
+        session.add_all([doe_upper, doe_lower])
+        await session.flush()
+        created_upper = doe_upper.created_time
+        created_lower = doe_lower.created_time
+
+        await session.execute(
+            text(
+                "UPDATE dynamic_operating_envelope "
+                "SET storage_target_active_watts = :val "
+                "WHERE dynamic_operating_envelope_id = :id"
+            ),
+            {"val": 4000, "id": doe_upper.dynamic_operating_envelope_id},
+        )
+        await session.execute(
+            text(
+                "UPDATE dynamic_operating_envelope "
+                "SET storage_target_active_watts = :val "
+                "WHERE dynamic_operating_envelope_id = :id"
+            ),
+            {"val": -2500, "id": doe_lower.dynamic_operating_envelope_id},
+        )
+        await session.commit()
+
+    polls = [
+        _poll(1, created_upper + timedelta(seconds=30), req_id=1),
+        _poll(1, created_lower + timedelta(seconds=30), req_id=2),
+    ]
+
+    async with generate_async_session(pg_envoy_base_config) as session:
+        html = await generate_power_limit_chart_html(session, T0, test_end, polls)
+
+    assert html is not None, "Chart generation returned None"
+    assert "Device Power Chart" in html
+    out = _out("scenario_storage_target_v13.html")
+    out.write_text(html)
+    print(f"\n  ✓ Storage target scenario → {out}")
+
+
+# ─── Unit tests: _get_effective_upper_at / _get_effective_lower_at ────────────
+
+
+def _u_doe(
+    *,
+    export_limit: float | None = None,
+    gen_limit: float | None = None,
+    import_limit: float | None = None,
+    load_limit: float | None = None,
+    storage_target: float | None = None,
+    site_control_group_id: int = 1,
+) -> _RawDOE:
+    return _RawDOE(
+        dynamic_operating_envelope_id=1,
+        site_control_group_id=site_control_group_id,
+        created_time=T0,
+        start_time=T0,
+        duration_seconds=3600,
+        superseded=False,
+        export_limit_watts=export_limit,
+        generation_limit_active_watts=gen_limit,
+        import_limit_active_watts=import_limit,
+        load_limit_active_watts=load_limit,
+        set_connected=None,
+        set_energized=None,
+        ramp_time_seconds=None,
+        storage_target_active_watts=storage_target,
+        is_archive=False,
+        deleted_time=None,
+        archive_time=None,
+    )
+
+
+def _u_ctrl(doe: _RawDOE) -> _EnrichedControl:
+    return _EnrichedControl(
+        doe=doe,
+        site_control_group_id=doe.site_control_group_id,
+        primacy=1,
+        receipt_time=T0,
+        effective_start=T0,
+        effective_end=T0 + timedelta(hours=2),
+        step_name="",
+    )
+
+
+def _u_default(
+    *,
+    export_limit: float | None = None,
+    gen_limit: float | None = None,
+    import_limit: float | None = None,
+    load_limit: float | None = None,
+    storage_target: float | None = None,
+    site_control_group_id: int = 1,
+) -> _RawDefault:
+    return _RawDefault(
+        site_control_group_id=site_control_group_id,
+        changed_time=T0,
+        export_limit_active_watts=export_limit,
+        generation_limit_active_watts=gen_limit,
+        import_limit_active_watts=import_limit,
+        load_limit_active_watts=load_limit,
+        ramp_rate_percent_per_second=None,
+        storage_target_active_watts=storage_target,
+        is_archive=False,
+        archive_time=None,
+    )
+
+
+def _u_group(site_control_group_id: int = 1, primacy: int = 1) -> _RawControlGroup:
+    return _RawControlGroup(site_control_group_id=site_control_group_id, primacy=primacy)
+
+
+@pytest.mark.parametrize(
+    "export_limit, gen_limit, storage_target, expected_watts",
+    [
+        (9000.0, None, 4000.0, 4000.0),  # storage binds over export
+        (4000.0, None, 9000.0, 4000.0),  # export binds over storage
+        (None, None, 4000.0, 4000.0),  # storage is the only upper bound
+        (5000.0, None, None, 5000.0),  # only export (baseline, no storage)
+        (5000.0, 3000.0, None, 3000.0),  # gen more restrictive than export (baseline)
+        (None, None, None, None),  # unconstrained
+        (5000.0, None, -3000.0, 5000.0),  # negative storage never constrains upper
+        (5000.0, None, 0.0, 5000.0),  # zero storage never constrains upper
+        (9000.0, 8000.0, 3000.0, 3000.0),  # all three present; storage binds
+        (9000.0, 4000.0, 5000.0, 4000.0),  # all three present; gen binds
+    ],
+)
+def test_get_effective_upper_at_with_active_control(
+    export_limit: float | None,
+    gen_limit: float | None,
+    storage_target: float | None,
+    expected_watts: float | None,
+):
+    t = T0 + timedelta(minutes=30)
+    doe = _u_doe(export_limit=export_limit, gen_limit=gen_limit, storage_target=storage_target)
+    ctrl = _u_ctrl(doe)
+    group = _u_group()
+    val, src = _get_effective_upper_at(t, [group], [ctrl], {})
+    if expected_watts is None:
+        assert val is None
+        assert src is None
+    else:
+        assert val == pytest.approx(expected_watts)
+        assert src is ctrl
+
+
+@pytest.mark.parametrize(
+    "import_limit, load_limit, storage_target, expected_watts",
+    [
+        (None, None, -2500.0, 2500.0),  # storage is the only lower bound
+        (1000.0, None, -2500.0, 1000.0),  # import binds (1000 < 2500)
+        (5000.0, None, -2500.0, 2500.0),  # storage binds (2500 < 5000)
+        (5000.0, None, None, 5000.0),  # only import (baseline, no storage)
+        (5000.0, 3000.0, None, 3000.0),  # load more restrictive than import (baseline)
+        (None, None, None, None),  # unconstrained
+        (None, None, 4000.0, None),  # positive storage never constrains lower
+        (None, None, 0.0, None),  # zero storage never constrains lower
+        (9000.0, 8000.0, -3000.0, 3000.0),  # all three present; storage binds
+    ],
+)
+def test_get_effective_lower_at_with_active_control(
+    import_limit: float | None,
+    load_limit: float | None,
+    storage_target: float | None,
+    expected_watts: float | None,
+):
+    t = T0 + timedelta(minutes=30)
+    doe = _u_doe(import_limit=import_limit, load_limit=load_limit, storage_target=storage_target)
+    ctrl = _u_ctrl(doe)
+    group = _u_group()
+    val, src = _get_effective_lower_at(t, [group], [ctrl], {})
+    if expected_watts is None:
+        assert val is None
+        assert src is None
+    else:
+        assert val == pytest.approx(expected_watts)
+        assert src is ctrl
+
+
+def test_get_effective_upper_at_storage_target_from_default():
+    """Falls back to default when no active control; positive storage target sets upper bound."""
+    t = T0 + timedelta(minutes=30)
+    default = _u_default(storage_target=4000.0)
+    group = _u_group()
+    val, src = _get_effective_upper_at(t, [group], [], _build_defaults_by_group([default]))
+    assert val == pytest.approx(4000.0)
+    assert src is default
+
+
+def test_get_effective_lower_at_storage_target_from_default():
+    """Falls back to default when no active control; negative storage target sets lower bound."""
+    t = T0 + timedelta(minutes=30)
+    default = _u_default(storage_target=-2000.0)
+    group = _u_group()
+    val, src = _get_effective_lower_at(t, [group], [], _build_defaults_by_group([default]))
+    assert val == pytest.approx(2000.0)
+    assert src is default
 
 
 # ─── Scenario A: Single program, export curtailment steps with AS4777 ramps ──
@@ -634,9 +966,30 @@ async def test_chart_single_program_export_curtailment(pg_envoy_base_config):
         session.add(group)
 
         ctrls = [
-            _make_doe(site, group, offset_minutes=5, duration_minutes=10, export_limit=Decimal("5000"), seed=10),
-            _make_doe(site, group, offset_minutes=15, duration_minutes=10, export_limit=Decimal("0"), seed=20),
-            _make_doe(site, group, offset_minutes=25, duration_minutes=15, export_limit=Decimal("10000"), seed=30),
+            _make_doe(
+                site,
+                group,
+                offset_minutes=5,
+                duration_minutes=10,
+                export_limit=Decimal("5000"),
+                seed=10,
+            ),
+            _make_doe(
+                site,
+                group,
+                offset_minutes=15,
+                duration_minutes=10,
+                export_limit=Decimal("0"),
+                seed=20,
+            ),
+            _make_doe(
+                site,
+                group,
+                offset_minutes=25,
+                duration_minutes=15,
+                export_limit=Decimal("10000"),
+                seed=30,
+            ),
         ]
         session.add_all(ctrls)
         await session.flush()  # Assign IDs without closing session
@@ -679,15 +1032,37 @@ async def test_chart_multi_program_primacy(pg_envoy_base_config):
         session.add_all([grp1, grp2])
 
         ctrls = {
-            "imp1": _make_doe(site, grp1, offset_minutes=5, duration_minutes=15, import_limit=Decimal("0"), seed=11),
+            "imp1": _make_doe(
+                site,
+                grp1,
+                offset_minutes=5,
+                duration_minutes=15,
+                import_limit=Decimal("0"),
+                seed=11,
+            ),
             "imp2": _make_doe(
-                site, grp1, offset_minutes=20, duration_minutes=15, import_limit=Decimal("3000"), seed=12
+                site,
+                grp1,
+                offset_minutes=20,
+                duration_minutes=15,
+                import_limit=Decimal("3000"),
+                seed=12,
             ),
             "exp1": _make_doe(
-                site, grp2, offset_minutes=10, duration_minutes=10, export_limit=Decimal("4000"), seed=21
+                site,
+                grp2,
+                offset_minutes=10,
+                duration_minutes=10,
+                export_limit=Decimal("4000"),
+                seed=21,
             ),
             "exp2": _make_doe(
-                site, grp2, offset_minutes=30, duration_minutes=15, export_limit=Decimal("2000"), seed=22
+                site,
+                grp2,
+                offset_minutes=30,
+                duration_minutes=15,
+                export_limit=Decimal("2000"),
+                seed=22,
             ),
         }
         session.add_all(ctrls.values())
@@ -764,7 +1139,14 @@ async def test_chart_ramptms_and_defaults(pg_envoy_base_config):
                 ramp_time_seconds=Decimal("120"),
                 seed=10,
             ),
-            "ctrl2": _make_doe(site, grp1, offset_minutes=25, duration_minutes=10, export_limit=Decimal("0"), seed=20),
+            "ctrl2": _make_doe(
+                site,
+                grp1,
+                offset_minutes=25,
+                duration_minutes=10,
+                export_limit=Decimal("0"),
+                seed=20,
+            ),
         }
         session.add_all(ctrls.values())
         await session.flush()
@@ -832,10 +1214,29 @@ async def test_chart_op_mod_connect(pg_envoy_base_config):
 
         ctrls = {
             "export": _make_doe(
-                site, grp1, offset_minutes=5, duration_minutes=25, export_limit=Decimal("5000"), seed=10
+                site,
+                grp1,
+                offset_minutes=5,
+                duration_minutes=25,
+                export_limit=Decimal("5000"),
+                seed=10,
             ),
-            "disconnect": _make_doe(site, grp1, offset_minutes=10, duration_minutes=5, set_connected=False, seed=20),
-            "reconnect": _make_doe(site, grp1, offset_minutes=20, duration_minutes=5, set_connected=True, seed=30),
+            "disconnect": _make_doe(
+                site,
+                grp1,
+                offset_minutes=10,
+                duration_minutes=5,
+                set_connected=False,
+                seed=20,
+            ),
+            "reconnect": _make_doe(
+                site,
+                grp1,
+                offset_minutes=20,
+                duration_minutes=5,
+                set_connected=True,
+                seed=30,
+            ),
         }
         session.add_all(ctrls.values())
         await session.flush()
@@ -902,9 +1303,21 @@ async def test_chart_op_mod_connect_expiry(pg_envoy_base_config):
 
         ctrls = {
             "export": _make_doe(
-                site, grp1, offset_minutes=5, duration_minutes=25, export_limit=Decimal("5000"), seed=10
+                site,
+                grp1,
+                offset_minutes=5,
+                duration_minutes=25,
+                export_limit=Decimal("5000"),
+                seed=10,
             ),
-            "disconnect": _make_doe(site, grp1, offset_minutes=10, duration_minutes=5, set_connected=False, seed=20),
+            "disconnect": _make_doe(
+                site,
+                grp1,
+                offset_minutes=10,
+                duration_minutes=5,
+                set_connected=False,
+                seed=20,
+            ),
         }
         session.add_all(ctrls.values())
         await session.flush()
@@ -979,13 +1392,33 @@ async def test_chart_gen10_derc456(pg_envoy_base_config):
         # DERC4: opModConnect=False + genLim=0 on group 1 (T+1m to T+5m)
         # offset=1 so created_time=T0+30s (after test_start); 4min duration keeps end at T+5m.
         derc4 = _make_doe(
-            site, grp1, offset_minutes=1, duration_minutes=4, gen_limit=Decimal("0"), set_connected=False, seed=40
+            site,
+            grp1,
+            offset_minutes=1,
+            duration_minutes=4,
+            gen_limit=Decimal("0"),
+            set_connected=False,
+            seed=40,
         )
         # DERC5: export 200% on group 2 (T+1m to T+8m — ends just before DERC6 starts)
         # offset=1 so created_time=T0+30s; 7min duration keeps end at T+8m.
-        derc5 = _make_doe(site, grp2, offset_minutes=1, duration_minutes=7, export_limit=Decimal("20000"), seed=50)
+        derc5 = _make_doe(
+            site,
+            grp2,
+            offset_minutes=1,
+            duration_minutes=7,
+            export_limit=Decimal("20000"),
+            seed=50,
+        )
         # DERC6: export 50% on group 2 (5 min — non-overlapping with DERC5)
-        derc6 = _make_doe(site, grp2, offset_minutes=8, duration_minutes=5, export_limit=Decimal("5000"), seed=60)
+        derc6 = _make_doe(
+            site,
+            grp2,
+            offset_minutes=8,
+            duration_minutes=5,
+            export_limit=Decimal("5000"),
+            seed=60,
+        )
         session.add_all([derc4, derc5, derc6])
         await session.flush()
         ct4, ct5, ct6 = derc4.created_time, derc5.created_time, derc6.created_time
@@ -1005,7 +1438,12 @@ async def test_chart_gen10_derc456(pg_envoy_base_config):
         # T+11m: re-poll during wait step — device should be following DERC6 (50%)
         _poll(2, T0 + timedelta(minutes=11), req_id=5, step_name="WAIT-OBSERVE-DERC-6"),
         # T+15m: poll after DERC6 expires — device returns to unconstrained
-        _poll(1, T0 + timedelta(minutes=15), req_id=6, step_name="WAIT-OBSERVE-DERP-1-6-DEFAULTS"),
+        _poll(
+            1,
+            T0 + timedelta(minutes=15),
+            req_id=6,
+            step_name="WAIT-OBSERVE-DERP-1-6-DEFAULTS",
+        ),
     ]
 
     async with generate_async_session(pg_envoy_base_config) as session:
@@ -1056,10 +1494,30 @@ async def test_chart_gen10_derc456_subscribed(pg_envoy_base_config):
         session.add_all([grp1, grp2])
 
         derc4 = _make_doe(
-            site, grp1, offset_minutes=1, duration_minutes=4, gen_limit=Decimal("0"), set_connected=False, seed=40
+            site,
+            grp1,
+            offset_minutes=1,
+            duration_minutes=4,
+            gen_limit=Decimal("0"),
+            set_connected=False,
+            seed=40,
         )
-        derc5 = _make_doe(site, grp2, offset_minutes=1, duration_minutes=7, export_limit=Decimal("20000"), seed=50)
-        derc6 = _make_doe(site, grp2, offset_minutes=8, duration_minutes=5, export_limit=Decimal("5000"), seed=60)
+        derc5 = _make_doe(
+            site,
+            grp2,
+            offset_minutes=1,
+            duration_minutes=7,
+            export_limit=Decimal("20000"),
+            seed=50,
+        )
+        derc6 = _make_doe(
+            site,
+            grp2,
+            offset_minutes=8,
+            duration_minutes=5,
+            export_limit=Decimal("5000"),
+            seed=60,
+        )
         session.add_all([derc4, derc5, derc6])
 
         # Both groups subscribed — receipt = created_time for all controls
@@ -1080,7 +1538,12 @@ async def test_chart_gen10_derc456_subscribed(pg_envoy_base_config):
         # ct6 = T0+7m30s: DERC6 created here → gets "GET-DERC-6"
         _poll(2, ct6, req_id=4, step_name="GET-DERC-6"),
         _poll(2, T0 + timedelta(minutes=11), req_id=5, step_name="WAIT-OBSERVE-DERC-6"),
-        _poll(1, T0 + timedelta(minutes=15), req_id=6, step_name="WAIT-OBSERVE-DERP-1-6-DEFAULTS"),
+        _poll(
+            1,
+            T0 + timedelta(minutes=15),
+            req_id=6,
+            step_name="WAIT-OBSERVE-DERP-1-6-DEFAULTS",
+        ),
     ]
 
     async with generate_async_session(pg_envoy_base_config) as session:
@@ -1138,10 +1601,29 @@ async def test_chart_op_mod_energise(pg_envoy_base_config):
 
         ctrls = {
             "export": _make_doe(
-                site, grp1, offset_minutes=5, duration_minutes=25, export_limit=Decimal("5000"), seed=10
+                site,
+                grp1,
+                offset_minutes=5,
+                duration_minutes=25,
+                export_limit=Decimal("5000"),
+                seed=10,
             ),
-            "de-energise": _make_doe(site, grp1, offset_minutes=10, duration_minutes=5, set_energized=False, seed=20),
-            "re-energise": _make_doe(site, grp1, offset_minutes=20, duration_minutes=5, set_energized=True, seed=30),
+            "de-energise": _make_doe(
+                site,
+                grp1,
+                offset_minutes=10,
+                duration_minutes=5,
+                set_energized=False,
+                seed=20,
+            ),
+            "re-energise": _make_doe(
+                site,
+                grp1,
+                offset_minutes=20,
+                duration_minutes=5,
+                set_energized=True,
+                seed=30,
+            ),
         }
         session.add_all(ctrls.values())
         await session.flush()

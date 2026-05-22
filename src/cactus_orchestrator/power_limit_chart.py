@@ -91,6 +91,7 @@ class _RawDOE:
     set_connected: bool | None
     set_energized: bool | None
     ramp_time_seconds: float | None
+    storage_target_active_watts: float | None
     is_archive: bool
     deleted_time: datetime | None  # archive rows only
     archive_time: datetime | None  # archive rows only
@@ -109,6 +110,7 @@ class _RawDefault:
     import_limit_active_watts: float | None
     load_limit_active_watts: float | None
     ramp_rate_percent_per_second: int | None
+    storage_target_active_watts: float | None
     is_archive: bool
     archive_time: datetime | None  # archive rows only
 
@@ -146,6 +148,10 @@ class _EnrichedControl:
     @property
     def load_limit(self) -> float | None:
         return self.doe.load_limit_active_watts
+
+    @property
+    def storage_target(self) -> float | None:
+        return self.doe.storage_target_active_watts
 
     @property
     def set_connected(self) -> bool | None:
@@ -217,11 +223,24 @@ async def _get_subscribed_group_ids(session: AsyncSession) -> set[int]:
     return {row.resource_id for row in result}
 
 
-async def _get_does(session: AsyncSession) -> list[_RawDOE]:
-    """Fetch all active and archived DOEs for the active site using explicit column selection."""
+async def _check_has_storage_target(session: AsyncSession) -> bool:
+    """Returns True if the envoy DB schema includes storage_target_active_watts (v1.3+)."""
     result = await session.execute(
         text(
-            """
+            "SELECT 1 FROM information_schema.columns "
+            "WHERE table_name = 'dynamic_operating_envelope' "
+            "AND column_name = 'storage_target_active_watts'"
+        )
+    )
+    return result.first() is not None
+
+
+async def _get_does(session: AsyncSession, has_storage_target: bool) -> list[_RawDOE]:
+    """Fetch all active and archived DOEs for the active site using explicit column selection."""
+    storage_col = "storage_target_active_watts" if has_storage_target else "NULL AS storage_target_active_watts"
+    result = await session.execute(
+        text(
+            f"""
 SELECT
     dynamic_operating_envelope_id,
     site_control_group_id,
@@ -236,6 +255,7 @@ SELECT
     set_connected,
     set_energized,
     ramp_time_seconds,
+    {storage_col},
     false AS is_archive,
     NULL AS deleted_time,
     NULL AS archive_time
@@ -256,12 +276,13 @@ SELECT
     set_connected,
     set_energized,
     ramp_time_seconds,
+    {storage_col},
     true AS is_archive,
     deleted_time,
     archive_time
     FROM archive_dynamic_operating_envelope
     WHERE site_id = (SELECT site_id FROM site ORDER BY changed_time DESC LIMIT 1)
-            """
+            """  # noqa: S608  # nosec B608
         )
     )
     does: list[_RawDOE] = []
@@ -287,6 +308,9 @@ SELECT
                 set_connected=row.set_connected,
                 set_energized=row.set_energized,
                 ramp_time_seconds=float(row.ramp_time_seconds) if row.ramp_time_seconds is not None else None,
+                storage_target_active_watts=float(row.storage_target_active_watts)
+                if row.storage_target_active_watts is not None
+                else None,
                 is_archive=bool(row.is_archive),
                 deleted_time=row.deleted_time,
                 archive_time=row.archive_time,
@@ -295,10 +319,11 @@ SELECT
     return does
 
 
-async def _get_defaults(session: AsyncSession) -> list[_RawDefault]:
+async def _get_defaults(session: AsyncSession, has_storage_target: bool) -> list[_RawDefault]:
     """Fetch all active and archived SiteControlGroupDefaults using explicit column selection."""
+    storage_col = "storage_target_active_watts" if has_storage_target else "NULL AS storage_target_active_watts"
     result = await session.execute(
-        text("""
+        text(f"""
 SELECT
     site_control_group_id,
     changed_time,
@@ -307,6 +332,7 @@ SELECT
     import_limit_active_watts,
     load_limit_active_watts,
     ramp_rate_percent_per_second,
+    {storage_col},
     false AS is_archive,
     NULL AS archive_time
     FROM site_control_group_default
@@ -319,10 +345,11 @@ SELECT
     import_limit_active_watts,
     load_limit_active_watts,
     ramp_rate_percent_per_second,
+    {storage_col},
     true AS is_archive,
     archive_time
     FROM archive_site_control_group_default
-        """)
+        """)  # noqa: S608  # nosec B608
     )
     defaults: list[_RawDefault] = []
     for row in result:
@@ -343,6 +370,9 @@ SELECT
                 if row.load_limit_active_watts is not None
                 else None,
                 ramp_rate_percent_per_second=row.ramp_rate_percent_per_second,
+                storage_target_active_watts=float(row.storage_target_active_watts)
+                if row.storage_target_active_watts is not None
+                else None,
                 is_archive=bool(row.is_archive),
                 archive_time=row.archive_time,
             )
@@ -717,13 +747,22 @@ def _get_effective_upper_at(
         lambda c: c.gen_limit,
         lambda d: d.generation_limit_active_watts,
     )
-    if exp_val is not None and gen_val is not None:
-        return (exp_val, exp_src) if exp_val <= gen_val else (gen_val, gen_src)
-    if exp_val is not None:
-        return exp_val, exp_src
-    if gen_val is not None:
-        return gen_val, gen_src
-    return None, None
+    stor_val, stor_src = _resolve_type_limit(
+        t,
+        sorted_groups,
+        enriched,
+        defaults_by_group,
+        lambda c: c.storage_target if c.storage_target is not None and c.storage_target > 0 else None,
+        lambda d: (
+            d.storage_target_active_watts
+            if d.storage_target_active_watts is not None and d.storage_target_active_watts > 0
+            else None
+        ),
+    )
+    candidates = [(v, s) for v, s in [(exp_val, exp_src), (gen_val, gen_src), (stor_val, stor_src)] if v is not None]
+    if not candidates:
+        return None, None
+    return min(candidates, key=lambda x: x[0])
 
 
 def _get_effective_lower_at(
@@ -754,13 +793,22 @@ def _get_effective_lower_at(
         lambda c: c.load_limit,
         lambda d: d.load_limit_active_watts,
     )
-    if imp_val is not None and load_val is not None:
-        return (imp_val, imp_src) if imp_val <= load_val else (load_val, load_src)
-    if imp_val is not None:
-        return imp_val, imp_src
-    if load_val is not None:
-        return load_val, load_src
-    return None, None
+    stor_val, stor_src = _resolve_type_limit(
+        t,
+        sorted_groups,
+        enriched,
+        defaults_by_group,
+        lambda c: abs(c.storage_target) if c.storage_target is not None and c.storage_target < 0 else None,
+        lambda d: (
+            abs(d.storage_target_active_watts)
+            if d.storage_target_active_watts is not None and d.storage_target_active_watts < 0
+            else None
+        ),
+    )
+    candidates = [(v, s) for v, s in [(imp_val, imp_src), (load_val, load_src), (stor_val, stor_src)] if v is not None]
+    if not candidates:
+        return None, None
+    return min(candidates, key=lambda x: x[0])
 
 
 # ─── Ramp duration computation ────────────────────────────────────────────────
@@ -1011,14 +1059,6 @@ def _fmt_video_time(seconds: float) -> str:
     return f"{mm}:{ss:02d}"
 
 
-def _choose_tick_interval_seconds(duration_secs: float) -> int:
-    """Pick a sensible tick interval so there are roughly 8-20 ticks."""
-    for interval in [60, 120, 300, 600, 900, 1800, 3600, 7200]:
-        if duration_secs / interval <= 20:
-            return interval
-    return 3600
-
-
 def _assign_completion_lanes(
     completions: list[tuple[str, datetime]], to_rel: Callable[[datetime], float], duration_secs: float
 ) -> list[int]:
@@ -1052,7 +1092,6 @@ def _assign_completion_lanes(
 def _add_receipt_markers(
     fig: go.Figure,
     receipt_markers: list[_ReceiptMarker],
-    to_rel: Callable[[datetime], float],
     set_max_w: float,
 ) -> None:
     for m in receipt_markers:
@@ -1061,8 +1100,8 @@ def _add_receipt_markers(
             type="line",
             xref="x",
             yref="paper",
-            x0=to_rel(m.time),
-            x1=to_rel(m.time),
+            x0=m.time,
+            x1=m.time,
             y0=0.02,
             y1=0.98,
             line=dict(color=color, width=1.5, dash="dot"),
@@ -1087,7 +1126,7 @@ def _add_receipt_markers(
     if receipt_markers:
         fig.add_trace(
             go.Scatter(
-                x=[to_rel(m.time) for m in receipt_markers],
+                x=[m.time for m in receipt_markers],
                 y=[set_max_w * 0.55] * len(receipt_markers),
                 mode="markers",
                 marker=dict(
@@ -1109,34 +1148,33 @@ def _add_receipt_markers(
 def _add_reconnect_markers(
     fig: go.Figure,
     disconnect_intervals: list[tuple[datetime, datetime]],
-    to_rel: Callable[[datetime], float],
-    duration_secs: float,
+    test_end: datetime,
 ) -> None:
     _color = "rgba(120,120,120,0.5)"
-    reconnect_rels = [
-        to_rel(de - timedelta(seconds=_OP_MOD_CONNECT_GRACE_SECONDS))
+    reconnect_times = [
+        de - timedelta(seconds=_OP_MOD_CONNECT_GRACE_SECONDS)
         for _, de in disconnect_intervals
-        if to_rel(de - timedelta(seconds=_OP_MOD_CONNECT_GRACE_SECONDS)) < duration_secs
+        if (de - timedelta(seconds=_OP_MOD_CONNECT_GRACE_SECONDS)) < test_end
     ]
-    for rel in reconnect_rels:
+    for t in reconnect_times:
         fig.add_shape(
             type="line",
             xref="x",
             yref="paper",
-            x0=rel,
-            x1=rel,
+            x0=t,
+            x1=t,
             y0=0,
             y1=1,
             line=dict(color=_color, width=1, dash="dot"),
         )
-    if reconnect_rels:
+    if reconnect_times:
         fig.add_trace(
             go.Scatter(
-                x=reconnect_rels,
-                y=[0] * len(reconnect_rels),
+                x=reconnect_times,
+                y=[0] * len(reconnect_times),
                 mode="markers",
                 marker=dict(symbol="line-ns", size=10, color=_color),
-                customdata=[["60 s AS4777 wGra wait period on reconnection"]] * len(reconnect_rels),
+                customdata=[["60 s AS4777 wGra wait period on reconnection"]] * len(reconnect_times),
                 hovertemplate="Device reconnected — %{customdata[0]}<extra>Reconnect</extra>",
                 showlegend=False,
             )
@@ -1148,20 +1186,19 @@ def _add_completion_markers(
     completions: list[tuple[str, datetime]],
     lanes: list[int],
     lane_y: list[float],
-    duration_secs: float,
-    to_rel: Callable[[datetime], float],
+    test_start: datetime,
+    test_end: datetime,
 ) -> None:
     _completion_color = "#888"
     for (name, t), lane in zip(completions, lanes, strict=False):
-        rel = to_rel(t)
-        if rel < 0 or rel > duration_secs:
+        if t < test_start or t > test_end:
             continue
         fig.add_shape(
             type="line",
             xref="x",
             yref="paper",
-            x0=rel,
-            x1=rel,
+            x0=t,
+            x1=t,
             y0=0,
             y1=1,
             line=dict(color=_completion_color, width=1.5, dash="dash"),
@@ -1171,7 +1208,7 @@ def _add_completion_markers(
         fig.add_annotation(
             xref="x",
             yref="paper",
-            x=rel,
+            x=t,
             y=lane_y[lane],
             text=label,
             showarrow=True,
@@ -1198,7 +1235,6 @@ def _add_completion_markers(
 def _add_step_strips(
     fig: go.Figure,
     step_intervals: list[tuple[str, datetime, datetime]],
-    to_rel: Callable[[datetime], float],
     test_start: datetime,
     test_end: datetime,
 ) -> None:
@@ -1221,8 +1257,8 @@ def _add_step_strips(
         else:
             color = _STEP_PALETTE[palette_idx % len(_STEP_PALETTE)]
             palette_idx += 1
-        x0 = to_rel(max(start, test_start))
-        x1 = to_rel(min(end, test_end))
+        x0 = max(start, test_start)
+        x1 = min(end, test_end)
         if x1 <= x0:
             continue
         fig.add_shape(
@@ -1237,12 +1273,12 @@ def _add_step_strips(
             line=dict(color="rgba(0,0,0,0.18)", width=0.5),
             layer="below",
         )
-        if x1 - x0 >= 20:
+        if (x1 - x0).total_seconds() >= 20:
             label = name if len(name) <= 20 else name[:18] + "…"
             fig.add_annotation(
                 xref="x",
                 yref="paper",
-                x=(x0 + x1) / 2,
+                x=x0 + (x1 - x0) / 2,
                 y=-0.32,
                 text=label,
                 showarrow=False,
@@ -1266,22 +1302,6 @@ def _render_html_chart(
     step_completions: list[tuple[str, datetime]] | None = None,
 ) -> str:
     duration_secs = (test_end - test_start).total_seconds()
-    tick_interval = _choose_tick_interval_seconds(duration_secs)
-
-    tick_vals: list[float] = []
-    bottom_labels: list[str] = []
-
-    t_secs = 0.0
-    while t_secs <= duration_secs + 1:
-        t = test_start + timedelta(seconds=t_secs)
-        tick_vals.append(t_secs)
-        rel_label = (
-            _fmt_video_time(t_secs + video_start_seconds)
-            if video_start_seconds is not None
-            else _duration_label(t_secs)
-        )
-        bottom_labels.append(f"{rel_label}<br>{t.strftime('%H:%M')} UTC")
-        t_secs += tick_interval
 
     def to_rel(t: datetime) -> float:
         return (t - test_start).total_seconds()
@@ -1304,7 +1324,7 @@ def _render_html_chart(
     # ── Main limit traces ────────────────────────────────────────────────────
     fig.add_trace(
         go.Scatter(
-            x=[to_rel(t) for t, _, _ in upper_trace],
+            x=[t for t, _, _ in upper_trace],
             y=[v for _, v, _ in upper_trace],
             mode="lines",
             name="Upper limit (Export / Gen)",
@@ -1315,7 +1335,7 @@ def _render_html_chart(
     )
     fig.add_trace(
         go.Scatter(
-            x=[to_rel(t) for t, _, _ in lower_trace],
+            x=[t for t, _, _ in lower_trace],
             y=[v for _, v, _ in lower_trace],
             mode="lines",
             name="Lower limit (Import / Load)",
@@ -1345,23 +1365,26 @@ def _render_html_chart(
     )
 
     # ── Overlays ─────────────────────────────────────────────────────────────
-    _add_receipt_markers(fig, receipt_markers, to_rel, set_max_w)
-    _add_reconnect_markers(fig, disconnect_intervals, to_rel, duration_secs)
+    _add_receipt_markers(fig, receipt_markers, set_max_w)
+    _add_reconnect_markers(fig, disconnect_intervals, test_end)
     if completions:
-        _add_completion_markers(fig, completions, lanes, lane_y, duration_secs, to_rel)
+        _add_completion_markers(fig, completions, lanes, lane_y, test_start, test_end)
     if has_steps:
-        _add_step_strips(fig, step_intervals, to_rel, test_start, test_end)
+        _add_step_strips(fig, step_intervals, test_start, test_end)
 
     # ── Layout ───────────────────────────────────────────────────────────────
     fig.update_layout(
         title=dict(text="Expected Device Power Limits", font=dict(size=16)),
         height=height,
         xaxis=dict(
-            title="",
-            tickmode="array",
-            tickvals=tick_vals,
-            ticktext=bottom_labels,
-            range=[0, duration_secs],
+            title="Time (UTC)",
+            type="date",
+            range=[test_start, test_end],
+            tickformatstops=[
+                dict(dtickrange=[None, 10000], value="%H:%M:%S"),
+                dict(dtickrange=[10000, None], value="%H:%M"),
+            ],
+            hoverformat="%H:%M:%S",
             showgrid=True,
             gridcolor="rgba(0,0,0,0.08)",
         ),
@@ -1456,8 +1479,9 @@ async def generate_power_limit_chart_html(
     groups_by_id = {g.site_control_group_id: g for g in control_groups}
     sorted_groups = sorted(control_groups, key=lambda g: g.primacy)
 
-    all_does = await _get_does(session)
-    all_defaults = await _get_defaults(session)
+    has_storage_target = await _check_has_storage_target(session)
+    all_does = await _get_does(session, has_storage_target)
+    all_defaults = await _get_defaults(session, has_storage_target)
     defaults_by_group = _build_defaults_by_group(all_defaults)
 
     subscribed_group_ids = await _get_subscribed_group_ids(session)
