@@ -30,7 +30,7 @@ dependencies = [
     # kaleido v1+ requires Chrome (and more...._to be installed (not available in the container image).
     # plotly v6+ requires kaleido v1+. Keep both pinned until further consideration.
     "plotly<6.0.0",
-    "kaleido<1.0.0",
+    "kaleido<1.0.0,!=0.2.1.post1",
     "testing.postgresql",
 ]
 name = "cactus-orchestrator"
@@ -54,6 +54,8 @@ test = [
     "pytest-asyncio",
     "pytest-env",
     "pytest-postgresql",
+    "pytest-xdist",
+    "pytest-cov",
     "psycopg",
     "assertical >= 0.4.0",
     "pytest-asyncio",
