@@ -2,6 +2,7 @@ import logging
 from http import HTTPStatus
 
 from cactus_schema.orchestrator import PlaylistRunInfo, RunResponse, RunStatusResponse
+from cactus_schema.orchestrator.schema import ComplianceRequestResponse
 from cactus_test_definitions.client.test_procedures import TestProcedure, TestProcedureId
 from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -9,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from cactus_orchestrator.auth import UserContext
 from cactus_orchestrator.crud import insert_user, select_run_group_for_user, select_run_groups_for_user, select_user
 from cactus_orchestrator.k8s.resource import generate_envoy_dcap_uri, get_resource_names
-from cactus_orchestrator.model import Run, RunGroup, RunStatus, User
+from cactus_orchestrator.model import ComplianceRequest, Run, RunGroup, RunStatus, User
 from cactus_orchestrator.procedures import get_filtered_test_procedures
 
 logger = logging.getLogger(__name__)
@@ -52,6 +53,29 @@ def map_run_to_run_response(run: Run, playlist_runs: list[PlaylistRunInfo] | Non
         playlist_order=run.playlist_order,
         playlist_runs=playlist_runs,
         classes=definition.classes if definition else None,
+    )
+
+
+async def map_to_compliance_request_response(request: ComplianceRequest) -> ComplianceRequestResponse:
+    return ComplianceRequestResponse(
+        compliance_request_id=request.compliance_request_id,
+        created_at=request.created_at,
+        created_by=request.created_by,
+        updated_at=request.updated_at,
+        updated_by=request.updated_by,
+        status=request.status,
+        classes={c.compliance_class for c in request.classes},
+        runs={r.compliance_run_id for r in request.runs},
+        csip_aus_version=request.csip_aus_version,
+        witnessed_at=request.witnessed_at,
+        der_brand=request.der_brand,
+        der_oem=request.der_oem,
+        der_series=request.der_series,
+        der_representative_models=request.der_representative_models,
+        software_client_type=request.software_client_type,
+        software_client_providers=request.software_client_providers,
+        software_client_versions=request.software_client_versions,
+        onsite_hardware_details=request.onsite_hardware_details,
     )
 
 

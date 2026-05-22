@@ -61,6 +61,7 @@ from cactus_orchestrator.crud import (
     insert_run_for_run_group,
     select_active_runs_for_user,
     select_next_playlist_run,
+    select_passed_runs_for_user,
     select_playlist_runs,
     select_playlist_runs_with_status,
     select_run_group_for_user,
@@ -1000,3 +1001,34 @@ async def proceed_proxy(
             msg = f"Error sending proceed to run {run.run_id}."
             logger.error(msg)
             raise HTTPException(status_code=HTTPStatus.INTERNAL_SERVER_ERROR, detail=msg) from err
+
+
+@router.get(uri.RunList, status_code=HTTPStatus.OK)
+async def get_run_list(
+    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.user_all}))],
+    passed: bool | None = Query(default=None),
+) -> list[RunResponse]:
+    """Returns all the successful runs for a user across all run groups (if passed=True)
+
+    This endpoint will not simply return all runs for a user across all run groups.
+    This is not functionality we need or should expose at this time.
+
+    The query parameter 'passed' must be supplied and must be True otherwise a BAD REQUEST response is returned.
+    """
+
+    if not passed:
+        msg = (
+            f"Only retrieving passed runs is supported. Please set 'passed' query parameter: {uri.RunList}?passed=true."
+        )
+        raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail=msg)
+
+    user = await select_user_or_raise(db.session, user_context)
+
+    runs = await select_passed_runs_for_user(db.session, user_id=user.user_id)
+
+    if runs:
+        resp = [map_run_to_run_response(run) for run in runs if run]
+    else:
+        resp = []
+
+    return resp
