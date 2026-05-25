@@ -91,6 +91,9 @@ markers = [
     "idleteardowntask_enable(seconds): Mark test that enables teardown task and sets repeat every duration",
 ]
 
+[tool.uv]
+required-environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'"]
+
 [tool.ty.src]
 include = ["src", "tests"]
 
