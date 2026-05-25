@@ -522,6 +522,26 @@ def _effective_end_for_doe(doe: _RawDOE) -> datetime | None:
     return base_end
 
 
+def _align_effective_ends_to_client_transitions(enriched: list[_EnrichedControl]) -> None:
+    """Align each control's effective_end to when the client transitions to the next one.
+
+    A control remains the client's active control until receipt_time of the next control
+    in the same group, regardless of when the server superseded it. For subscribed groups
+    receipt_time ≈ created_time ≈ deleted_time so this is a no-op; for polled groups it
+    closes the gap between server supersession and the next client poll.
+    """
+    for group_id in {c.site_control_group_id for c in enriched}:
+        group_controls = sorted(
+            [c for c in enriched if c.site_control_group_id == group_id],
+            key=lambda c: c.receipt_time,
+        )
+        for i in range(len(group_controls) - 1):
+            ctrl = group_controls[i]
+            next_receipt = group_controls[i + 1].receipt_time
+            base_end = ctrl.doe.start_time + timedelta(seconds=ctrl.doe.duration_seconds)
+            ctrl.effective_end = min(base_end, next_receipt)
+
+
 def _build_enriched_controls(
     all_does: list[_RawDOE],
     test_start: datetime,
@@ -1527,6 +1547,7 @@ async def generate_power_limit_chart_html(
     enriched = _build_enriched_controls(
         all_does, test_start, groups_by_id, subscribed_group_ids, request_history, doe_tags or {}
     )
+    _align_effective_ends_to_client_transitions(enriched)
 
     disconnect_intervals = _compute_disconnect_intervals(enriched, test_end)
 
