@@ -21,7 +21,7 @@ import logging
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import plotly.graph_objects as go  # type: ignore[import-untyped]
 from cactus_schema.runner.schema import RequestEntry
@@ -939,6 +939,7 @@ def _build_trace(  # noqa: C901
     set_max_w: float,
     disconnect_intervals: list[tuple[datetime, datetime]],
     defaults_by_group: dict[int, list[_DefaultLike]],
+    video_offset_seconds: float = 0.0,
 ) -> list[tuple[datetime, float, str]]:
     """Convert limit events into a piecewise-linear trace with ramps.
 
@@ -948,7 +949,7 @@ def _build_trace(  # noqa: C901
     post_reconnect_windows = [
         (de, de + timedelta(seconds=_POST_DISCONNECT_WGRA_SECONDS)) for _, de in disconnect_intervals
     ]
-    points: list[tuple[datetime, float, str]] = [(test_start, initial_value, "")]
+    points: list[tuple[datetime, float, str]] = [(test_start, initial_value, f"{initial_value:.0f} W")]
 
     # Track the current ramp: from (ramp_start_t, ramp_start_v) to (ramp_end_t, ramp_end_v)
     ramp_start_t = test_start
@@ -971,7 +972,7 @@ def _build_trace(  # noqa: C901
         # interrupted and should not continue past the interruption point.
         if pending_ramp_end is not None:
             if pending_ramp_end[0] <= ev.time:
-                points.append((pending_ramp_end[0], pending_ramp_end[1], ""))
+                points.append((pending_ramp_end[0], pending_ramp_end[1], f"{pending_ramp_end[1]:.0f} W"))
             pending_ramp_end = None
 
         # Determine the current value at ev.time (accounting for any active ramp)
@@ -995,8 +996,22 @@ def _build_trace(  # noqa: C901
             desc = f"AS4777 wGra post-reconnect ({ramp_secs:.0f}s)"
         else:
             ramp_secs, desc = _compute_ramp(ev.source, ev.time, delta_w, set_max_w, defaults_by_group)
-        rel_time = _duration_label((ev.time - test_start).total_seconds())
-        hover = f"<br>T+{rel_time}  →  {ev.target:.0f} W  ({desc})"
+        rel_secs = (ev.time - test_start).total_seconds() + video_offset_seconds
+        if isinstance(ev.source, _EnrichedControl):
+            doe_id = ev.source.doe.dynamic_operating_envelope_id
+            step = ev.source.step_name
+            ctrl_label = f"DERC{doe_id}" + (f" — {step}" if step else "")
+        elif ev.source is not None:
+            gid = getattr(ev.source, "site_control_group_id", "?")
+            ctrl_label = f"Default DERP{gid}"
+        else:
+            ctrl_label = "Unconstrained"
+        hover = (
+            f"Control received: {ctrl_label}<br>"
+            f"Relative time: {_fmt_video_time(rel_secs)}<br>"
+            f"Ramping from {current_v:.0f} W to {ev.target:.0f} W<br>"
+            f"Ramp rate: {desc}"
+        )
 
         points.append((ev.time, current_v, hover))
 
@@ -1016,7 +1031,7 @@ def _build_trace(  # noqa: C901
 
     # Flush any pending ramp endpoint that was not interrupted by a later event.
     if pending_ramp_end is not None:
-        points.append((pending_ramp_end[0], pending_ramp_end[1], ""))
+        points.append((pending_ramp_end[0], pending_ramp_end[1], f"{pending_ramp_end[1]:.0f} W"))
 
     # Ensure the trace reaches test_end
     if points[-1][0] < test_end:
@@ -1026,7 +1041,7 @@ def _build_trace(  # noqa: C901
         else:
             frac = (test_end - ramp_start_t).total_seconds() / ramp_duration_secs
             v_final = ramp_start_v + frac * (ramp_end_v - ramp_start_v)
-        points.append((test_end, v_final, ""))
+        points.append((test_end, v_final, f"{v_final:.0f} W"))
 
     return points
 
@@ -1093,6 +1108,7 @@ def _add_receipt_markers(
     fig: go.Figure,
     receipt_markers: list[_ReceiptMarker],
     set_max_w: float,
+    to_chart_x: Callable[[datetime], datetime],
 ) -> None:
     for m in receipt_markers:
         color = "#27ae60" if m.is_subscribed else "#e67e22"
@@ -1100,8 +1116,8 @@ def _add_receipt_markers(
             type="line",
             xref="x",
             yref="paper",
-            x0=m.time,
-            x1=m.time,
+            x0=to_chart_x(m.time),
+            x1=to_chart_x(m.time),
             y0=0.02,
             y1=0.98,
             line=dict(color=color, width=1.5, dash="dot"),
@@ -1126,7 +1142,7 @@ def _add_receipt_markers(
     if receipt_markers:
         fig.add_trace(
             go.Scatter(
-                x=[m.time for m in receipt_markers],
+                x=[to_chart_x(m.time) for m in receipt_markers],
                 y=[set_max_w * 0.55] * len(receipt_markers),
                 mode="markers",
                 marker=dict(
@@ -1149,6 +1165,7 @@ def _add_reconnect_markers(
     fig: go.Figure,
     disconnect_intervals: list[tuple[datetime, datetime]],
     test_end: datetime,
+    to_chart_x: Callable[[datetime], datetime],
 ) -> None:
     _color = "rgba(120,120,120,0.5)"
     reconnect_times = [
@@ -1161,8 +1178,8 @@ def _add_reconnect_markers(
             type="line",
             xref="x",
             yref="paper",
-            x0=t,
-            x1=t,
+            x0=to_chart_x(t),
+            x1=to_chart_x(t),
             y0=0,
             y1=1,
             line=dict(color=_color, width=1, dash="dot"),
@@ -1170,7 +1187,7 @@ def _add_reconnect_markers(
     if reconnect_times:
         fig.add_trace(
             go.Scatter(
-                x=reconnect_times,
+                x=[to_chart_x(t) for t in reconnect_times],
                 y=[0] * len(reconnect_times),
                 mode="markers",
                 marker=dict(symbol="line-ns", size=10, color=_color),
@@ -1188,6 +1205,7 @@ def _add_completion_markers(
     lane_y: list[float],
     test_start: datetime,
     test_end: datetime,
+    to_chart_x: Callable[[datetime], datetime],
 ) -> None:
     _completion_color = "#888"
     for (name, t), lane in zip(completions, lanes, strict=False):
@@ -1197,8 +1215,8 @@ def _add_completion_markers(
             type="line",
             xref="x",
             yref="paper",
-            x0=t,
-            x1=t,
+            x0=to_chart_x(t),
+            x1=to_chart_x(t),
             y0=0,
             y1=1,
             line=dict(color=_completion_color, width=1.5, dash="dash"),
@@ -1208,7 +1226,7 @@ def _add_completion_markers(
         fig.add_annotation(
             xref="x",
             yref="paper",
-            x=t,
+            x=to_chart_x(t),
             y=lane_y[lane],
             text=label,
             showarrow=True,
@@ -1237,6 +1255,7 @@ def _add_step_strips(
     step_intervals: list[tuple[str, datetime, datetime]],
     test_start: datetime,
     test_end: datetime,
+    to_chart_x: Callable[[datetime], datetime],
 ) -> None:
     fig.add_annotation(
         xref="paper",
@@ -1265,8 +1284,8 @@ def _add_step_strips(
             type="rect",
             xref="x",
             yref="paper",
-            x0=x0,
-            x1=x1,
+            x0=to_chart_x(x0),
+            x1=to_chart_x(x1),
             y0=-0.42,
             y1=-0.22,
             fillcolor=color,
@@ -1278,7 +1297,7 @@ def _add_step_strips(
             fig.add_annotation(
                 xref="x",
                 yref="paper",
-                x=x0 + (x1 - x0) / 2,
+                x=to_chart_x(x0) + (x1 - x0) / 2,
                 y=-0.32,
                 text=label,
                 showarrow=False,
@@ -1306,6 +1325,14 @@ def _render_html_chart(
     def to_rel(t: datetime) -> float:
         return (t - test_start).total_seconds()
 
+    # Rebase datetimes to a fake epoch so Plotly's auto-ticking shows relative/video
+    # time instead of UTC. test_start maps to 1970-01-01T00:00:00Z + video_offset.
+    _fake_epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
+    _video_offset = timedelta(seconds=video_start_seconds or 0.0)
+
+    def to_chart_x(t: datetime) -> datetime:
+        return _fake_epoch + _video_offset + (t - test_start)
+
     y_max = set_max_w * 1.1
     y_min = -set_max_w * 1.1
     has_steps = bool(step_intervals)
@@ -1324,24 +1351,25 @@ def _render_html_chart(
     # ── Main limit traces ────────────────────────────────────────────────────
     fig.add_trace(
         go.Scatter(
-            x=[t for t, _, _ in upper_trace],
+            x=[to_chart_x(t) for t, _, _ in upper_trace],
             y=[v for _, v, _ in upper_trace],
             mode="lines",
             name="Upper limit (Export / Gen)",
             line=dict(color="#e74c3c", width=2),
             customdata=[[h] for _, _, h in upper_trace],
-            hovertemplate="%{y:.0f} W%{customdata[0]}<extra>Upper</extra>",
+            hovertemplate="%{customdata[0]}<extra>Upper</extra>",
         )
     )
     fig.add_trace(
         go.Scatter(
-            x=[t for t, _, _ in lower_trace],
+            x=[to_chart_x(t) for t, _, _ in lower_trace],
             y=[v for _, v, _ in lower_trace],
             mode="lines",
             name="Lower limit (Import / Load)",
             line=dict(color="#3498db", width=2),
             customdata=[[h] for _, _, h in lower_trace],
-            hovertemplate="%{y:.0f} W%{customdata[0]}<extra>Lower</extra>",
+            hovertemplate="%{customdata[0]}<extra>Lower</extra>",
+            hoverinfo="skip",  # enabled by Import view button
         )
     )
 
@@ -1365,23 +1393,27 @@ def _render_html_chart(
     )
 
     # ── Overlays ─────────────────────────────────────────────────────────────
-    _add_receipt_markers(fig, receipt_markers, set_max_w)
-    _add_reconnect_markers(fig, disconnect_intervals, test_end)
+    _add_receipt_markers(fig, receipt_markers, set_max_w, to_chart_x)
+    _add_reconnect_markers(fig, disconnect_intervals, test_end, to_chart_x)
     if completions:
-        _add_completion_markers(fig, completions, lanes, lane_y, test_start, test_end)
+        _add_completion_markers(fig, completions, lanes, lane_y, test_start, test_end, to_chart_x)
     if has_steps:
-        _add_step_strips(fig, step_intervals, test_start, test_end)
+        _add_step_strips(fig, step_intervals, test_start, test_end, to_chart_x)
+
+    x_title = "Video time (M:SS)" if video_start_seconds else "Time from test start (M:SS)"
+    chart_start = to_chart_x(test_start)
+    chart_end = to_chart_x(test_end)
 
     # ── Layout ───────────────────────────────────────────────────────────────
     fig.update_layout(
         title=dict(text="Expected Device Power Limits", font=dict(size=16)),
         height=height,
         xaxis=dict(
-            title="Time (UTC)",
+            title=x_title,
             type="date",
-            range=[test_start, test_end],
+            range=[chart_start, chart_end],
             tickformatstops=[
-                dict(dtickrange=[None, 10000], value="%H:%M:%S"),
+                dict(dtickrange=[None, 10000], value="%M:%S"),
                 dict(dtickrange=[10000, None], value="%H:%M"),
             ],
             hoverformat="%H:%M:%S",
@@ -1412,13 +1444,19 @@ def _render_html_chart(
                 buttons=[
                     dict(
                         label="Export view",
-                        method="relayout",
-                        args=[{"yaxis.range": [y_min, y_max], "yaxis.autorange": False}],
+                        method="update",
+                        args=[
+                            {"hoverinfo": ["all", "skip"]},
+                            {"yaxis.range": [y_min, y_max], "yaxis.autorange": False},
+                        ],
                     ),
                     dict(
                         label="Import view",
-                        method="relayout",
-                        args=[{"yaxis.range": [y_max, y_min], "yaxis.autorange": False}],
+                        method="update",
+                        args=[
+                            {"hoverinfo": ["skip", "all"]},
+                            {"yaxis.range": [y_max, y_min], "yaxis.autorange": False},
+                        ],
                     ),
                 ],
                 font=dict(size=11),
@@ -1501,11 +1539,12 @@ async def generate_power_limit_chart_html(
         False, event_times, sorted_groups, enriched, defaults_by_group, disconnect_intervals, set_max_w
     )
 
+    video_offset = video_start_seconds or 0.0
     upper_trace = _build_trace(
-        upper_events, test_start, test_end, set_max_w, set_max_w, disconnect_intervals, defaults_by_group
+        upper_events, test_start, test_end, set_max_w, set_max_w, disconnect_intervals, defaults_by_group, video_offset
     )
     lower_trace = _build_trace(
-        lower_events, test_start, test_end, -set_max_w, set_max_w, disconnect_intervals, defaults_by_group
+        lower_events, test_start, test_end, -set_max_w, set_max_w, disconnect_intervals, defaults_by_group, video_offset
     )
 
     step_intervals = _compute_active_control_intervals(
