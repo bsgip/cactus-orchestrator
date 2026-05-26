@@ -1420,7 +1420,7 @@ def _render_html_chart(
     if has_steps:
         _add_step_strips(fig, step_intervals, test_start, test_end, to_chart_x)
 
-    x_title = "Video time (M:SS)" if video_start_seconds else "Time from test start (M:SS)"
+    x_title = "Video time" if video_start_seconds else "Time from test start"
     chart_start = to_chart_x(test_start)
     chart_end = to_chart_x(test_end)
 
