@@ -1018,9 +1018,7 @@ def _build_trace(  # noqa: C901
             ramp_secs, desc = _compute_ramp(ev.source, ev.time, delta_w, set_max_w, defaults_by_group)
         rel_secs = (ev.time - test_start).total_seconds() + video_offset_seconds
         if isinstance(ev.source, _EnrichedControl):
-            doe_id = ev.source.doe.dynamic_operating_envelope_id
-            step = ev.source.step_name
-            ctrl_label = f"DERC{doe_id}" + (f" — {step}" if step else "")
+            ctrl_label = f"DERC{ev.source.doe.dynamic_operating_envelope_id}"
         elif ev.source is not None:
             gid = getattr(ev.source, "site_control_group_id", "?")
             ctrl_label = f"Default DERP{gid}"
