@@ -224,15 +224,15 @@ async def _get_subscribed_group_ids(session: AsyncSession) -> set[int]:
 
 
 async def _check_has_storage_target(session: AsyncSession) -> bool:
-    """Returns True if the envoy DB schema includes storage_target_active_watts (v1.3+)."""
+    """Returns True if both DOE tables include storage_target_active_watts (v1.3+ schema)."""
     result = await session.execute(
         text(
-            "SELECT 1 FROM information_schema.columns "
-            "WHERE table_name = 'dynamic_operating_envelope' "
+            "SELECT COUNT(*) FROM information_schema.columns "
+            "WHERE table_name IN ('dynamic_operating_envelope', 'archive_dynamic_operating_envelope') "
             "AND column_name = 'storage_target_active_watts'"
         )
     )
-    return result.first() is not None
+    return (result.scalar() or 0) >= 2
 
 
 async def _get_does(session: AsyncSession, has_storage_target: bool) -> list[_RawDOE]:
@@ -1067,20 +1067,6 @@ def _build_trace(  # noqa: C901
 # ─── Chart rendering ──────────────────────────────────────────────────────────
 
 
-def _duration_label(seconds: float) -> str:
-    """Convert a seconds offset to a compact label: '30s', '5m', '1h2m'."""
-    s = int(abs(seconds))
-    if s < 60:
-        return f"{s}s"
-    mins = s // 60
-    secs = s % 60
-    if mins < 60:
-        return f"{mins}m" if secs == 0 else f"{mins}m{secs}s"
-    hours = mins // 60
-    rem = mins % 60
-    return f"{hours}h{rem}m" if rem else f"{hours}h"
-
-
 def _fmt_video_time(seconds: float) -> str:
     """Format a seconds offset as a video timestamp: 'M:SS' or 'H:MM:SS'."""
     s = int(max(0, seconds))
@@ -1340,9 +1326,6 @@ def _render_html_chart(
 ) -> str:
     duration_secs = (test_end - test_start).total_seconds()
 
-    def to_rel(t: datetime) -> float:
-        return (t - test_start).total_seconds()
-
     # Rebase datetimes to a fake epoch so Plotly's auto-ticking shows relative/video
     # time instead of UTC. test_start maps to 1970-01-01T00:00:00Z + video_offset.
     _fake_epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
@@ -1356,7 +1339,7 @@ def _render_html_chart(
     has_steps = bool(step_intervals)
     bottom_margin = 230 if has_steps else 130
     completions = sorted(step_completions or [], key=lambda x: x[1])
-    lanes = _assign_completion_lanes(completions, to_rel, duration_secs) if completions else []
+    lanes = _assign_completion_lanes(completions, lambda t: (t - test_start).total_seconds(), duration_secs) if completions else []
     max_lane = max(lanes) if lanes else 0
     # Each lane is 0.06 paper-coordinate units above the plot; legend floats above them all.
     lane_y = [1.06 + i * 0.06 for i in range(max_lane + 1)]
@@ -1387,7 +1370,6 @@ def _render_html_chart(
             line=dict(color="#3498db", width=2),
             customdata=[[h] for _, _, h in lower_trace],
             hovertemplate="%{customdata[0]}<extra>Lower</extra>",
-            hoverinfo="skip",  # enabled by Import view button
         )
     )
 
@@ -1431,8 +1413,8 @@ def _render_html_chart(
             type="date",
             range=[chart_start, chart_end],
             tickformatstops=[
-                dict(dtickrange=[None, 10000], value="%M:%S"),
-                dict(dtickrange=[10000, None], value="%H:%M"),
+                dict(dtickrange=[None, 60000], value="%M:%S"),
+                dict(dtickrange=[60000, None], value="%H:%M"),
             ],
             hoverformat="%H:%M:%S",
             showgrid=True,
@@ -1450,39 +1432,6 @@ def _render_html_chart(
         paper_bgcolor="white",
         margin=dict(t=top_margin, b=bottom_margin, l=80, r=120),
         hovermode="x unified",
-        # ── Export / Import view toggle ──────────────────────────────────────
-        updatemenus=[
-            dict(
-                type="buttons",
-                direction="left",
-                x=0.0,
-                y=-0.12 if not has_steps else -0.50,
-                xanchor="left",
-                yanchor="top",
-                buttons=[
-                    dict(
-                        label="Export view",
-                        method="update",
-                        args=[
-                            {"hoverinfo": ["all", "skip"]},
-                            {"yaxis.range": [y_min, y_max], "yaxis.autorange": False},
-                        ],
-                    ),
-                    dict(
-                        label="Import view",
-                        method="update",
-                        args=[
-                            {"hoverinfo": ["skip", "all"]},
-                            {"yaxis.range": [y_max, y_min], "yaxis.autorange": False},
-                        ],
-                    ),
-                ],
-                font=dict(size=11),
-                bgcolor="white",
-                bordercolor="#bbb",
-                borderwidth=1,
-            )
-        ],
     )
 
     html = fig.to_html(full_html=True, include_plotlyjs=True)

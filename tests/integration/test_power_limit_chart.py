@@ -653,6 +653,31 @@ async def test_get_defaults_not_scoped_to_site(pg_envoy_base_config):
 # ─── storage_target_active_watts (v1.3 column, simulated on v1.2 schema) ──────
 
 
+async def test_check_has_storage_target_false_on_base_schema(pg_envoy_base_config):
+    """Returns False when storage_target_active_watts does not exist on the DOE tables."""
+    async with generate_async_session(pg_envoy_base_config) as session:
+        result = await _check_has_storage_target(session)
+    assert result is False
+
+
+async def test_get_does_storage_target_none_when_column_absent(pg_envoy_base_config):
+    """When has_storage_target=False, storage_target_active_watts is None for every row."""
+    async with generate_async_session(pg_envoy_base_config) as session:
+        site = _make_site_with_setting(aggregator_id=1)
+        session.add(site)
+        grp = generate_class_instance(SiteControlGroup, seed=1, site_control_group_id=1, primacy=1)
+        session.add(grp)
+        doe = _make_doe(site, grp, offset_minutes=5, duration_minutes=10, export_limit=Decimal("8000"), seed=1)
+        session.add(doe)
+        await session.commit()
+
+    async with generate_async_session(pg_envoy_base_config) as session:
+        result = await _get_does(session, has_storage_target=False)
+
+    assert len(result) == 1
+    assert result[0].storage_target_active_watts is None
+
+
 async def test_get_does_reads_storage_target_when_column_present(pg_envoy_base_config):
     """_check_has_storage_target returns True and _get_does reads storage_target_active_watts when the column exists."""
     async with generate_async_session(pg_envoy_base_config) as session:
@@ -776,6 +801,10 @@ async def test_chart_storage_target_constrains_upper_and_lower_bounds(
 
     assert html is not None, "Chart generation returned None"
     assert "Device Power Chart" in html
+    # storage_target=+4000 should bind the upper trace (export) at 4000W
+    assert "4000" in html
+    # storage_target=-2500 should bind the lower trace (import) at -2500W
+    assert "-2500" in html
     out = _out("scenario_storage_target_v13.html")
     out.write_text(html)
     print(f"\n  ✓ Storage target scenario → {out}")
