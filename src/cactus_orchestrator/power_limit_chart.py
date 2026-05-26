@@ -1025,7 +1025,7 @@ def _build_trace(  # noqa: C901
             gid = getattr(ev.source, "site_control_group_id", "?")
             ctrl_label = f"Default DERP{gid}"
         else:
-            ctrl_label = "Unconstrained"
+            ctrl_label = "No active limit"
         hover = (
             f"Control received: {ctrl_label}<br>"
             f"Relative time: {_fmt_video_time(rel_secs)}<br>"
