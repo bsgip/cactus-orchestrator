@@ -533,11 +533,13 @@ def _align_effective_ends_to_client_transitions(enriched: list[_EnrichedControl]
     for group_id in {c.site_control_group_id for c in enriched}:
         group_controls = sorted(
             [c for c in enriched if c.site_control_group_id == group_id],
-            key=lambda c: c.receipt_time,
+            key=lambda c: (c.receipt_time, c.doe.dynamic_operating_envelope_id),
         )
         for i in range(len(group_controls) - 1):
             ctrl = group_controls[i]
             next_receipt = group_controls[i + 1].receipt_time
+            if next_receipt <= ctrl.effective_start:
+                continue
             base_end = ctrl.doe.start_time + timedelta(seconds=ctrl.doe.duration_seconds)
             ctrl.effective_end = min(base_end, next_receipt)
 
