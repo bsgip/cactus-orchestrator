@@ -96,6 +96,5 @@ markers = [
 [tool.ty.src]
 include = ["src", "tests"]
 
-
 [tool.setuptools.dynamic]
 version = { attr = "cactus_orchestrator.__version__" }
