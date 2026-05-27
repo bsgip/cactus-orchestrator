@@ -21,7 +21,7 @@ import logging
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import plotly.graph_objects as go  # type: ignore[import-untyped]
 from cactus_schema.runner.schema import RequestEntry
@@ -1330,7 +1330,7 @@ def _render_html_chart(
 
     # Rebase datetimes to a fake epoch so Plotly's auto-ticking shows relative/video
     # time instead of UTC. test_start maps to 1970-01-01T00:00:00Z + video_offset.
-    _fake_epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
+    _fake_epoch = datetime(1970, 1, 1, tzinfo=UTC)
     _video_offset = timedelta(seconds=video_start_seconds or 0.0)
 
     def to_chart_x(t: datetime) -> datetime:
@@ -1341,7 +1341,11 @@ def _render_html_chart(
     has_steps = bool(step_intervals)
     bottom_margin = 230 if has_steps else 130
     completions = sorted(step_completions or [], key=lambda x: x[1])
-    lanes = _assign_completion_lanes(completions, lambda t: (t - test_start).total_seconds(), duration_secs) if completions else []
+    lanes = (
+        _assign_completion_lanes(completions, lambda t: (t - test_start).total_seconds(), duration_secs)
+        if completions
+        else []
+    )
     max_lane = max(lanes) if lanes else 0
     # Each lane is 0.06 paper-coordinate units above the plot; legend floats above them all.
     lane_y = [1.06 + i * 0.06 for i in range(max_lane + 1)]
