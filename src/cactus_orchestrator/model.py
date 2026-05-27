@@ -183,3 +183,92 @@ class ComplianceRecord(Base):
     )  # User who requested generation of the compliance report
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     file_data: Mapped[bytes] = mapped_column(LargeBinary, nullable=True, unique=False, deferred=True)
+
+
+class ComplianceRequestStatus(IntEnum):
+    """Encodes the status of a compliance request
+
+    submitted    - client has created the request
+                   admin has ability to open the request (see under_review)
+                   client has ability to edit request
+    under_review - once an admin opens a previously submitted request its status changes to 'under review'
+                   admin has ability to edit the request
+                   client can no longer edit the request
+    pushed_back  - admin has pushed the request back to the client (changes needed)
+                   admin can no longer edit the request
+                   client has ability to edit the request
+    finalised    - the compliance request is finalised (a compliance record gets created)
+                   neither admin nor client can modify the request
+    """
+
+    SUBMITTED = auto()
+    UNDER_REVIEW = auto()
+    PUSHED_BACK = auto()
+    FINALISED = auto()
+
+
+class ComplianceRequest(Base):
+    """Records each instance a compliance request made by a client
+
+    Each compliance request records
+    - A set of compliance classes to be assessed under.
+    - A set of successful runs the cover the above compliance classes.
+    - A collection of table metadata (e.g. created_at etc.)
+    - A collection of compliance request metadata (e.g.
+    """
+
+    __tablename__ = "compliance_request"
+
+    compliance_request_id: Mapped[int] = mapped_column(name="id", primary_key=True, autoincrement=True)
+
+    # Table metadata
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    created_by: Mapped[int] = mapped_column(ForeignKey("user_.id"))  # the client(user) who requested compliance
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_by: Mapped[int] = mapped_column(
+        ForeignKey("user_.id")
+    )  # the last user to update the compliance request - could be the client or an admin
+    created_by_user: Mapped[User] = relationship(foreign_keys=created_by, lazy="raise")
+    updated_by_user: Mapped[User] = relationship(foreign_keys=updated_by, lazy="raise")
+
+    # Status
+    status: Mapped[ComplianceRequestStatus] = mapped_column(Integer, nullable=False)
+
+    # Compliance classes
+    classes: Mapped[set["ComplianceRequestClass"]] = relationship(lazy="raise", cascade="all, delete-orphan")
+    runs: Mapped[set["ComplianceRequestRun"]] = relationship(lazy="raise", cascade="all, delete-orphan")
+
+    # Compliance request metadata
+    csip_aus_version: Mapped[str] = mapped_column(String, nullable=False, unique=False)
+    witnessed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    der_brand: Mapped[str] = mapped_column(String, nullable=False, unique=False)
+    der_oem: Mapped[str] = mapped_column(String, nullable=False, unique=False)
+    der_series: Mapped[str] = mapped_column(String, nullable=False, unique=False)
+    der_representative_models: Mapped[str] = mapped_column(String, nullable=False, unique=False)
+    software_client_type: Mapped[str] = mapped_column(String, nullable=False, unique=False)
+    software_client_providers: Mapped[str] = mapped_column(String, nullable=False, unique=False)
+    software_client_versions: Mapped[str] = mapped_column(String, nullable=False, unique=False)
+    onsite_hardware_details: Mapped[str] = mapped_column(String, nullable=False, unique=False)
+
+
+class ComplianceRequestClass(Base):
+    """Many-to-one mapping from compliance_request to a set of compliance classes ("A", "DER-A" etc)"""
+
+    __tablename__ = "compliance_request_class"
+
+    compliance_request_class_id: Mapped[int] = mapped_column(name="id", primary_key=True, autoincrement=True)
+
+    compliance_request_id: Mapped[int] = mapped_column(ForeignKey("compliance_request.id"))
+    compliance_class: Mapped[str] = mapped_column(String, nullable=False, unique=False)
+
+
+class ComplianceRequestRun(Base):
+    """Many-to-one mapping from compliance request to a set of runs"""
+
+    __tablename__ = "compliance_request_run"
+
+    compliance_request_run_id: Mapped[int] = mapped_column(name="id", primary_key=True, autoincrement=True)
+
+    compliance_request_id: Mapped[int] = mapped_column(ForeignKey("compliance_request.id"))
+    compliance_run_id: Mapped[int] = mapped_column(ForeignKey("run.id"))
+    compliance_run: Mapped[Run] = relationship(lazy="selectin")
