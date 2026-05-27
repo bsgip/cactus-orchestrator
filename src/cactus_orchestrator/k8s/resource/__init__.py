@@ -5,17 +5,19 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from functools import wraps
 
-import shortuuid
 from envoy_schema.server.schema.uri import DeviceCapabilityUri
 from kubernetes.client.exceptions import ApiException
 
-from cactus_orchestrator.model import User
 from cactus_orchestrator.settings import (
     RUNNER_SVC_URL,
     STATEFULSET_POD_NAME_FORMAT,
     TEST_EXECUTION_URL_FORMAT,
     CactusOrchestratorError,
     get_current_settings,
+)
+from cactus_orchestrator.teststack.ids import (  # noqa: F401
+    generate_dynamic_test_stack_id,
+    generate_static_test_stack_id,
 )
 
 logger = logging.getLogger(__name__)
@@ -128,17 +130,6 @@ def get_resource_names(uuid: str) -> RunResourceNames:
 def generate_envoy_dcap_uri(resources: RunResourceNames) -> str:
     """Given a test_stack_id - return the URI link to the underlying envoy utility server DeviceCapability"""
     return resources.envoy_base_url + DeviceCapabilityUri
-
-
-def generate_static_test_stack_id(user: User) -> str:
-    """Given a user - calculate the static value for test_stack_id that will be used if user.is_static_uri is set
-    when spawning a new test run"""
-    return f"static-{user.user_id}"
-
-
-def generate_dynamic_test_stack_id(user: User) -> str:
-    """Calculate a suitable random "dynamic" value for test_stack_id that will be used if user.is_static_uri is False"""
-    return f"{shortuuid.uuid().lower()}-{user.user_id}"
 
 
 K8S_REPLACE_PATTERN = re.compile("[^a-z\\-0-9]")

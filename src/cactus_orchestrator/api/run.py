@@ -74,14 +74,13 @@ from cactus_orchestrator.crud import (
 )
 from cactus_orchestrator.k8s.resource import (
     RunResourceNames,
-    generate_dynamic_test_stack_id,
     generate_envoy_dcap_uri,
-    generate_static_test_stack_id,
     get_resource_names,
     get_template_names,
 )
 from cactus_orchestrator.k8s.resource.create import add_ingress_rule, clone_service, clone_statefulset, wait_for_pod
 from cactus_orchestrator.k8s.resource.delete import delete_service, delete_statefulset, remove_ingress_rule
+from cactus_orchestrator.teststack.ids import generate_dynamic_test_stack_id, generate_static_test_stack_id
 from cactus_orchestrator.model import Run, RunArtifact, RunStatus, User
 from cactus_orchestrator.settings import CactusOrchestratorError, get_current_settings
 
