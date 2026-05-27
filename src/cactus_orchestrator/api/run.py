@@ -348,8 +348,11 @@ async def spawn_teststack_and_init_run(  # noqa: C901
         await add_ingress_rule(run_resource_names, user_identifier)
 
     except (CactusOrchestratorError, RunnerClientError) as err:
-        logger.info("Failure to initialise runner. Will teardown any resources.")
-        await teardown_teststack(run_resource_names)
+        logger.error(f"Failure to initialise runner. Will teardown any resources. Source: {err}")
+        try:
+            await teardown_teststack(run_resource_names)
+        except Exception as teardown_err:
+            logger.error(f"Failure to teardown resources. {teardown_err}")
         raise HTTPException(HTTPStatus.INTERNAL_SERVER_ERROR, detail="Internal Server Error") from err
 
     # commit DB changes - update first run status
