@@ -15,16 +15,20 @@ from cactus_orchestrator.crud import (
     ProcedureRunAggregated,
     count_playlist_runs,
     insert_compliance_generation_record,
+    insert_compliance_request,
     insert_playlist_runs,
     insert_run_for_run_group,
     insert_run_group,
     insert_user,
     select_active_runs_for_user,
     select_admin_stats,
+    select_compliance_request,
+    select_compliance_requests,
     select_group_runs_aggregated_by_procedure,
     select_group_runs_for_procedure,
     select_next_playlist_run,
     select_nonfinalised_runs,
+    select_passed_runs_for_user,
     select_playlist_runs,
     select_run_group_counts_for_user,
     select_run_group_for_user,
@@ -32,15 +36,28 @@ from cactus_orchestrator.crud import (
     select_run_groups_for_user,
     select_runs_for_group,
     select_user,
+    select_user_compliance_request,
+    select_user_compliance_requests,
     select_user_from_run_group,
     select_user_run,
     select_user_run_with_artifact,
     select_users,
+    update_compliance_request,
     update_run_run_status,
     update_run_with_runartifact_and_finalise,
     update_user_name,
 )
-from cactus_orchestrator.model import ComplianceRecord, Run, RunArtifact, RunGroup, RunStatus, User
+from cactus_orchestrator.model import (
+    ComplianceRecord,
+    ComplianceRequestClass,
+    ComplianceRequestRun,
+    ComplianceRequestStatus,
+    Run,
+    RunArtifact,
+    RunGroup,
+    RunStatus,
+    User,
+)
 
 
 @pytest.mark.asyncio
@@ -233,6 +250,25 @@ async def test_select_active_runs_for_user(pg_base_config):
 
         user_dne_runs = await select_active_runs_for_user(session, 99)
         assert_list_type(Run, user_dne_runs, 0)
+
+
+@pytest.mark.asyncio
+async def test_select_passed_runs_for_user(pg_base_config):
+    """Test fetching passed runs across multiple groups for a user"""
+
+    async with generate_async_session(pg_base_config) as session:
+        user_1_runs = await select_passed_runs_for_user(session=session, user_id=1)
+        assert_list_type(Run, user_1_runs, 2)
+        assert [datetime.fromisoformat("2024-01-01T00:03:00Z"), datetime.fromisoformat("2024-01-01T00:02:00Z")] == [
+            r.created_at for r in user_1_runs
+        ]  # check order by created_at
+        assert all([isinstance(r.run_group, RunGroup) for r in user_1_runs])
+
+        user_2_runs = await select_passed_runs_for_user(session=session, user_id=2)
+        assert_list_type(Run, user_2_runs, 0)
+
+        user_3_runs = await select_passed_runs_for_user(session=session, user_id=3)
+        assert_list_type(Run, user_3_runs, 0)
 
 
 @pytest.mark.parametrize("with_cert", [True, False])
@@ -605,6 +641,149 @@ async def test_insert_compliance_generation_record(pg_base_config):
     async with generate_async_session(pg_base_config) as s:
         compliance_record_count = (await s.execute(select(func.count()).select_from(ComplianceRecord))).scalar_one()
         assert compliance_record_count == 1
+
+
+@pytest.mark.asyncio
+async def test_select_user_compliance_request(pg_compliance_config):
+    # These match the db fixture values in "tests/data/compliance_config.sql"
+    CREATED_AT = datetime.fromisoformat("2026-05-04T13:15Z")
+    UPDATED_AT = CREATED_AT
+    USER_ID = 1
+    CLASSES = {"L", "DER-A", "S-G"}
+    RUNS = {1, 3, 5}
+    WITNESSED_AT = datetime.fromisoformat("2026-05-01T15:30Z")
+    ATTRIBUTES = [
+        "der_brand",
+        "der_oem",
+        "der_series",
+        "der_representative_models",
+        "software_client_type",
+        "software_client_providers",
+        "software_client_versions",
+        "onsite_hardware_details",
+    ]
+
+    async with generate_async_session(pg_compliance_config) as session:
+        request = await select_user_compliance_request(session=session, user_id=USER_ID, compliance_request_id=1)
+
+        assert request is not None
+        assert request.created_by == USER_ID
+        assert request.created_at == CREATED_AT
+        assert request.updated_by == USER_ID
+        assert request.updated_at == UPDATED_AT
+        assert request.status == ComplianceRequestStatus.SUBMITTED
+        assert CLASSES == {c.compliance_class for c in request.classes}
+        assert RUNS == {r.compliance_run_id for r in request.runs}
+        assert RUNS == {r.compliance_run.run_id for r in request.runs}
+        assert request.csip_aus_version == "v1.2"
+        assert request.witnessed_at == WITNESSED_AT
+        for attribute in ATTRIBUTES:
+            assert getattr(request, attribute) == attribute
+
+
+@pytest.mark.parametrize("user_id,expected_compliance_requests_count", [(1, 2), (2, 1)])
+@pytest.mark.asyncio
+async def test_select_user_compliance_requests(
+    user_id: int, expected_compliance_requests_count: int, pg_compliance_config
+):
+    async with generate_async_session(pg_compliance_config) as session:
+        requests = await select_user_compliance_requests(session=session, user_id=user_id)
+
+        assert len(requests) == expected_compliance_requests_count
+
+
+@pytest.mark.asyncio
+async def test_select_compliance_requests(pg_compliance_config):
+    async with generate_async_session(pg_compliance_config) as session:
+        requests = await select_compliance_requests(session=session)
+
+        for request in requests:
+            for c in request.classes:
+                assert isinstance(c, ComplianceRequestClass)
+            for r in request.runs:
+                assert isinstance(r, ComplianceRequestRun)
+            assert isinstance(request.created_by_user, User)
+            assert isinstance(request.updated_by_user, User)
+        assert len(requests) == 3
+
+
+@pytest.mark.asyncio
+async def test_insert_compliance_request(pg_compliance_config):
+    USER_ID = 1
+    compliance_values = {
+        "created_by": USER_ID,
+        "classes": {"A", "DER-A"},
+        "runs": {4, 5, 6},
+        "csip_aus_version": "v1.2",
+        "witnessed_at": datetime.now(UTC),
+        "der_brand": "der_brand",
+        "der_oem": "der_oem",
+        "der_series": "der_series",
+        "der_representative_models": "der_representative_models",
+        "software_client_type": "software_client_type",
+        "software_client_providers": "software_client_providers",
+        "software_client_versions": "software_client_versions",
+        "onsite_hardware_details": "onsite_hardware_details",
+    }
+    relationship_attributes = ["classes", "runs"]
+
+    async with generate_async_session(pg_compliance_config) as session:
+        new_request = await insert_compliance_request(session=session, **compliance_values)
+
+        assert_nowish(new_request.created_at)
+        assert_nowish(new_request.updated_at)
+        assert new_request.status == ComplianceRequestStatus.SUBMITTED
+        for attribute, value in compliance_values.items():
+            # skip relationship attributes (they are checked below)
+            if attribute in relationship_attributes:
+                continue
+            assert getattr(new_request, attribute) == value
+
+        classes = compliance_values["classes"]
+        for c in new_request.classes:
+            assert c.compliance_class in classes
+
+        runs = compliance_values["runs"]
+        for r in new_request.runs:
+            assert r.compliance_run_id in runs
+
+
+# @pytest.mark.parametrize("expected_runs", [set(), {1}, {1, 2, 3}, {4, 5, 6}])
+# @pytest.mark.parametrize("expected_classes", [set(), {"A", "G", "DER-G"}, {"A", "L"}, {"L", "DER-A", "S-G"}])
+@pytest.mark.asyncio
+async def test_update_compliance_request(pg_compliance_config):
+    # Arrange
+    compliance_request_id = 1
+    USER_ID = 3  # admin
+    new_compliance_values = {
+        "csip_aus_version": "v1.2",
+        "witnessed_at": datetime.now(UTC),
+        "der_brand": "new_der_brand",
+        "der_oem": "new_der_oem",
+        "der_series": "new_der_series",
+        "der_representative_models": "new_der_representative_models",
+        "software_client_type": "new_software_client_type",
+        "software_client_providers": "new_software_client_providers",
+        "software_client_versions": "new_software_client_versions",
+        "onsite_hardware_details": "new_onsite_hardware_details",
+    }
+
+    # Act
+    async with generate_async_session(pg_compliance_config) as session:
+        request = await select_compliance_request(session=session, compliance_request_id=compliance_request_id)
+        assert request is not None
+        await update_compliance_request(
+            session=session, updated_by=USER_ID, compliance_request=request, **new_compliance_values
+        )
+        await session.commit()
+
+    # Assert
+    async with generate_async_session(pg_compliance_config) as session:
+        request = await select_compliance_request(session=session, compliance_request_id=compliance_request_id)
+        assert request is not None
+
+        for field, value in new_compliance_values.items():
+            assert getattr(request, field) == value
 
 
 @pytest.mark.asyncio

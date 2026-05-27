@@ -13,6 +13,8 @@ from cactus_schema.orchestrator import (
     HEADER_RUN_ID,
     HEADER_TEST_ID,
     HEADER_USER_NAME,
+    ComplianceRequestResponse,
+    ComplianceRequestUpdateRequest,
     ProceedResponse,
     RunGroupResponse,
     RunResponse,
@@ -493,3 +495,76 @@ async def test_admin_get_run_power_limit_chart_ok(mock_chart, client, pg_base_co
     assert res.status_code == HTTPStatus.OK
     assert res.headers["content-type"].startswith("text/html")
     assert "<html>chart</html>" in res.text
+
+
+@pytest.mark.asyncio
+async def test_admin_get_compliance_requests_paginated(client, pg_compliance_config, valid_jwt_admin1):
+
+    # Arrange
+    expected_compliance_request_ids = [2, 3, 1]  # newest to oldest compliance requests
+
+    # Act
+    res = await client.get("/admin/compliance_request", headers={"Authorization": f"Bearer {valid_jwt_admin1}"})
+    assert res.status_code == HTTPStatus.OK
+
+    data = res.json()
+    assert isinstance(data, dict)
+    assert "items" in data
+    assert expected_compliance_request_ids == [i["compliance_request_id"] for i in data["items"]]
+
+
+@pytest.mark.asyncio
+async def test_admin_get_compliance_requests_no_requests(client, pg_base_config, valid_jwt_admin1):
+
+    # Arrange
+    expected_compliance_request_ids = []  # pg_base_config has no compliance requests
+
+    # Act
+    res = await client.get("/admin/compliance_request", headers={"Authorization": f"Bearer {valid_jwt_admin1}"})
+    assert res.status_code == HTTPStatus.OK
+
+    data = res.json()
+    assert isinstance(data, dict)
+    assert "items" in data
+    assert expected_compliance_request_ids == [i["compliance_request_id"] for i in data["items"]]
+
+
+@pytest.mark.parametrize(
+    "compliance_request_id, expected_status_code",
+    [(1, HTTPStatus.OK), (2, HTTPStatus.OK), (3, HTTPStatus.OK), (4, HTTPStatus.NOT_FOUND)],
+)
+@pytest.mark.asyncio
+async def test_admin_get_compliance_request(
+    compliance_request_id: int, expected_status_code: HTTPStatus, client, pg_compliance_config, valid_jwt_admin1
+):
+    # Act
+    res = await client.get(
+        f"/admin/compliance_request/{compliance_request_id}", headers={"Authorization": f"Bearer {valid_jwt_admin1}"}
+    )
+    assert res.status_code == expected_status_code
+
+    if res.status_code == HTTPStatus.OK:
+        compliance_request = ComplianceRequestResponse.from_json(res.text)
+        assert compliance_request.compliance_request_id == compliance_request_id
+
+
+@pytest.mark.asyncio
+async def test_update_compliance_request(client, pg_compliance_config, valid_jwt_admin1):
+    # Arrange
+    request_params = generate_class_instance(ComplianceRequestUpdateRequest)
+    attrs_to_set_none = ["der_brand", "der_oem", "der_series", "der_representative_models"]
+    for attr in attrs_to_set_none:
+        setattr(request_params, attr, None)
+
+    assert isinstance(request_params, ComplianceRequestUpdateRequest)
+    compliance_request_id = 1
+
+    # Act
+    res = await client.put(
+        f"/admin/compliance_request/{compliance_request_id}",
+        headers={"Authorization": f"Bearer {valid_jwt_admin1}"},
+        content=request_params.to_json(),
+    )
+
+    # Assert
+    assert res.status_code == HTTPStatus.OK

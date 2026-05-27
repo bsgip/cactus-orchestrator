@@ -12,7 +12,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload, selectinload, undefer
 
 from cactus_orchestrator.auth import UserContext
-from cactus_orchestrator.model import ComplianceRecord, Run, RunArtifact, RunGroup, RunReportGeneration, RunStatus, User
+from cactus_orchestrator.model import (
+    ComplianceRecord,
+    ComplianceRequest,
+    ComplianceRequestClass,
+    ComplianceRequestRun,
+    ComplianceRequestStatus,
+    Run,
+    RunArtifact,
+    RunGroup,
+    RunReportGeneration,
+    RunStatus,
+    User,
+)
 
 ACTIVE_RUN_STATUSES: set[RunStatus] = {RunStatus.provisioning, RunStatus.started, RunStatus.initialised}
 FINALISED_RUN_STATUSES: set[RunStatus] = {
@@ -195,6 +207,24 @@ async def select_active_runs_for_user(session: AsyncSession, user_id: int) -> Se
         .where(Run.run_status.in_(ACTIVE_RUN_STATUSES))
         # Exclude initialised runs that are part of a playlist (not yet active)
         .where((Run.run_status != RunStatus.initialised) | (Run.playlist_execution_id == None))  # noqa: E711
+        .options(selectinload(Run.run_group))
+        .order_by(Run.created_at.desc())
+    )
+
+    resp = await session.execute(stmt)
+    return resp.scalars().all()
+
+
+async def select_passed_runs_for_user(session: AsyncSession, user_id: int) -> Sequence[Run]:
+    """Fetches all runs for a user (across all RunGroups) that are in a finalised state AND have met all criteria.
+
+    Will return RunGroup as an include"""
+    stmt = (
+        select(Run)
+        .join(RunGroup)
+        .where(RunGroup.user_id == user_id)
+        .where(Run.run_status.in_(FINALISED_RUN_STATUSES))
+        .where(Run.all_criteria_met == True)  # noqa: E712
         .options(selectinload(Run.run_group))
         .order_by(Run.run_id.desc())
     )
@@ -397,6 +427,129 @@ async def update_compliance_generation_record_with_file_data(
     session: AsyncSession, compliance_record: ComplianceRecord, file_data: bytes
 ) -> None:
     compliance_record.file_data = file_data
+    await session.flush()
+
+
+async def select_compliance_request(
+    session: AsyncSession,
+    compliance_request_id: int,
+) -> ComplianceRequest:
+    stmt = select(ComplianceRequest).where(ComplianceRequest.compliance_request_id == compliance_request_id)
+    stmt = stmt.options(selectinload(ComplianceRequest.classes))
+    stmt = stmt.options(selectinload(ComplianceRequest.runs))
+
+    result = await session.execute(stmt)
+    return result.scalar_one()
+
+
+async def select_user_compliance_request(
+    session: AsyncSession,
+    user_id: int,
+    compliance_request_id: int,
+) -> ComplianceRequest:
+    stmt = select(ComplianceRequest).where(
+        ComplianceRequest.compliance_request_id == compliance_request_id, ComplianceRequest.created_by == user_id
+    )
+    stmt = stmt.options(selectinload(ComplianceRequest.classes))
+    stmt = stmt.options(selectinload(ComplianceRequest.runs))
+
+    result = await session.execute(stmt)
+    return result.scalar_one()
+
+
+async def select_user_compliance_requests(session: AsyncSession, user_id: int) -> Sequence[ComplianceRequest]:
+    """Get compliance requests for user_id ordered by creation date DESCENDING"""
+    stmt = (
+        select(ComplianceRequest)
+        .where(ComplianceRequest.created_by == user_id)
+        .order_by(ComplianceRequest.created_at.desc())
+    )
+    stmt = stmt.options(selectinload(ComplianceRequest.classes))
+    stmt = stmt.options(selectinload(ComplianceRequest.runs))
+    result = await session.execute(stmt)
+    return result.scalars().all()
+
+
+async def select_compliance_requests(session: AsyncSession) -> Sequence[ComplianceRequest]:
+    """Get compliance requests for all users ordered by creation date DESCENDING"""
+    stmt = select(ComplianceRequest).order_by(ComplianceRequest.created_at.desc())
+    stmt = stmt.options(selectinload(ComplianceRequest.classes))
+    stmt = stmt.options(selectinload(ComplianceRequest.runs))
+    stmt = stmt.options(joinedload(ComplianceRequest.created_by_user))
+    stmt = stmt.options(joinedload(ComplianceRequest.updated_by_user))
+    result = await session.execute(stmt)
+    return result.scalars().all()
+
+
+async def insert_compliance_request(
+    session: AsyncSession,
+    created_by: int,
+    csip_aus_version: str,
+    witnessed_at: datetime,
+    classes: set[str],
+    runs: set[int],
+    der_brand: str,
+    der_oem: str,
+    der_series: str,
+    der_representative_models: str,
+    software_client_type: str,
+    software_client_providers: str,
+    software_client_versions: str,
+    onsite_hardware_details: str,
+) -> ComplianceRequest:
+    """
+    Inserts a new compliance request.
+
+    update_by is set the same value as created_by
+    status defaults to ComplianceRequestStatus.SUBMITTED
+    """
+
+    compliance_request = ComplianceRequest(
+        created_by=created_by,
+        updated_by=created_by,
+        status=ComplianceRequestStatus.SUBMITTED,
+        classes={ComplianceRequestClass(compliance_class=c) for c in classes},
+        runs={ComplianceRequestRun(compliance_run_id=r) for r in runs},
+        csip_aus_version=csip_aus_version,
+        witnessed_at=witnessed_at,
+        der_brand=der_brand,
+        der_oem=der_oem,
+        der_series=der_series,
+        der_representative_models=der_representative_models,
+        software_client_type=software_client_type,
+        software_client_providers=software_client_providers,
+        software_client_versions=software_client_versions,
+        onsite_hardware_details=onsite_hardware_details,
+    )
+
+    session.add(compliance_request)
+    await session.flush()
+
+    return compliance_request
+
+
+async def update_compliance_request(
+    session: AsyncSession,
+    updated_by: int,
+    compliance_request: ComplianceRequest,
+    **kwargs: int | str | datetime | set[int] | set[str],
+) -> None:
+    """Updates the compliance request data"""
+    for key, value in kwargs.items():
+        if hasattr(compliance_request, key):
+            # Classes and runs are stored in their own table so we need to
+            # turn the serialized form (str for class, int for run) into the corresponding ORM model
+            if key == "classes" and isinstance(value, set):
+                value = {ComplianceRequestClass(compliance_class=c) for c in value}
+            if key == "runs" and isinstance(value, set):
+                value = {ComplianceRequestRun(compliance_run_id=r) for r in value}
+
+            setattr(compliance_request, key, value)
+
+    # update table metadata
+    compliance_request.updated_at = datetime.now(UTC)
+    compliance_request.updated_by = updated_by
+
     await session.flush()
 
 

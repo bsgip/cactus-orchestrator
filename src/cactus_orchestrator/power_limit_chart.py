@@ -21,7 +21,7 @@ import logging
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 import plotly.graph_objects as go  # type: ignore[import-untyped]
 from cactus_schema.runner.schema import RequestEntry
@@ -91,6 +91,7 @@ class _RawDOE:
     set_connected: bool | None
     set_energized: bool | None
     ramp_time_seconds: float | None
+    storage_target_active_watts: float | None
     is_archive: bool
     deleted_time: datetime | None  # archive rows only
     archive_time: datetime | None  # archive rows only
@@ -109,6 +110,7 @@ class _RawDefault:
     import_limit_active_watts: float | None
     load_limit_active_watts: float | None
     ramp_rate_percent_per_second: int | None
+    storage_target_active_watts: float | None
     is_archive: bool
     archive_time: datetime | None  # archive rows only
 
@@ -146,6 +148,10 @@ class _EnrichedControl:
     @property
     def load_limit(self) -> float | None:
         return self.doe.load_limit_active_watts
+
+    @property
+    def storage_target(self) -> float | None:
+        return self.doe.storage_target_active_watts
 
     @property
     def set_connected(self) -> bool | None:
@@ -217,11 +223,24 @@ async def _get_subscribed_group_ids(session: AsyncSession) -> set[int]:
     return {row.resource_id for row in result}
 
 
-async def _get_does(session: AsyncSession) -> list[_RawDOE]:
-    """Fetch all active and archived DOEs for the active site using explicit column selection."""
+async def _check_has_storage_target(session: AsyncSession) -> bool:
+    """Returns True if both DOE tables include storage_target_active_watts (v1.3+ schema)."""
     result = await session.execute(
         text(
-            """
+            "SELECT COUNT(*) FROM information_schema.columns "
+            "WHERE table_name IN ('dynamic_operating_envelope', 'archive_dynamic_operating_envelope') "
+            "AND column_name = 'storage_target_active_watts'"
+        )
+    )
+    return (result.scalar() or 0) >= 2
+
+
+async def _get_does(session: AsyncSession, has_storage_target: bool) -> list[_RawDOE]:
+    """Fetch all active and archived DOEs for the active site using explicit column selection."""
+    storage_col = "storage_target_active_watts" if has_storage_target else "NULL AS storage_target_active_watts"
+    result = await session.execute(
+        text(
+            f"""
 SELECT
     dynamic_operating_envelope_id,
     site_control_group_id,
@@ -236,6 +255,7 @@ SELECT
     set_connected,
     set_energized,
     ramp_time_seconds,
+    {storage_col},
     false AS is_archive,
     NULL AS deleted_time,
     NULL AS archive_time
@@ -256,12 +276,13 @@ SELECT
     set_connected,
     set_energized,
     ramp_time_seconds,
+    {storage_col},
     true AS is_archive,
     deleted_time,
     archive_time
     FROM archive_dynamic_operating_envelope
     WHERE site_id = (SELECT site_id FROM site ORDER BY changed_time DESC LIMIT 1)
-            """
+            """  # noqa: S608  # nosec B608
         )
     )
     does: list[_RawDOE] = []
@@ -287,6 +308,9 @@ SELECT
                 set_connected=row.set_connected,
                 set_energized=row.set_energized,
                 ramp_time_seconds=float(row.ramp_time_seconds) if row.ramp_time_seconds is not None else None,
+                storage_target_active_watts=float(row.storage_target_active_watts)
+                if row.storage_target_active_watts is not None
+                else None,
                 is_archive=bool(row.is_archive),
                 deleted_time=row.deleted_time,
                 archive_time=row.archive_time,
@@ -295,10 +319,11 @@ SELECT
     return does
 
 
-async def _get_defaults(session: AsyncSession) -> list[_RawDefault]:
+async def _get_defaults(session: AsyncSession, has_storage_target: bool) -> list[_RawDefault]:
     """Fetch all active and archived SiteControlGroupDefaults using explicit column selection."""
+    storage_col = "storage_target_active_watts" if has_storage_target else "NULL AS storage_target_active_watts"
     result = await session.execute(
-        text("""
+        text(f"""
 SELECT
     site_control_group_id,
     changed_time,
@@ -307,6 +332,7 @@ SELECT
     import_limit_active_watts,
     load_limit_active_watts,
     ramp_rate_percent_per_second,
+    {storage_col},
     false AS is_archive,
     NULL AS archive_time
     FROM site_control_group_default
@@ -319,10 +345,11 @@ SELECT
     import_limit_active_watts,
     load_limit_active_watts,
     ramp_rate_percent_per_second,
+    {storage_col},
     true AS is_archive,
     archive_time
     FROM archive_site_control_group_default
-        """)
+        """)  # noqa: S608  # nosec B608
     )
     defaults: list[_RawDefault] = []
     for row in result:
@@ -343,6 +370,9 @@ SELECT
                 if row.load_limit_active_watts is not None
                 else None,
                 ramp_rate_percent_per_second=row.ramp_rate_percent_per_second,
+                storage_target_active_watts=float(row.storage_target_active_watts)
+                if row.storage_target_active_watts is not None
+                else None,
                 is_archive=bool(row.is_archive),
                 archive_time=row.archive_time,
             )
@@ -490,6 +520,28 @@ def _effective_end_for_doe(doe: _RawDOE) -> datetime | None:
             return min(base_end, doe.archive_time)
         return None
     return base_end
+
+
+def _align_effective_ends_to_client_transitions(enriched: list[_EnrichedControl]) -> None:
+    """Align each control's effective_end to when the client transitions to the next one.
+
+    A control remains the client's active control until receipt_time of the next control
+    in the same group, regardless of when the server superseded it. For subscribed groups
+    receipt_time ≈ created_time ≈ deleted_time so this is a no-op; for polled groups it
+    closes the gap between server supersession and the next client poll.
+    """
+    for group_id in {c.site_control_group_id for c in enriched}:
+        group_controls = sorted(
+            [c for c in enriched if c.site_control_group_id == group_id],
+            key=lambda c: (c.receipt_time, c.doe.dynamic_operating_envelope_id),
+        )
+        for i in range(len(group_controls) - 1):
+            ctrl = group_controls[i]
+            next_receipt = group_controls[i + 1].receipt_time
+            if next_receipt <= ctrl.effective_start:
+                continue
+            base_end = ctrl.doe.start_time + timedelta(seconds=ctrl.doe.duration_seconds)
+            ctrl.effective_end = min(base_end, next_receipt)
 
 
 def _build_enriched_controls(
@@ -717,13 +769,22 @@ def _get_effective_upper_at(
         lambda c: c.gen_limit,
         lambda d: d.generation_limit_active_watts,
     )
-    if exp_val is not None and gen_val is not None:
-        return (exp_val, exp_src) if exp_val <= gen_val else (gen_val, gen_src)
-    if exp_val is not None:
-        return exp_val, exp_src
-    if gen_val is not None:
-        return gen_val, gen_src
-    return None, None
+    stor_val, stor_src = _resolve_type_limit(
+        t,
+        sorted_groups,
+        enriched,
+        defaults_by_group,
+        lambda c: c.storage_target if c.storage_target is not None and c.storage_target > 0 else None,
+        lambda d: (
+            d.storage_target_active_watts
+            if d.storage_target_active_watts is not None and d.storage_target_active_watts > 0
+            else None
+        ),
+    )
+    candidates = [(v, s) for v, s in [(exp_val, exp_src), (gen_val, gen_src), (stor_val, stor_src)] if v is not None]
+    if not candidates:
+        return None, None
+    return min(candidates, key=lambda x: x[0])
 
 
 def _get_effective_lower_at(
@@ -754,13 +815,22 @@ def _get_effective_lower_at(
         lambda c: c.load_limit,
         lambda d: d.load_limit_active_watts,
     )
-    if imp_val is not None and load_val is not None:
-        return (imp_val, imp_src) if imp_val <= load_val else (load_val, load_src)
-    if imp_val is not None:
-        return imp_val, imp_src
-    if load_val is not None:
-        return load_val, load_src
-    return None, None
+    stor_val, stor_src = _resolve_type_limit(
+        t,
+        sorted_groups,
+        enriched,
+        defaults_by_group,
+        lambda c: abs(c.storage_target) if c.storage_target is not None and c.storage_target < 0 else None,
+        lambda d: (
+            abs(d.storage_target_active_watts)
+            if d.storage_target_active_watts is not None and d.storage_target_active_watts < 0
+            else None
+        ),
+    )
+    candidates = [(v, s) for v, s in [(imp_val, imp_src), (load_val, load_src), (stor_val, stor_src)] if v is not None]
+    if not candidates:
+        return None, None
+    return min(candidates, key=lambda x: x[0])
 
 
 # ─── Ramp duration computation ────────────────────────────────────────────────
@@ -891,6 +961,7 @@ def _build_trace(  # noqa: C901
     set_max_w: float,
     disconnect_intervals: list[tuple[datetime, datetime]],
     defaults_by_group: dict[int, list[_DefaultLike]],
+    video_offset_seconds: float = 0.0,
 ) -> list[tuple[datetime, float, str]]:
     """Convert limit events into a piecewise-linear trace with ramps.
 
@@ -900,7 +971,7 @@ def _build_trace(  # noqa: C901
     post_reconnect_windows = [
         (de, de + timedelta(seconds=_POST_DISCONNECT_WGRA_SECONDS)) for _, de in disconnect_intervals
     ]
-    points: list[tuple[datetime, float, str]] = [(test_start, initial_value, "")]
+    points: list[tuple[datetime, float, str]] = [(test_start, initial_value, f"{initial_value:.0f} W")]
 
     # Track the current ramp: from (ramp_start_t, ramp_start_v) to (ramp_end_t, ramp_end_v)
     ramp_start_t = test_start
@@ -923,7 +994,7 @@ def _build_trace(  # noqa: C901
         # interrupted and should not continue past the interruption point.
         if pending_ramp_end is not None:
             if pending_ramp_end[0] <= ev.time:
-                points.append((pending_ramp_end[0], pending_ramp_end[1], ""))
+                points.append((pending_ramp_end[0], pending_ramp_end[1], f"{pending_ramp_end[1]:.0f} W"))
             pending_ramp_end = None
 
         # Determine the current value at ev.time (accounting for any active ramp)
@@ -947,8 +1018,20 @@ def _build_trace(  # noqa: C901
             desc = f"AS4777 wGra post-reconnect ({ramp_secs:.0f}s)"
         else:
             ramp_secs, desc = _compute_ramp(ev.source, ev.time, delta_w, set_max_w, defaults_by_group)
-        rel_time = _duration_label((ev.time - test_start).total_seconds())
-        hover = f"<br>T+{rel_time}  →  {ev.target:.0f} W  ({desc})"
+        rel_secs = (ev.time - test_start).total_seconds() + video_offset_seconds
+        if isinstance(ev.source, _EnrichedControl):
+            ctrl_label = f"DERC{ev.source.doe.dynamic_operating_envelope_id}"
+        elif ev.source is not None:
+            gid = getattr(ev.source, "site_control_group_id", "?")
+            ctrl_label = f"Default DERP{gid}"
+        else:
+            ctrl_label = "No active limit"
+        hover = (
+            f"Control received: {ctrl_label}<br>"
+            f"Relative time: {_fmt_video_time(rel_secs)}<br>"
+            f"Ramping from {current_v:.0f} W to {ev.target:.0f} W<br>"
+            f"Ramp rate: {desc}"
+        )
 
         points.append((ev.time, current_v, hover))
 
@@ -968,7 +1051,7 @@ def _build_trace(  # noqa: C901
 
     # Flush any pending ramp endpoint that was not interrupted by a later event.
     if pending_ramp_end is not None:
-        points.append((pending_ramp_end[0], pending_ramp_end[1], ""))
+        points.append((pending_ramp_end[0], pending_ramp_end[1], f"{pending_ramp_end[1]:.0f} W"))
 
     # Ensure the trace reaches test_end
     if points[-1][0] < test_end:
@@ -978,26 +1061,12 @@ def _build_trace(  # noqa: C901
         else:
             frac = (test_end - ramp_start_t).total_seconds() / ramp_duration_secs
             v_final = ramp_start_v + frac * (ramp_end_v - ramp_start_v)
-        points.append((test_end, v_final, ""))
+        points.append((test_end, v_final, f"{v_final:.0f} W"))
 
     return points
 
 
 # ─── Chart rendering ──────────────────────────────────────────────────────────
-
-
-def _duration_label(seconds: float) -> str:
-    """Convert a seconds offset to a compact label: '30s', '5m', '1h2m'."""
-    s = int(abs(seconds))
-    if s < 60:
-        return f"{s}s"
-    mins = s // 60
-    secs = s % 60
-    if mins < 60:
-        return f"{mins}m" if secs == 0 else f"{mins}m{secs}s"
-    hours = mins // 60
-    rem = mins % 60
-    return f"{hours}h{rem}m" if rem else f"{hours}h"
 
 
 def _fmt_video_time(seconds: float) -> str:
@@ -1009,14 +1078,6 @@ def _fmt_video_time(seconds: float) -> str:
     if hh > 0:
         return f"{hh}:{mm:02d}:{ss:02d}"
     return f"{mm}:{ss:02d}"
-
-
-def _choose_tick_interval_seconds(duration_secs: float) -> int:
-    """Pick a sensible tick interval so there are roughly 8-20 ticks."""
-    for interval in [60, 120, 300, 600, 900, 1800, 3600, 7200]:
-        if duration_secs / interval <= 20:
-            return interval
-    return 3600
 
 
 def _assign_completion_lanes(
@@ -1052,8 +1113,8 @@ def _assign_completion_lanes(
 def _add_receipt_markers(
     fig: go.Figure,
     receipt_markers: list[_ReceiptMarker],
-    to_rel: Callable[[datetime], float],
     set_max_w: float,
+    to_chart_x: Callable[[datetime], datetime],
 ) -> None:
     for m in receipt_markers:
         color = "#27ae60" if m.is_subscribed else "#e67e22"
@@ -1061,8 +1122,8 @@ def _add_receipt_markers(
             type="line",
             xref="x",
             yref="paper",
-            x0=to_rel(m.time),
-            x1=to_rel(m.time),
+            x0=to_chart_x(m.time),
+            x1=to_chart_x(m.time),
             y0=0.02,
             y1=0.98,
             line=dict(color=color, width=1.5, dash="dot"),
@@ -1087,7 +1148,7 @@ def _add_receipt_markers(
     if receipt_markers:
         fig.add_trace(
             go.Scatter(
-                x=[to_rel(m.time) for m in receipt_markers],
+                x=[to_chart_x(m.time) for m in receipt_markers],
                 y=[set_max_w * 0.55] * len(receipt_markers),
                 mode="markers",
                 marker=dict(
@@ -1109,34 +1170,34 @@ def _add_receipt_markers(
 def _add_reconnect_markers(
     fig: go.Figure,
     disconnect_intervals: list[tuple[datetime, datetime]],
-    to_rel: Callable[[datetime], float],
-    duration_secs: float,
+    test_end: datetime,
+    to_chart_x: Callable[[datetime], datetime],
 ) -> None:
     _color = "rgba(120,120,120,0.5)"
-    reconnect_rels = [
-        to_rel(de - timedelta(seconds=_OP_MOD_CONNECT_GRACE_SECONDS))
+    reconnect_times = [
+        de - timedelta(seconds=_OP_MOD_CONNECT_GRACE_SECONDS)
         for _, de in disconnect_intervals
-        if to_rel(de - timedelta(seconds=_OP_MOD_CONNECT_GRACE_SECONDS)) < duration_secs
+        if (de - timedelta(seconds=_OP_MOD_CONNECT_GRACE_SECONDS)) < test_end
     ]
-    for rel in reconnect_rels:
+    for t in reconnect_times:
         fig.add_shape(
             type="line",
             xref="x",
             yref="paper",
-            x0=rel,
-            x1=rel,
+            x0=to_chart_x(t),
+            x1=to_chart_x(t),
             y0=0,
             y1=1,
             line=dict(color=_color, width=1, dash="dot"),
         )
-    if reconnect_rels:
+    if reconnect_times:
         fig.add_trace(
             go.Scatter(
-                x=reconnect_rels,
-                y=[0] * len(reconnect_rels),
+                x=[to_chart_x(t) for t in reconnect_times],
+                y=[0] * len(reconnect_times),
                 mode="markers",
                 marker=dict(symbol="line-ns", size=10, color=_color),
-                customdata=[["60 s AS4777 wGra wait period on reconnection"]] * len(reconnect_rels),
+                customdata=[["60 s AS4777 wGra wait period on reconnection"]] * len(reconnect_times),
                 hovertemplate="Device reconnected — %{customdata[0]}<extra>Reconnect</extra>",
                 showlegend=False,
             )
@@ -1148,20 +1209,20 @@ def _add_completion_markers(
     completions: list[tuple[str, datetime]],
     lanes: list[int],
     lane_y: list[float],
-    duration_secs: float,
-    to_rel: Callable[[datetime], float],
+    test_start: datetime,
+    test_end: datetime,
+    to_chart_x: Callable[[datetime], datetime],
 ) -> None:
     _completion_color = "#888"
     for (name, t), lane in zip(completions, lanes, strict=False):
-        rel = to_rel(t)
-        if rel < 0 or rel > duration_secs:
+        if t < test_start or t > test_end:
             continue
         fig.add_shape(
             type="line",
             xref="x",
             yref="paper",
-            x0=rel,
-            x1=rel,
+            x0=to_chart_x(t),
+            x1=to_chart_x(t),
             y0=0,
             y1=1,
             line=dict(color=_completion_color, width=1.5, dash="dash"),
@@ -1171,7 +1232,7 @@ def _add_completion_markers(
         fig.add_annotation(
             xref="x",
             yref="paper",
-            x=rel,
+            x=to_chart_x(t),
             y=lane_y[lane],
             text=label,
             showarrow=True,
@@ -1198,9 +1259,9 @@ def _add_completion_markers(
 def _add_step_strips(
     fig: go.Figure,
     step_intervals: list[tuple[str, datetime, datetime]],
-    to_rel: Callable[[datetime], float],
     test_start: datetime,
     test_end: datetime,
+    to_chart_x: Callable[[datetime], datetime],
 ) -> None:
     fig.add_annotation(
         xref="paper",
@@ -1221,28 +1282,28 @@ def _add_step_strips(
         else:
             color = _STEP_PALETTE[palette_idx % len(_STEP_PALETTE)]
             palette_idx += 1
-        x0 = to_rel(max(start, test_start))
-        x1 = to_rel(min(end, test_end))
+        x0 = max(start, test_start)
+        x1 = min(end, test_end)
         if x1 <= x0:
             continue
         fig.add_shape(
             type="rect",
             xref="x",
             yref="paper",
-            x0=x0,
-            x1=x1,
+            x0=to_chart_x(x0),
+            x1=to_chart_x(x1),
             y0=-0.42,
             y1=-0.22,
             fillcolor=color,
             line=dict(color="rgba(0,0,0,0.18)", width=0.5),
             layer="below",
         )
-        if x1 - x0 >= 20:
+        if (x1 - x0).total_seconds() >= 20:
             label = name if len(name) <= 20 else name[:18] + "…"
             fig.add_annotation(
                 xref="x",
                 yref="paper",
-                x=(x0 + x1) / 2,
+                x=to_chart_x(x0) + (x1 - x0) / 2,
                 y=-0.32,
                 text=label,
                 showarrow=False,
@@ -1266,32 +1327,25 @@ def _render_html_chart(
     step_completions: list[tuple[str, datetime]] | None = None,
 ) -> str:
     duration_secs = (test_end - test_start).total_seconds()
-    tick_interval = _choose_tick_interval_seconds(duration_secs)
 
-    tick_vals: list[float] = []
-    bottom_labels: list[str] = []
+    # Rebase datetimes to a fake epoch so Plotly's auto-ticking shows relative/video
+    # time instead of UTC. test_start maps to 1970-01-01T00:00:00Z + video_offset.
+    _fake_epoch = datetime(1970, 1, 1, tzinfo=UTC)
+    _video_offset = timedelta(seconds=video_start_seconds or 0.0)
 
-    t_secs = 0.0
-    while t_secs <= duration_secs + 1:
-        t = test_start + timedelta(seconds=t_secs)
-        tick_vals.append(t_secs)
-        rel_label = (
-            _fmt_video_time(t_secs + video_start_seconds)
-            if video_start_seconds is not None
-            else _duration_label(t_secs)
-        )
-        bottom_labels.append(f"{rel_label}<br>{t.strftime('%H:%M')} UTC")
-        t_secs += tick_interval
-
-    def to_rel(t: datetime) -> float:
-        return (t - test_start).total_seconds()
+    def to_chart_x(t: datetime) -> datetime:
+        return _fake_epoch + _video_offset + (t - test_start)
 
     y_max = set_max_w * 1.1
     y_min = -set_max_w * 1.1
     has_steps = bool(step_intervals)
     bottom_margin = 230 if has_steps else 130
     completions = sorted(step_completions or [], key=lambda x: x[1])
-    lanes = _assign_completion_lanes(completions, to_rel, duration_secs) if completions else []
+    lanes = (
+        _assign_completion_lanes(completions, lambda t: (t - test_start).total_seconds(), duration_secs)
+        if completions
+        else []
+    )
     max_lane = max(lanes) if lanes else 0
     # Each lane is 0.06 paper-coordinate units above the plot; legend floats above them all.
     lane_y = [1.06 + i * 0.06 for i in range(max_lane + 1)]
@@ -1304,24 +1358,24 @@ def _render_html_chart(
     # ── Main limit traces ────────────────────────────────────────────────────
     fig.add_trace(
         go.Scatter(
-            x=[to_rel(t) for t, _, _ in upper_trace],
+            x=[to_chart_x(t) for t, _, _ in upper_trace],
             y=[v for _, v, _ in upper_trace],
             mode="lines",
             name="Upper limit (Export / Gen)",
             line=dict(color="#e74c3c", width=2),
             customdata=[[h] for _, _, h in upper_trace],
-            hovertemplate="%{y:.0f} W%{customdata[0]}<extra>Upper</extra>",
+            hovertemplate="%{customdata[0]}<extra>Upper</extra>",
         )
     )
     fig.add_trace(
         go.Scatter(
-            x=[to_rel(t) for t, _, _ in lower_trace],
+            x=[to_chart_x(t) for t, _, _ in lower_trace],
             y=[v for _, v, _ in lower_trace],
             mode="lines",
             name="Lower limit (Import / Load)",
             line=dict(color="#3498db", width=2),
             customdata=[[h] for _, _, h in lower_trace],
-            hovertemplate="%{y:.0f} W%{customdata[0]}<extra>Lower</extra>",
+            hovertemplate="%{customdata[0]}<extra>Lower</extra>",
         )
     )
 
@@ -1345,23 +1399,30 @@ def _render_html_chart(
     )
 
     # ── Overlays ─────────────────────────────────────────────────────────────
-    _add_receipt_markers(fig, receipt_markers, to_rel, set_max_w)
-    _add_reconnect_markers(fig, disconnect_intervals, to_rel, duration_secs)
+    _add_receipt_markers(fig, receipt_markers, set_max_w, to_chart_x)
+    _add_reconnect_markers(fig, disconnect_intervals, test_end, to_chart_x)
     if completions:
-        _add_completion_markers(fig, completions, lanes, lane_y, duration_secs, to_rel)
+        _add_completion_markers(fig, completions, lanes, lane_y, test_start, test_end, to_chart_x)
     if has_steps:
-        _add_step_strips(fig, step_intervals, to_rel, test_start, test_end)
+        _add_step_strips(fig, step_intervals, test_start, test_end, to_chart_x)
+
+    x_title = "Video time" if video_start_seconds else "Time from test start"
+    chart_start = to_chart_x(test_start)
+    chart_end = to_chart_x(test_end)
 
     # ── Layout ───────────────────────────────────────────────────────────────
     fig.update_layout(
         title=dict(text="Expected Device Power Limits", font=dict(size=16)),
         height=height,
         xaxis=dict(
-            title="",
-            tickmode="array",
-            tickvals=tick_vals,
-            ticktext=bottom_labels,
-            range=[0, duration_secs],
+            title=x_title,
+            type="date",
+            range=[chart_start, chart_end],
+            tickformatstops=[
+                dict(dtickrange=[None, 60000], value="%M:%S"),
+                dict(dtickrange=[60000, None], value="%H:%M"),
+            ],
+            hoverformat="%H:%M:%S",
             showgrid=True,
             gridcolor="rgba(0,0,0,0.08)",
         ),
@@ -1377,33 +1438,6 @@ def _render_html_chart(
         paper_bgcolor="white",
         margin=dict(t=top_margin, b=bottom_margin, l=80, r=120),
         hovermode="x unified",
-        # ── Export / Import view toggle ──────────────────────────────────────
-        updatemenus=[
-            dict(
-                type="buttons",
-                direction="left",
-                x=0.0,
-                y=-0.12 if not has_steps else -0.50,
-                xanchor="left",
-                yanchor="top",
-                buttons=[
-                    dict(
-                        label="Export view",
-                        method="relayout",
-                        args=[{"yaxis.range": [y_min, y_max], "yaxis.autorange": False}],
-                    ),
-                    dict(
-                        label="Import view",
-                        method="relayout",
-                        args=[{"yaxis.range": [y_max, y_min], "yaxis.autorange": False}],
-                    ),
-                ],
-                font=dict(size=11),
-                bgcolor="white",
-                bordercolor="#bbb",
-                borderwidth=1,
-            )
-        ],
     )
 
     html = fig.to_html(full_html=True, include_plotlyjs=True)
@@ -1456,8 +1490,9 @@ async def generate_power_limit_chart_html(
     groups_by_id = {g.site_control_group_id: g for g in control_groups}
     sorted_groups = sorted(control_groups, key=lambda g: g.primacy)
 
-    all_does = await _get_does(session)
-    all_defaults = await _get_defaults(session)
+    has_storage_target = await _check_has_storage_target(session)
+    all_does = await _get_does(session, has_storage_target)
+    all_defaults = await _get_defaults(session, has_storage_target)
     defaults_by_group = _build_defaults_by_group(all_defaults)
 
     subscribed_group_ids = await _get_subscribed_group_ids(session)
@@ -1465,6 +1500,7 @@ async def generate_power_limit_chart_html(
     enriched = _build_enriched_controls(
         all_does, test_start, groups_by_id, subscribed_group_ids, request_history, doe_tags or {}
     )
+    _align_effective_ends_to_client_transitions(enriched)
 
     disconnect_intervals = _compute_disconnect_intervals(enriched, test_end)
 
@@ -1477,11 +1513,12 @@ async def generate_power_limit_chart_html(
         False, event_times, sorted_groups, enriched, defaults_by_group, disconnect_intervals, set_max_w
     )
 
+    video_offset = video_start_seconds or 0.0
     upper_trace = _build_trace(
-        upper_events, test_start, test_end, set_max_w, set_max_w, disconnect_intervals, defaults_by_group
+        upper_events, test_start, test_end, set_max_w, set_max_w, disconnect_intervals, defaults_by_group, video_offset
     )
     lower_trace = _build_trace(
-        lower_events, test_start, test_end, -set_max_w, set_max_w, disconnect_intervals, defaults_by_group
+        lower_events, test_start, test_end, -set_max_w, set_max_w, disconnect_intervals, defaults_by_group, video_offset
     )
 
     step_intervals = _compute_active_control_intervals(

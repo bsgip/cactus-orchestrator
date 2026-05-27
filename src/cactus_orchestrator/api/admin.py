@@ -1,3 +1,5 @@
+import asyncio
+import dataclasses
 import logging
 from datetime import datetime
 from http import HTTPStatus
@@ -5,7 +7,11 @@ from typing import Annotated
 
 from cactus_runner.client import ClientSession, ClientTimeout, RunnerClient
 from cactus_schema.orchestrator import (
+    AdminComplianceRequestResponse,
     AdminStatsResponse,
+    ComplianceRequestResponse,
+    ComplianceRequestUpdateRequest,
+    ComplianceRequestUser,
     ProceedResponse,
     RunGroupResponse,
     RunResponse,
@@ -25,6 +31,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from cactus_orchestrator import artifact
 from cactus_orchestrator.api.common import (
     map_run_to_run_response,
+    map_to_compliance_request_response,
     select_user_or_raise,
     select_user_run_group_or_raise,
     test_procedures_by_id,
@@ -38,6 +45,8 @@ from cactus_orchestrator.crud import (
     ACTIVE_RUN_STATUSES,
     insert_compliance_generation_record,
     select_admin_stats,
+    select_compliance_request,
+    select_compliance_requests,
     select_group_runs_aggregated_by_procedure,
     select_group_runs_for_procedure,
     select_run_group_counts_for_user,
@@ -50,9 +59,10 @@ from cactus_orchestrator.crud import (
     select_user_run_with_artifact,
     select_users,
     update_compliance_generation_record_with_file_data,
+    update_compliance_request,
 )
 from cactus_orchestrator.k8s.resource import get_resource_names
-from cactus_orchestrator.model import User
+from cactus_orchestrator.model import ComplianceRequest, User
 from cactus_orchestrator.settings import get_current_settings
 
 logger = logging.getLogger(__name__)
@@ -568,3 +578,105 @@ async def admin_get_group_run_compliance_artifact(
         content=run_group_artifact.file_data,
         media_type=run_group_artifact.mime_type,
     )
+
+
+async def map_to_admin_compliance_request_response(request: ComplianceRequest) -> AdminComplianceRequestResponse:
+
+    def map_to_user(user: User) -> ComplianceRequestUser:
+        return ComplianceRequestUser(
+            user_id=user.user_id,
+            subject_id=user.subject_id,
+            issuer_id=user.issuer_id,
+            user_name=user.user_name,
+        )
+
+    return AdminComplianceRequestResponse(
+        compliance_request_id=request.compliance_request_id,
+        created_at=request.created_at,
+        created_by=request.created_by,
+        created_by_user=map_to_user(request.created_by_user),
+        updated_at=request.updated_at,
+        updated_by=request.updated_by,
+        updated_by_user=map_to_user(request.updated_by_user),
+        status=request.status,
+        classes={c.compliance_class for c in request.classes},
+        runs={r.compliance_run_id for r in request.runs},
+        csip_aus_version=request.csip_aus_version,
+        witnessed_at=request.witnessed_at,
+        der_brand=request.der_brand,
+        der_oem=request.der_oem,
+        der_series=request.der_series,
+        der_representative_models=request.der_representative_models,
+        software_client_type=request.software_client_type,
+        software_client_providers=request.software_client_providers,
+        software_client_versions=request.software_client_versions,
+        onsite_hardware_details=request.onsite_hardware_details,
+    )
+
+
+@router.get(uri.AdminComplianceRequestList, status_code=HTTPStatus.OK)
+async def admin_get_compliance_requests_paginated(
+    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.admin_all}))],
+) -> Page[AdminComplianceRequestResponse]:
+    requests = await select_compliance_requests(session=db.session)
+
+    if requests:
+        awaitables = [map_to_admin_compliance_request_response(r) for r in requests]
+        resp = await asyncio.gather(*awaitables)
+    else:
+        resp = []
+    return paginate(resp)
+
+
+@router.get(uri.AdminComplianceRequest, status_code=HTTPStatus.OK)
+async def admin_get_compliance_request(
+    compliance_request_id: int,
+    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.admin_all}))],
+) -> ComplianceRequestResponse | None:
+    try:
+        compliance_request = await select_compliance_request(
+            session=db.session, compliance_request_id=compliance_request_id
+        )
+    except NoResultFound as err:
+        raise HTTPException(
+            status_code=HTTPStatus.NOT_FOUND, detail=f"Compliance request {compliance_request_id} does not exist."
+        ) from err
+
+    response = await map_to_compliance_request_response(request=compliance_request)
+
+    return response
+
+
+@router.put(uri.AdminComplianceRequest, status_code=HTTPStatus.OK)
+async def admin_update_compliance_request(
+    compliance_request_id: int,
+    body: ComplianceRequestUpdateRequest,
+    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.admin_all}))],
+) -> ComplianceRequestResponse:
+    # Get admin user
+    admin = await select_user_or_raise(db.session, user_context)
+    updated_by = admin.user_id
+
+    # get compliance request
+    try:
+        request = await select_compliance_request(
+            session=db.session,
+            compliance_request_id=compliance_request_id,
+        )
+    except NoResultFound as exc:
+        logger.debug(exc)
+        raise HTTPException(
+            status_code=HTTPStatus.NOT_FOUND, detail=f"Compliance request {compliance_request_id} does not exist."
+        ) from exc
+
+    # Determine which parameters to update (these have a value that isn't None)
+    params = {
+        field.name: getattr(body, field.name)
+        for field in dataclasses.fields(body)
+        if getattr(body, field.name) is not None
+    }
+
+    await update_compliance_request(session=db.session, updated_by=updated_by, compliance_request=request, **params)
+
+    await db.session.commit()
+    return await map_to_compliance_request_response(request)

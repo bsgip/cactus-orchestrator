@@ -1269,15 +1269,11 @@ def generate_timeline_section(
 
 
 def generate_readings_timeline(
-    readings_df: pd.DataFrame,
-    quantity: str,
-    runner_state: RunnerState,
-    time_relative_to_test_start: bool = True,
+    readings_df: pd.DataFrame, quantity: str, base_timestamp: datetime | None, time_relative_to_test_start: bool = True
 ) -> Image:
     x_axis_column = "time_period_start"
     x_axis_label = "Time (UTC)"
 
-    base_timestamp = runner_state.interaction_timestamp(interaction_type=ClientInteractionType.TEST_PROCEDURE_START)
     alternative_x_axis_label = "Time relative to test start (s)"
     if time_relative_to_test_start and base_timestamp is not None:
         new_x_axis_column = "timedelta_from_start"
@@ -1625,13 +1621,16 @@ def generate_readings_section(
 
         # Add charts for each of the different reading types
         if readings:
+            base_timestamp = runner_state.interaction_timestamp(
+                interaction_type=ClientInteractionType.TEST_PROCEDURE_START
+            )
             for reading_type, readings_df in readings.items():
                 elements.append(Paragraph(reading_description(reading_type), style=stylesheet.subheading))
                 elements.append(
                     generate_readings_timeline(
                         readings_df=readings_df,
                         quantity=uom_to_string(reading_type.uom),
-                        runner_state=runner_state,
+                        base_timestamp=base_timestamp,
                     )
                 )
     else:

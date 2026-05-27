@@ -19,7 +19,7 @@ dependencies = [
     "fastapi-async-sqlalchemy",
     "asyncpg",
     "cactus-test-definitions==1.14.4",
-    "cactus-schema==0.0.22",
+    "cactus-schema==0.0.23",
     "cactus-runner @ git+https://github.com/bsgip/cactus-runner.git@v1.9.3",
     "fastapi-pagination",
     "fastapi-utils",
@@ -95,7 +95,6 @@ markers = [
 
 [tool.ty.src]
 include = ["src", "tests"]
-
 
 [tool.setuptools.dynamic]
 version = { attr = "cactus_orchestrator.__version__" }
