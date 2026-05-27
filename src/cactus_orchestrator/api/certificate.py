@@ -15,8 +15,8 @@ from fastapi_async_sqlalchemy import db
 
 from cactus_orchestrator.api.common import select_user_run_group_or_raise, select_user_run_groups_or_raise
 from cactus_orchestrator.auth import AuthPerm, UserContext, jwt_validator
-from cactus_orchestrator.k8s.certificate.create import generate_client_p12_ec
-from cactus_orchestrator.k8s.certificate.fetch import fetch_certificate_key_pair, fetch_certificate_only
+from cactus_orchestrator.certificate.create import generate_client_p12_ec
+from cactus_orchestrator.certificate.fetch import fetch_certificate_key_pair, fetch_certificate_only
 from cactus_orchestrator.settings import CactusOrchestratorError, get_current_settings
 
 logger = logging.getLogger(__name__)
@@ -40,7 +40,7 @@ async def fetch_current_certificate_authority_der(
     _: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.user_all}))],
 ) -> Response:
     """Fetches a PEM encoded SERCA certificate (trust anchor for the signing chain)"""
-    serca_cert = await fetch_certificate_only(get_current_settings().cert_serca_secret_name)
+    serca_cert = fetch_certificate_only(get_current_settings().cert_serca_path)
     if serca_cert is None:
         raise CactusOrchestratorError("SERCA certificate not found.")
 
@@ -74,8 +74,8 @@ async def fetch_client_certificate(
 
     # cert / p12 downloads will require the MICA / MCA signing chain
     settings = get_current_settings()
-    mica_cert, _ = await fetch_certificate_key_pair(settings.tls_mica_secret_name)
-    mca_cert = await fetch_certificate_only(settings.cert_mca_secret_name)
+    mica_cert, _ = fetch_certificate_key_pair(settings.cert_mica_crt_path, settings.cert_mica_key_path)
+    mca_cert = fetch_certificate_only(settings.cert_mca_path)
     client_cert = x509.load_pem_x509_certificate(run_group.certificate_pem)
 
     # We just concatenate our PEM encodings together
@@ -130,8 +130,8 @@ async def generate_shared_aggregator_certificate(
     common_name = f"({cert_counter}) {cert_label} {run_group_name} {csip_aus_version}"
     identifier = f"rg-{run_group_id}-{cert_label}-{cert_counter}"
     settings = get_current_settings()
-    mca_cert = await fetch_certificate_only(settings.cert_mca_secret_name)
-    mica_cert, mica_key = await fetch_certificate_key_pair(settings.tls_mica_secret_name)
+    mca_cert = fetch_certificate_only(settings.cert_mca_path)
+    mica_cert, mica_key = fetch_certificate_key_pair(settings.cert_mica_crt_path, settings.cert_mica_key_path)
     client_key, client_cert = generate_client_p12_ec(mica_key, mica_cert, user.pen, identifier)
 
     # Generate the raw file data
@@ -206,8 +206,8 @@ async def generate_client_certificate(
     common_name = f"({cert_counter}) {cert_label} {run_group.name} {run_group.csip_aus_version}"
     identifier = f"rg-{run_group_id}-{cert_label}-{cert_counter}"
     settings = get_current_settings()
-    mca_cert = await fetch_certificate_only(settings.cert_mca_secret_name)
-    mica_cert, mica_key = await fetch_certificate_key_pair(settings.tls_mica_secret_name)
+    mca_cert = fetch_certificate_only(settings.cert_mca_path)
+    mica_cert, mica_key = fetch_certificate_key_pair(settings.cert_mica_crt_path, settings.cert_mica_key_path)
     client_key, client_cert = generate_client_p12_ec(mica_key, mica_cert, user.pen, identifier)
 
     # Generate the raw file data

@@ -1,17 +1,14 @@
-from unittest.mock import patch
-
 import pytest
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 
-from cactus_orchestrator.k8s.certificate.create import (
+from cactus_orchestrator.certificate.create import (
     OID_DEV_POST_MANUFACTURE,
     OID_POLICY_TEST,
     calculate_rfc5280_subject_key_identifier_method_2,
     generate_client_p12_ec,
 )
-from cactus_orchestrator.k8s.certificate.fetch import fetch_certificate_key_pair
 
 
 @pytest.mark.parametrize(
@@ -88,14 +85,3 @@ def test_generate_client_p12_ec(mica_cert_key_pair):
     assert OID_POLICY_TEST in policy_oids
 
 
-@patch("cactus_orchestrator.k8s.certificate.fetch.v1_core_api")
-@pytest.mark.asyncio
-async def test_fetch_certificate_key_pair(mock_v1_core_api, mock_k8s_tls_secret, mock_thread_cls):
-    """Test fetching a certificate and key from a mock Kubernetes secret."""
-
-    mock_v1_core_api.read_namespaced_secret.return_value = mock_thread_cls(mock_k8s_tls_secret)
-
-    cert, key = await fetch_certificate_key_pair("test-secret", "test-namespace")
-
-    assert isinstance(cert, x509.Certificate)
-    assert isinstance(key, ec.EllipticCurvePrivateKey)

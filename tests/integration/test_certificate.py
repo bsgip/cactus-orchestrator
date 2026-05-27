@@ -21,18 +21,18 @@ from cactus_orchestrator.model import RunGroup
 
 
 @dataclass
-class MockedK8s:
+class MockedCertFetch:
     fetch_certificate_key_pair: Mock
     fetch_certificate_only: Mock
 
 
 @pytest.fixture
-def k8s_mock() -> Generator[MockedK8s, None, None]:
+def k8s_mock() -> Generator[MockedCertFetch, None, None]:
     with (
         patch("cactus_orchestrator.api.certificate.fetch_certificate_key_pair") as fetch_certificate_key_pair,
         patch("cactus_orchestrator.api.certificate.fetch_certificate_only") as fetch_certificate_only,
     ):
-        yield MockedK8s(
+        yield MockedCertFetch(
             fetch_certificate_key_pair=fetch_certificate_key_pair, fetch_certificate_only=fetch_certificate_only
         )
 
@@ -49,21 +49,9 @@ async def test_generate_new_certificate_and_fetch(
     is_device_cert,
 ):
 
-    # The only part we mock is the fetching of certs from the k8's secret store
-    async def mocked_fetch_certificate_key_pair(secret_name, namespace=None, passphrase_secret=None):
-        if secret_name == "tls-mica-cactus":
-            return mica_cert_key_pair
-        else:
-            raise Exception(f"Mock error - unexpected secret_name '{secret_name}'")
-
-    async def mocked_fetch_certificate_only(secret_name, namespace=None):
-        if secret_name == "cert-mca-cactus":
-            return mca_cert_key_pair[0]
-        else:
-            raise Exception(f"Mock error - unexpected secret_name '{secret_name}'")
-
-    k8s_mock.fetch_certificate_key_pair.side_effect = mocked_fetch_certificate_key_pair
-    k8s_mock.fetch_certificate_only.side_effect = mocked_fetch_certificate_only
+    # The only part we mock is the fetching of certs from disk
+    k8s_mock.fetch_certificate_key_pair.return_value = mica_cert_key_pair
+    k8s_mock.fetch_certificate_only.return_value = mca_cert_key_pair[0]
 
     async with generate_async_session(pg_base_config) as session:
         original_cert_id = (
@@ -158,7 +146,7 @@ async def test_generate_new_certificate_bad_run_group_id(client, valid_jwt_user1
 
 @pytest.mark.asyncio
 async def test_fetch_current_certificate_authority_der(
-    client, valid_jwt_user1, k8s_mock: MockedK8s, serca_cert_key_pair
+    client, valid_jwt_user1, k8s_mock: MockedCertFetch, serca_cert_key_pair
 ):
     """Basic success path test."""
 
@@ -191,21 +179,9 @@ async def test_generate_shared_aggregator_certificate_and_fetch(
 
     user_id = 1  # This needs to match the `valid_jwt_user?` fixture used.
 
-    # The only part we mock is the fetching of certs from the k8's secret store
-    async def mocked_fetch_certificate_key_pair(secret_name, namespace=None, passphrase_secret=None):
-        if secret_name == "tls-mica-cactus":
-            return mica_cert_key_pair
-        else:
-            raise Exception(f"Mock error - unexpected secret_name '{secret_name}'")
-
-    async def mocked_fetch_certificate_only(secret_name, namespace=None):
-        if secret_name == "cert-mca-cactus":
-            return mca_cert_key_pair[0]
-        else:
-            raise Exception(f"Mock error - unexpected secret_name '{secret_name}'")
-
-    k8s_mock.fetch_certificate_key_pair.side_effect = mocked_fetch_certificate_key_pair
-    k8s_mock.fetch_certificate_only.side_effect = mocked_fetch_certificate_only
+    # The only part we mock is the fetching of certs from disk
+    k8s_mock.fetch_certificate_key_pair.return_value = mica_cert_key_pair
+    k8s_mock.fetch_certificate_only.return_value = mca_cert_key_pair[0]
 
     async with generate_async_session(pg_base_config) as session:
         run_groups = (await session.execute(select(RunGroup).where(RunGroup.user_id == user_id))).scalars().all()

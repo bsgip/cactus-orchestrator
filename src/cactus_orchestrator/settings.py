@@ -52,7 +52,7 @@ class CactusOrchestratorSettings(BaseSettings):
     template_app_name_prefix: str = "envoy-"  # Will be combined with CSIP-Aus Version identifier / uuid
     template_statefulset_name_prefix: str = "envoy-set-"  # Will be combined with CSIP-Aus Version identifier  / uuid
 
-    # certificates
+    # certificates (k8s secret names — legacy, will be removed when k8s/ is deleted)
     cert_serca_secret_name: str = "cert-serca"  # The raw SERCA root certificate (no key) under ca.crt
     cert_mca_secret_name: str = (
         "cert-mca-cactus"  # The Manufacturer CA certificate (no key) under ca.crt (signed by serca)
@@ -60,6 +60,12 @@ class CactusOrchestratorSettings(BaseSettings):
     tls_mica_secret_name: str = (
         "tls-mica-cactus"  # The Manufacturer Intermediate CA certificate/key (signed by mca) - signs client certs
     )
+
+    # certificates (file paths — used by certificate/fetch.py)
+    cert_serca_path: str = ""  # path to SERCA ca.crt PEM file
+    cert_mca_path: str = ""  # path to MCA ca.crt PEM file
+    cert_mica_crt_path: str = ""  # path to MICA tls.crt PEM file
+    cert_mica_key_path: str = ""  # path to MICA tls.key PEM file
 
     test_execution_fqdn: str  # NOTE: we could extract this from the server certs
 
