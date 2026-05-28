@@ -1,84 +1,48 @@
 import logging
-import os
 
-from kubernetes import client, config
 from pydantic import PostgresDsn
 from pydantic_settings import BaseSettings
 
-TLS_SERVER_SECRET_NAME_FORMAT = "tls-server-{domain}"  # noqa: S105 # nosec B105
-TLS_CA_SECRET_NAME_FORMAT = "tls-ca-{ingress_name}"  # noqa: S105 # nosec B105
-# NOTE: follwing two must be kept similar
-DEFAULT_INGRESS_PATH_FORMAT = "/{svc_name}/(.*)"
 TEST_EXECUTION_URL_FORMAT = "https://{fqdn}/{svc_name}"
-
-STATEFULSET_POD_NAME_FORMAT = "{statefulset_name}-0"  # TODO: k8s naming scheme of a statefulsets pod, how to do better?
-RUNNER_SVC_URL = "http://{svc_name}.{namespace}.svc.cluster.local:{svc_port}"
-
+PODMAN_RUNNER_URL = "http://{pod_name}:{svc_port}"
 
 logger = logging.getLogger(__name__)
-
-
-def load_k8s_config() -> None:
-    """Loads the Kubernetes configuration."""
-    if os.getenv("CACTUS_PYTEST_WITHOUT_KUBERNETES", "").lower() == "true":
-        logger.warning("Skipping k8s configuration load...")
-        return
-    try:
-        config.incluster_config.load_incluster_config()  # If running inside a cluster
-    except config.config_exception.ConfigException:
-        config.kube_config.load_kube_config()  # If running locally
 
 
 class CactusOrchestratorError(Exception): ...  # noqa: E701
 
 
 class CactusOrchestratorSettings(BaseSettings):
-    # misc
-    kubernetes_load_config: bool = True  # just for pytests TODO: find a better way
-
-    # test orchestration
-    test_orchestration_namespace: str = "test-orchestration"
+    # database
     orchestrator_database_url: PostgresDsn
 
-    # test execution
-    test_execution_namespace: str = "test-execution"
-    test_execution_ingress_name: str = "test-execution-ingress"
-    teststack_service_port: int = 80
-    test_execution_comms_timeout_seconds: int = 120  # The default timeout to use when making requests to the test stack
+    # test execution URLs
+    test_execution_fqdn: str
+    test_execution_comms_timeout_seconds: int = 120
 
-    # teststack templates
-    teststack_templates_namespace: str = "teststack-templates"
-    template_service_name_prefix: str = "envoy-svc-"  # Will be combined with CSIP-Aus Version identifier / uuid
-    template_app_name_prefix: str = "envoy-"  # Will be combined with CSIP-Aus Version identifier / uuid
-    template_statefulset_name_prefix: str = "envoy-set-"  # Will be combined with CSIP-Aus Version identifier  / uuid
+    # teststack pod naming — prefix applied to teststack_id to form pod name and external URL path
+    template_service_name_prefix: str = "envoy-svc-"
 
-    # certificates (k8s secret names — legacy, will be removed when k8s/ is deleted)
-    cert_serca_secret_name: str = "cert-serca"  # The raw SERCA root certificate (no key) under ca.crt
-    cert_mca_secret_name: str = (
-        "cert-mca-cactus"  # The Manufacturer CA certificate (no key) under ca.crt (signed by serca)
-    )
-    tls_mica_secret_name: str = (
-        "tls-mica-cactus"  # The Manufacturer Intermediate CA certificate/key (signed by mca) - signs client certs
-    )
+    # podman
+    podman_socket: str = "/run/podman/podman.sock"
+    podman_network: str = "cactus-net"
+    podman_runner_port: int = 8080
+    # JSON map: csip_aus_version → {service_name: image_tag}
+    podman_teststack_images: dict[str, dict[str, str]] = {}
 
-    # certificates (file paths — used by certificate/fetch.py)
+    # certificates (file paths)
     cert_serca_path: str = ""  # path to SERCA ca.crt PEM file
     cert_mca_path: str = ""  # path to MCA ca.crt PEM file
     cert_mica_crt_path: str = ""  # path to MICA tls.crt PEM file
     cert_mica_key_path: str = ""  # path to MICA tls.key PEM file
 
-    test_execution_fqdn: str  # NOTE: we could extract this from the server certs
-
-    # teardown
+    # teardown task
     idleteardowntask_enable: bool = True
-    idleteardowntask_max_lifetime_seconds: int = 3600 * 24 * 4  # 4 days
-    idleteardowntask_idle_timeout_seconds: int = 7200  # 2 hour (some tests have 1 hour poll/post rate)
+    idleteardowntask_max_lifetime_seconds: int = 3600 * 24 * 4
+    idleteardowntask_idle_timeout_seconds: int = 7200
     idleteardowntask_repeat_every_seconds: int = 120
 
-    # readiness
-    pod_readiness_check_container_name: str = "envoy"
-
-    # general orchestrator options
+    # general options
     ignored_csip_aus_versions: list[str] = []
     ignored_test_procedures: list[str] = []
 
@@ -99,18 +63,9 @@ def get_current_settings() -> CactusOrchestratorSettings:
     global _main_settings
     if not _main_settings:
         _main_settings = CactusOrchestratorSettings()  # ty: ignore[missing-argument]
-        return _main_settings
     return _main_settings
 
 
-# NOTE: just for tests, not thread-safe
 def _reset_current_settings() -> None:
     global _main_settings
     _main_settings = None
-
-
-# NOTE: This needs to be called before instantiating any of the k8s clients
-load_k8s_config()
-v1_core_api = client.CoreV1Api()
-v1_app_api = client.AppsV1Api()
-v1_net_api = client.NetworkingV1Api()

@@ -7,10 +7,13 @@ from cactus_schema.orchestrator import UserConfigurationRequest, UserConfigurati
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi_async_sqlalchemy import db
 
+from envoy_schema.server.schema.uri import DeviceCapabilityUri
+
 from cactus_orchestrator.api.common import select_user_or_create
 from cactus_orchestrator.auth import AuthPerm, UserContext, jwt_validator
-from cactus_orchestrator.k8s.resource import generate_envoy_dcap_uri, generate_static_test_stack_id, get_resource_names
 from cactus_orchestrator.model import User
+from cactus_orchestrator.teststack.ids import generate_static_test_stack_id
+from cactus_orchestrator.teststack.manager import PodmanTeststackManager
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +33,7 @@ def user_to_config(user: User) -> UserConfigurationResponse:
 
     static_uri: str | None = None
     if user.is_static_uri:
-        static_uri = generate_envoy_dcap_uri(get_resource_names(generate_static_test_stack_id(user)))
+        static_uri = PodmanTeststackManager().get_resource_names(generate_static_test_stack_id(user)).envoy_base_url + DeviceCapabilityUri
 
     return UserConfigurationResponse(
         subscription_domain="" if user.subscription_domain is None else user.subscription_domain,

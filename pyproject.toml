@@ -9,7 +9,7 @@ where = ["src"]
 [project]
 requires-python = ">= 3.12"
 dependencies = [
-    "kubernetes",
+    "podman",
     "cryptography",
     "fastapi==0.131.0",
     "shortuuid",
@@ -45,7 +45,6 @@ dev = [
     "types-tzlocal",
     "types-pyasn1",
     "coverage",
-    "kubernetes-stubs",
     "pandas-stubs",
     "types-reportlab",
 ]

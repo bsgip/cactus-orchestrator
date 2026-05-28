@@ -7,10 +7,12 @@ from cactus_test_definitions.client.test_procedures import TestProcedure, TestPr
 from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from envoy_schema.server.schema.uri import DeviceCapabilityUri
+
 from cactus_orchestrator.auth import UserContext
 from cactus_orchestrator.crud import insert_user, select_run_group_for_user, select_run_groups_for_user, select_user
-from cactus_orchestrator.k8s.resource import generate_envoy_dcap_uri, get_resource_names
 from cactus_orchestrator.model import ComplianceRequest, Run, RunGroup, RunStatus, User
+from cactus_orchestrator.teststack.manager import PodmanTeststackManager
 from cactus_orchestrator.procedures import get_filtered_test_procedures
 
 logger = logging.getLogger(__name__)
@@ -42,7 +44,7 @@ def map_run_to_run_response(run: Run, playlist_runs: list[PlaylistRunInfo] | Non
     return RunResponse(
         run_id=run.run_id,
         test_procedure_id=run.testprocedure_id,
-        test_url=generate_envoy_dcap_uri(get_resource_names(run.teststack_id)),
+        test_url=PodmanTeststackManager().get_resource_names(run.teststack_id).envoy_base_url + DeviceCapabilityUri,
         status=status,
         all_criteria_met=run.all_criteria_met,
         created_at=run.created_at,

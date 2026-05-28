@@ -5,12 +5,10 @@ from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from typing import Any, Never
 
-from aiohttp import ClientConnectionError
 from cactus_runner.client import ClientSession, ClientTimeout, RunnerClient
 from fastapi import FastAPI
 from fastapi_async_sqlalchemy import db
 from fastapi_utils.tasks import repeat_every
-from kubernetes.client.exceptions import ApiException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from cactus_orchestrator.api.run import finalise_run, teardown_teststack
@@ -20,8 +18,8 @@ from cactus_orchestrator.crud import (
     select_playlist_runs,
     update_run_run_status,
 )
-from cactus_orchestrator.k8s.resource import get_resource_names
 from cactus_orchestrator.model import Run, RunStatus
+from cactus_orchestrator.teststack.manager import PodmanTeststackManager
 from cactus_orchestrator.settings import CactusOrchestratorSettings
 
 logger = logging.getLogger(__name__)
@@ -83,7 +81,8 @@ async def teardown_idle_teststack(
             continue
 
         now = datetime.now(UTC)
-        run_resource_names = get_resource_names(run.teststack_id)
+        manager = PodmanTeststackManager()
+        run_resource_names = manager.get_resource_names(run.teststack_id)
 
         idle = False
         try:
@@ -95,7 +94,7 @@ async def teardown_idle_teststack(
             logger.debug("Exception", exc_info=exc)
 
         if idle or is_maxlive_overtime(now, run.created_at, teardowntask_max_lifetime_seconds):
-            logger.info(f"(Idle/Overtime Task) Shutting down {run_resource_names.service}")
+            logger.info(f"(Idle/Overtime Task) Shutting down {run.teststack_id}")
             if run.playlist_execution_id:
                 processed_playlists.add(run.playlist_execution_id)
 
@@ -109,23 +108,17 @@ async def teardown_idle_teststack(
                     comms_timeout_seconds,
                 )
                 await session.commit()
-                await teardown_teststack(run_resource_names)
+                await teardown_teststack(run.teststack_id)
 
-            except (ApiException, ClientConnectionError) as exc:
+            except Exception as exc:
                 logger.warning(
-                    f"Failed to teardown idle instance with service name {run_resource_names.service} because it "
-                    "could not be reached, flagging as terminated...",
+                    f"Failed to teardown idle instance {run.teststack_id}: {exc}",
                     exc_info=exc,
                 )
                 await finalize_teststack_runs(
                     session, run, run_resource_names.runner_base_url, RunStatus.terminated, now, comms_timeout_seconds
                 )
                 await session.commit()
-
-            except Exception as exc:
-                logger.warning(
-                    f"Failed to teardown idle instance with service name {run_resource_names.service}", exc_info=exc
-                )
                 continue
 
 

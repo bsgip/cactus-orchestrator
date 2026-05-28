@@ -61,7 +61,7 @@ from cactus_orchestrator.crud import (
     update_compliance_generation_record_with_file_data,
     update_compliance_request,
 )
-from cactus_orchestrator.k8s.resource import get_resource_names
+from cactus_orchestrator.teststack.manager import PodmanTeststackManager
 from cactus_orchestrator.model import ComplianceRequest, User
 from cactus_orchestrator.settings import get_current_settings
 
@@ -440,7 +440,7 @@ async def admin_get_run_status(
         )
 
     # Connect to the pod and talk to the runner's "status" endpoint. Forward the result along
-    run_resource_names = get_resource_names(run.teststack_id)
+    run_resource_names = PodmanTeststackManager().get_resource_names(run.teststack_id)
     settings = get_current_settings()
     async with ClientSession(
         base_url=run_resource_names.runner_base_url,
@@ -485,7 +485,7 @@ async def admin_proceed_proxy(
             status_code=HTTPStatus.GONE, detail=f"Run {run_id} has terminated. Unable to send proceed signal."
         )
 
-    run_resource_names = get_resource_names(run.teststack_id)
+    run_resource_names = PodmanTeststackManager().get_resource_names(run.teststack_id)
     settings = get_current_settings()
     async with ClientSession(
         base_url=run_resource_names.runner_base_url,
