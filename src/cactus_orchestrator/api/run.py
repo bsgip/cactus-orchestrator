@@ -50,7 +50,7 @@ from cactus_orchestrator.api.common import (
     select_user_or_raise,
     select_user_run_group_or_raise,
 )
-from cactus_orchestrator.artifact import regenerate_pdf_report
+from cactus_orchestrator.artifact import PDF_GENERATION_ERRORS_FILE_NAME, regenerate_pdf_report
 from cactus_orchestrator.auth import AuthPerm, UserContext, jwt_validator
 from cactus_orchestrator.chart import generate_power_limit_chart
 from cactus_orchestrator.crud import (
@@ -71,6 +71,7 @@ from cactus_orchestrator.crud import (
     select_user_runs_with_artifacts,
     update_run_run_status,
     update_run_with_runartifact_and_finalise,
+    update_runartifact_with_file_data,
 )
 from cactus_orchestrator.k8s.resource import (
     RunResourceNames,
@@ -133,13 +134,36 @@ async def get_run_artifact_response_for_user(user: User, run_id: int) -> Respons
     if run.run_artifact is None:
         raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="RunArtifact does not exist.")
 
+    artifact = run.run_artifact
+    try:
+        names = zipfile.ZipFile(io.BytesIO(artifact.file_data)).namelist()
+    except zipfile.BadZipFile:
+        logger.error(f"Run {run_id} artifact is not a valid zip file")
+        names = []
+    needs_pdf = not any(n.startswith("CactusTestProcedureReport") and n.endswith(".pdf") for n in names)
+    has_error_file = PDF_GENERATION_ERRORS_FILE_NAME in names
+    if needs_pdf or has_error_file:
+        if artifact.reporting_data is None or artifact.version is None:
+            logger.warning(f"Run {run_id} artifact is missing a PDF and has no reporting data — cannot generate")
+        else:
+            try:
+                updated = await regenerate_pdf_report(
+                    file_data=artifact.file_data,
+                    raw_reporting_data=artifact.reporting_data,
+                    version=artifact.version,
+                )
+                await update_runartifact_with_file_data(db.session, artifact, updated)
+                await db.session.commit()
+            except Exception as exc:
+                logger.error(f"Failed to generate missing PDF for run {run_id}", exc_info=exc)
+
     run_group_name = ""
     run_group = await select_run_group_for_user(db.session, user.user_id, run.run_group_id)
     if run_group is not None:
         run_group_name = run_group.name
 
     return Response(
-        content=run.run_artifact.file_data,
+        content=artifact.file_data,
         headers={
             HEADER_USER_NAME: user.user_name or user.subject_id,
             HEADER_TEST_ID: str(run.testprocedure_id),
@@ -147,7 +171,7 @@ async def get_run_artifact_response_for_user(user: User, run_id: int) -> Respons
             HEADER_GROUP_ID: str(run.run_group_id),
             HEADER_GROUP_NAME: run_group_name,
         },
-        media_type=f"application/{run.run_artifact.compression}",
+        media_type=f"application/{artifact.compression}",
     )
 
 
