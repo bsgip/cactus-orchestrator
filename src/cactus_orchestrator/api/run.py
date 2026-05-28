@@ -38,6 +38,7 @@ from cactus_schema.runner import RunGroup as RunRequestRunGroup
 from cactus_test_definitions import CSIPAusVersion
 from cactus_test_definitions.client.test_procedures import TestProcedureId, get_yaml_contents
 from cryptography import x509
+from envoy_schema.server.schema.uri import DeviceCapabilityUri
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi_async_sqlalchemy import db
 from fastapi_pagination import Page, paginate
@@ -72,17 +73,10 @@ from cactus_orchestrator.crud import (
     update_run_run_status,
     update_run_with_runartifact_and_finalise,
 )
-from cactus_orchestrator.k8s.resource import (
-    RunResourceNames,
-    generate_envoy_dcap_uri,
-    get_resource_names,
-    get_template_names,
-)
-from cactus_orchestrator.k8s.resource.create import add_ingress_rule, clone_service, clone_statefulset, wait_for_pod
-from cactus_orchestrator.k8s.resource.delete import delete_service, delete_statefulset, remove_ingress_rule
-from cactus_orchestrator.teststack.ids import generate_dynamic_test_stack_id, generate_static_test_stack_id
 from cactus_orchestrator.model import Run, RunArtifact, RunStatus, User
 from cactus_orchestrator.settings import CactusOrchestratorError, get_current_settings
+from cactus_orchestrator.teststack.ids import generate_dynamic_test_stack_id, generate_static_test_stack_id
+from cactus_orchestrator.teststack.manager import PodmanTeststackManager, TeststackResourceNames
 
 logger = logging.getLogger(__name__)
 
@@ -90,11 +84,14 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def _envoy_dcap_uri(resources: TeststackResourceNames) -> str:
+    return resources.envoy_base_url + DeviceCapabilityUri
+
+
 async def prepare_run_for_delete(run: Run) -> None:
     if run.run_status in ACTIVE_RUN_STATUSES:
         try:
-            resource_names = get_resource_names(run.teststack_id)
-            await teardown_teststack(resource_names)
+            await teardown_teststack(run.teststack_id)
         except Exception as exc:
             logger.error(f"Error tearing down test stack for run {run.run_id}", exc_info=exc)
 
@@ -237,9 +234,6 @@ async def spawn_teststack_and_init_run(  # noqa: C901
     else:
         teststack_id = generate_dynamic_test_stack_id(user)
 
-    run_resource_names = get_resource_names(teststack_id)
-    template_resource_names = get_template_names(run_group.csip_aus_version)
-
     # Create Run records - either single or playlist
     runs: list[Run] | None = None
     if is_playlist:
@@ -267,14 +261,14 @@ async def spawn_teststack_and_init_run(  # noqa: C901
     settings = get_current_settings()
 
     try:
-        # duplicate resources
         user_identifier = user.user_name or user.subject_id
         pod_start_time = datetime.now(UTC)
-        await clone_statefulset(template_resource_names, run_resource_names, user_identifier)
-        await clone_service(template_resource_names, run_resource_names, user_identifier)
-
-        # wait for statefulset's pod
-        await wait_for_pod(run_resource_names)
+        manager = PodmanTeststackManager()
+        run_resource_names = await manager.spawn(
+            teststack_id=teststack_id,
+            csip_aus_version=run_group.csip_aus_version,
+            user_name=user_identifier,
+        )
 
         # inject initial state with either the device or aggregator cert data
         async with ClientSession(
@@ -283,7 +277,7 @@ async def spawn_teststack_and_init_run(  # noqa: C901
         ) as session:
             await wait_for_runner_health(session)
             pod_startup_seconds = (datetime.now(UTC) - pod_start_time).total_seconds()
-            logger.info(f"Pod {run_resource_names.stateful_set} ready in {pod_startup_seconds:.1f}s")
+            logger.info(f"Teststack {teststack_id} ready in {pod_startup_seconds:.1f}s")
 
             # Build RunRequest objects for all tests
             run_requests: list[RunRequest] = []
@@ -343,12 +337,9 @@ async def spawn_teststack_and_init_run(  # noqa: C901
                 init_kwargs["start_index"] = start_index
             init_result = await RunnerClient.initialise(**init_kwargs)
 
-        # finally, include new service in ingress rule
-        await add_ingress_rule(run_resource_names, user_identifier)
-
     except (CactusOrchestratorError, RunnerClientError) as err:
         logger.info("Failure to initialise runner. Will teardown any resources.")
-        await teardown_teststack(run_resource_names)
+        await teardown_teststack(teststack_id)
         raise HTTPException(HTTPStatus.INTERNAL_SERVER_ERROR, detail="Internal Server Error") from err
 
     # commit DB changes - update first run status
@@ -371,12 +362,12 @@ async def spawn_teststack_and_init_run(  # noqa: C901
         ]
         return InitRunResponse(
             run_id=first_run_id,
-            test_url=generate_envoy_dcap_uri(run_resource_names),
+            test_url=_envoy_dcap_uri(run_resource_names),
             playlist_execution_id=playlist_execution_id,
             playlist_runs=playlist_runs,
         )
     else:
-        return InitRunResponse(run_id=first_run_id, test_url=generate_envoy_dcap_uri(run_resource_names))
+        return InitRunResponse(run_id=first_run_id, test_url=_envoy_dcap_uri(run_resource_names))
 
 
 @router.post(
@@ -416,7 +407,7 @@ async def start_run(
             )
 
     # resource ids
-    run_resource_names = get_resource_names(run.teststack_id)
+    run_resource_names = PodmanTeststackManager().get_resource_names(run.teststack_id)
 
     # request runner starts run
     settings = get_current_settings()
@@ -449,17 +440,13 @@ async def start_run(
     await update_run_run_status(session=db.session, run_id=run.run_id, run_status=RunStatus.started)
     await db.session.commit()
 
-    return StartRunResponse(test_url=generate_envoy_dcap_uri(run_resource_names))
+    return StartRunResponse(test_url=_envoy_dcap_uri(run_resource_names))
 
 
-async def teardown_teststack(run_resource_names: RunResourceNames) -> None:
-    """Tears down the envoy teststack (ingress rule + service + statefulset)"""
-    # Remove ingress rule
-    await remove_ingress_rule(run_resource_names)
-
-    # Remove resources
-    await delete_service(run_resource_names)
-    await delete_statefulset(run_resource_names)
+async def teardown_teststack(teststack_id: str) -> None:
+    """Tears down the Podman teststack pod for the given teststack_id."""
+    manager = PodmanTeststackManager()
+    await manager.destroy(teststack_id)
 
 
 def is_all_criteria_met(runner_status: RunnerStatus | None) -> bool | None:
@@ -631,7 +618,7 @@ async def finalise_run_and_teardown_teststack(  # noqa: C901
         settings = get_current_settings()
 
         # get resource names
-        run_resource_names = get_resource_names(run.teststack_id)
+        run_resource_names = PodmanTeststackManager().get_resource_names(run.teststack_id)
 
         # finalise
         artifact = await finalise_run(
@@ -686,7 +673,7 @@ async def finalise_run_and_teardown_teststack(  # noqa: C901
                         # If we can't check status, assume playlist failed and teardown
 
         if should_teardown:
-            await teardown_teststack(run_resource_names)
+            await teardown_teststack(run.teststack_id)
     else:
         artifact = run.run_artifact
 
@@ -726,7 +713,7 @@ async def finalise_playlist(
 
     artifact = None
     settings = get_current_settings()
-    run_resource_names = get_resource_names(run.teststack_id)
+    run_resource_names = PodmanTeststackManager().get_resource_names(run.teststack_id)
 
     # Finalize current test if it's active
     if run.run_status in ACTIVE_RUN_STATUSES:
@@ -749,7 +736,7 @@ async def finalise_playlist(
     await db.session.commit()
 
     # Teardown the teststack
-    await teardown_teststack(run_resource_names)
+    await teardown_teststack(run.teststack_id)
 
     logger.info(f"Playlist skipped: run {run.run_id} finalized, remaining runs marked as skipped")
 
@@ -865,7 +852,7 @@ async def get_run_status(
         )
 
     # Connect to the pod and talk to the runner's "status" endpoint. Forward the result along
-    run_resource_names = get_resource_names(run.teststack_id)
+    run_resource_names = PodmanTeststackManager().get_resource_names(run.teststack_id)
     settings = get_current_settings()
     async with ClientSession(
         base_url=run_resource_names.runner_base_url,
@@ -906,7 +893,7 @@ async def get_run_request_list(
         )
 
     # Connect to the pod and talk to the runner's "status" endpoint. Forward the result along
-    run_resource_names = get_resource_names(run.teststack_id)
+    run_resource_names = PodmanTeststackManager().get_resource_names(run.teststack_id)
     settings = get_current_settings()
     async with ClientSession(
         base_url=run_resource_names.runner_base_url,
@@ -949,7 +936,7 @@ async def get_run_request_data(
         )
 
     # Connect to the pod and talk to the runner's "status" endpoint. Forward the result along
-    run_resource_names = get_resource_names(run.teststack_id)
+    run_resource_names = PodmanTeststackManager().get_resource_names(run.teststack_id)
     settings = get_current_settings()
     async with ClientSession(
         base_url=run_resource_names.runner_base_url,
@@ -988,7 +975,7 @@ async def proceed_proxy(
             status_code=HTTPStatus.GONE, detail="Run {run_id} has terminated. Unable to send proceed signal."
         )
 
-    run_resource_names = get_resource_names(run.teststack_id)
+    run_resource_names = PodmanTeststackManager().get_resource_names(run.teststack_id)
     settings = get_current_settings()
     async with ClientSession(
         base_url=run_resource_names.runner_base_url,
