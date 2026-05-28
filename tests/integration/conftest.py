@@ -3,23 +3,19 @@ import shutil
 import tempfile
 from collections.abc import Generator
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from tests.integration import MockedK8s
+from cactus_orchestrator.teststack.manager import PodmanTeststackManager
+from tests.integration import MockedTeststack
 
 
 @pytest.fixture
-def k8s_mock() -> Generator[MockedK8s, None, None]:
+def k8s_mock() -> Generator[MockedTeststack, None, None]:
     with (
-        patch("cactus_orchestrator.api.run.add_ingress_rule") as add_ingress_rule,
-        patch("cactus_orchestrator.api.run.clone_service") as clone_service,
-        patch("cactus_orchestrator.api.run.clone_statefulset") as clone_statefulset,
-        patch("cactus_orchestrator.api.run.wait_for_pod") as wait_for_pod,
-        patch("cactus_orchestrator.api.run.delete_service") as delete_service,
-        patch("cactus_orchestrator.api.run.delete_statefulset") as delete_statefulset,
-        patch("cactus_orchestrator.api.run.remove_ingress_rule") as remove_ingress_rule,
+        patch.object(PodmanTeststackManager, "spawn", new_callable=AsyncMock) as mock_spawn,
+        patch.object(PodmanTeststackManager, "destroy", new_callable=AsyncMock) as mock_destroy,
         patch("cactus_orchestrator.api.run.RunnerClient.initialise") as init,
         patch("cactus_orchestrator.api.run.RunnerClient.start") as start,
         patch("cactus_orchestrator.api.run.RunnerClient.finalize") as finalize,
@@ -30,14 +26,15 @@ def k8s_mock() -> Generator[MockedK8s, None, None]:
         patch("cactus_orchestrator.api.run.RunnerClient.get_request") as get_request,
         patch("cactus_orchestrator.api.run.RunnerClient.proceed") as proceed,
     ):
-        yield MockedK8s(
-            add_ingress_rule=add_ingress_rule,
-            clone_service=clone_service,
-            clone_statefulset=clone_statefulset,
-            wait_for_pod=wait_for_pod,
-            delete_service=delete_service,
-            delete_statefulset=delete_statefulset,
-            remove_ingress_rule=remove_ingress_rule,
+        # spawn returns proper resource names (computed from settings) so URL assertions pass
+        async def spawn_side_effect(teststack_id, csip_aus_version, user_name):
+            return PodmanTeststackManager().get_resource_names(teststack_id)
+
+        mock_spawn.side_effect = spawn_side_effect
+
+        yield MockedTeststack(
+            spawn=mock_spawn,
+            destroy=mock_destroy,
             init=init,
             start=start,
             finalize=finalize,

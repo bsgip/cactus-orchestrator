@@ -1,19 +1,12 @@
 from dataclasses import dataclass
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock
 
 
 @dataclass
-class MockedK8s:
-    # create
-    add_ingress_rule: Mock
-    clone_service: Mock
-    clone_statefulset: Mock
-    wait_for_pod: Mock
-
-    # delete
-    delete_service: Mock
-    delete_statefulset: Mock
-    remove_ingress_rule: Mock
+class MockedTeststack:
+    # Podman teststack lifecycle
+    spawn: AsyncMock
+    destroy: AsyncMock
 
     # RunnerClient
     init: Mock
@@ -25,3 +18,7 @@ class MockedK8s:
     list_requests: Mock
     get_request: Mock
     proceed: Mock
+
+
+# Backward-compat alias so any file that still imports MockedK8s keeps working
+MockedK8s = MockedTeststack

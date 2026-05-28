@@ -1,5 +1,4 @@
 import base64
-import inspect
 import os
 from collections.abc import Generator
 from datetime import UTC, datetime, timedelta
@@ -16,12 +15,11 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec, rsa
 from cryptography.x509.oid import NameOID
 from envoy.server.alembic import upgrade as envoy_upgrade
-from kubernetes.client import V1Secret
 from psycopg import Connection
 from sqlalchemy import NullPool, create_engine
 
 from cactus_orchestrator.auth import jwt_validator
-from cactus_orchestrator.k8s.certificate.create import (
+from cactus_orchestrator.certificate.create import (
     calculate_rfc5280_subject_key_identifier_method_2,
     generate_client_p12_ec,
 )
@@ -281,41 +279,6 @@ def valid_jwt_no_user(mock_jwt_validator_jwks_cache, rsa_key) -> str:
 def valid_jwt_admin1(mock_jwt_validator_jwks_cache, rsa_key) -> str:
     kid = list(mock_jwt_validator_jwks_cache.keys())[0]
     return valid_token_for_user("admin-user", rsa_key, kid, "user:all", ["admin:all", "user:all"])
-
-
-@pytest.fixture
-def mock_k8s_tls_secret(mica_cert_key_pair):
-    cert_pem, cert_key = mica_cert_key_pair
-    secret_mock = MagicMock(spec=V1Secret)
-    secret_mock.data = {
-        "tls.crt": base64.b64encode(
-            cert_pem.public_bytes(
-                encoding=serialization.Encoding.PEM,
-            )
-        ).decode(),
-        "tls.key": base64.b64encode(
-            cert_key.private_bytes(
-                encoding=serialization.Encoding.PEM,
-                format=serialization.PrivateFormat.TraditionalOpenSSL,
-                encryption_algorithm=serialization.NoEncryption(),
-            )
-        ).decode(),
-    }
-    return secret_mock
-
-
-@pytest.fixture
-def generate_k8s_class_instance():
-    def func(t: type, **kwargs):
-        def get_init_params(t):
-            for i in inspect.signature(t.__init__).parameters.keys():
-                if i != "self":
-                    yield i
-
-        members = {k: MagicMock() for k in get_init_params(t)} | kwargs
-        return t(**members)
-
-    return func
 
 
 def execute_test_sql_file(cfg: Connection, path_to_sql_file: str) -> None:
