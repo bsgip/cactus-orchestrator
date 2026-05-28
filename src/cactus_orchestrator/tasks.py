@@ -19,7 +19,7 @@ from cactus_orchestrator.crud import (
     update_run_run_status,
 )
 from cactus_orchestrator.model import Run, RunStatus
-from cactus_orchestrator.teststack.manager import PodmanTeststackManager
+from cactus_orchestrator.teststack.manager import get_resource_names
 from cactus_orchestrator.settings import CactusOrchestratorSettings
 
 logger = logging.getLogger(__name__)
@@ -81,8 +81,7 @@ async def teardown_idle_teststack(
             continue
 
         now = datetime.now(UTC)
-        manager = PodmanTeststackManager()
-        run_resource_names = manager.get_resource_names(run.teststack_id)
+        run_resource_names = get_resource_names(run.teststack_id)
 
         idle = False
         try:

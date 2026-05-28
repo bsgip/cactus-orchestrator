@@ -76,7 +76,7 @@ from cactus_orchestrator.crud import (
 from cactus_orchestrator.model import Run, RunArtifact, RunStatus, User
 from cactus_orchestrator.settings import CactusOrchestratorError, get_current_settings
 from cactus_orchestrator.teststack.ids import generate_dynamic_test_stack_id, generate_static_test_stack_id
-from cactus_orchestrator.teststack.manager import PodmanTeststackManager, TeststackResourceNames
+from cactus_orchestrator.teststack.manager import TeststackResourceNames, destroy, get_resource_names, spawn
 
 logger = logging.getLogger(__name__)
 
@@ -263,8 +263,7 @@ async def spawn_teststack_and_init_run(  # noqa: C901
     try:
         user_identifier = user.user_name or user.subject_id
         pod_start_time = datetime.now(UTC)
-        manager = PodmanTeststackManager()
-        run_resource_names = await manager.spawn(
+        run_resource_names = await spawn(
             teststack_id=teststack_id,
             csip_aus_version=run_group.csip_aus_version,
             user_name=user_identifier,
@@ -407,7 +406,7 @@ async def start_run(
             )
 
     # resource ids
-    run_resource_names = PodmanTeststackManager().get_resource_names(run.teststack_id)
+    run_resource_names = get_resource_names(run.teststack_id)
 
     # request runner starts run
     settings = get_current_settings()
@@ -444,9 +443,7 @@ async def start_run(
 
 
 async def teardown_teststack(teststack_id: str) -> None:
-    """Tears down the Podman teststack pod for the given teststack_id."""
-    manager = PodmanTeststackManager()
-    await manager.destroy(teststack_id)
+    await destroy(teststack_id)
 
 
 def is_all_criteria_met(runner_status: RunnerStatus | None) -> bool | None:
@@ -618,7 +615,7 @@ async def finalise_run_and_teardown_teststack(  # noqa: C901
         settings = get_current_settings()
 
         # get resource names
-        run_resource_names = PodmanTeststackManager().get_resource_names(run.teststack_id)
+        run_resource_names = get_resource_names(run.teststack_id)
 
         # finalise
         artifact = await finalise_run(
@@ -713,7 +710,7 @@ async def finalise_playlist(
 
     artifact = None
     settings = get_current_settings()
-    run_resource_names = PodmanTeststackManager().get_resource_names(run.teststack_id)
+    run_resource_names = get_resource_names(run.teststack_id)
 
     # Finalize current test if it's active
     if run.run_status in ACTIVE_RUN_STATUSES:
@@ -852,7 +849,7 @@ async def get_run_status(
         )
 
     # Connect to the pod and talk to the runner's "status" endpoint. Forward the result along
-    run_resource_names = PodmanTeststackManager().get_resource_names(run.teststack_id)
+    run_resource_names = get_resource_names(run.teststack_id)
     settings = get_current_settings()
     async with ClientSession(
         base_url=run_resource_names.runner_base_url,
@@ -893,7 +890,7 @@ async def get_run_request_list(
         )
 
     # Connect to the pod and talk to the runner's "status" endpoint. Forward the result along
-    run_resource_names = PodmanTeststackManager().get_resource_names(run.teststack_id)
+    run_resource_names = get_resource_names(run.teststack_id)
     settings = get_current_settings()
     async with ClientSession(
         base_url=run_resource_names.runner_base_url,
@@ -936,7 +933,7 @@ async def get_run_request_data(
         )
 
     # Connect to the pod and talk to the runner's "status" endpoint. Forward the result along
-    run_resource_names = PodmanTeststackManager().get_resource_names(run.teststack_id)
+    run_resource_names = get_resource_names(run.teststack_id)
     settings = get_current_settings()
     async with ClientSession(
         base_url=run_resource_names.runner_base_url,
@@ -975,7 +972,7 @@ async def proceed_proxy(
             status_code=HTTPStatus.GONE, detail="Run {run_id} has terminated. Unable to send proceed signal."
         )
 
-    run_resource_names = PodmanTeststackManager().get_resource_names(run.teststack_id)
+    run_resource_names = get_resource_names(run.teststack_id)
     settings = get_current_settings()
     async with ClientSession(
         base_url=run_resource_names.runner_base_url,

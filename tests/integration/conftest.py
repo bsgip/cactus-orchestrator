@@ -7,15 +7,15 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from cactus_orchestrator.teststack.manager import PodmanTeststackManager
+from cactus_orchestrator.teststack.manager import get_resource_names, spawn
 from tests.integration import MockedTeststack
 
 
 @pytest.fixture
 def k8s_mock() -> Generator[MockedTeststack, None, None]:
     with (
-        patch.object(PodmanTeststackManager, "spawn", new_callable=AsyncMock) as mock_spawn,
-        patch.object(PodmanTeststackManager, "destroy", new_callable=AsyncMock) as mock_destroy,
+        patch("cactus_orchestrator.api.run.spawn", new_callable=AsyncMock) as mock_spawn,
+        patch("cactus_orchestrator.api.run.destroy", new_callable=AsyncMock) as mock_destroy,
         patch("cactus_orchestrator.api.run.RunnerClient.initialise") as init,
         patch("cactus_orchestrator.api.run.RunnerClient.start") as start,
         patch("cactus_orchestrator.api.run.RunnerClient.finalize") as finalize,
@@ -28,7 +28,7 @@ def k8s_mock() -> Generator[MockedTeststack, None, None]:
     ):
         # spawn returns proper resource names (computed from settings) so URL assertions pass
         async def spawn_side_effect(teststack_id, csip_aus_version, user_name):
-            return PodmanTeststackManager().get_resource_names(teststack_id)
+            return get_resource_names(teststack_id)
 
         mock_spawn.side_effect = spawn_side_effect
 

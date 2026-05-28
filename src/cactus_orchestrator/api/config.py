@@ -13,7 +13,7 @@ from cactus_orchestrator.api.common import select_user_or_create
 from cactus_orchestrator.auth import AuthPerm, UserContext, jwt_validator
 from cactus_orchestrator.model import User
 from cactus_orchestrator.teststack.ids import generate_static_test_stack_id
-from cactus_orchestrator.teststack.manager import PodmanTeststackManager
+from cactus_orchestrator.teststack.manager import get_resource_names
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +33,7 @@ def user_to_config(user: User) -> UserConfigurationResponse:
 
     static_uri: str | None = None
     if user.is_static_uri:
-        static_uri = PodmanTeststackManager().get_resource_names(generate_static_test_stack_id(user)).envoy_base_url + DeviceCapabilityUri
+        static_uri = get_resource_names(generate_static_test_stack_id(user)).envoy_base_url + DeviceCapabilityUri
 
     return UserConfigurationResponse(
         subscription_domain="" if user.subscription_domain is None else user.subscription_domain,

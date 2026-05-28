@@ -1,11 +1,11 @@
-"""Unit tests for PodmanTeststackManager."""
 from unittest.mock import AsyncMock, patch
 
 import podman as podman_api
 import pytest
 
 from cactus_orchestrator.settings import _reset_current_settings
-from cactus_orchestrator.teststack.manager import PodmanTeststackManager, TeststackResourceNames
+from cactus_orchestrator.teststack.manager import TeststackResourceNames, _destroy_pod, _pod_name, destroy, get_resource_names, spawn
+import cactus_orchestrator.teststack.manager as teststack_manager
 
 
 @pytest.fixture(autouse=True)
@@ -22,31 +22,27 @@ def podman_settings(monkeypatch):
 
 
 def test_get_resource_names():
-    manager = PodmanTeststackManager()
-    names = manager.get_resource_names("abc123-42")
+    names = get_resource_names("abc123-42")
     assert names.runner_base_url == "http://envoy-svc-abc123-42:8080"
     assert names.envoy_base_url == "https://cactus.test.local/envoy-svc-abc123-42"
 
 
 def test_pod_name():
-    manager = PodmanTeststackManager()
-    assert manager._pod_name("abc123-42") == "envoy-svc-abc123-42"
+    assert _pod_name("abc123-42") == "envoy-svc-abc123-42"
 
 
 @pytest.mark.asyncio
 async def test_destroy_handles_not_found():
-    manager = PodmanTeststackManager()
-    with patch.object(manager, "_destroy_pod", side_effect=podman_api.errors.NotFound("pod", None)):
-        await manager.destroy("abc123-42")  # should not raise
+    with patch.object(teststack_manager, "_destroy_pod", side_effect=podman_api.errors.NotFound("pod", None)):
+        await destroy("abc123-42")  # should not raise
 
 
 @pytest.mark.asyncio
 async def test_spawn_cleans_up_on_failure():
-    manager = PodmanTeststackManager()
     with (
-        patch.object(manager, "_create_pod_and_containers", side_effect=RuntimeError("disk full")),
-        patch.object(manager, "destroy", new_callable=AsyncMock) as mock_destroy,
+        patch.object(teststack_manager, "_create_pod_and_containers", side_effect=RuntimeError("disk full")),
+        patch.object(teststack_manager, "destroy", new_callable=AsyncMock) as mock_destroy,
     ):
         with pytest.raises(RuntimeError):
-            await manager.spawn("abc123-42", "1.0", "test-user")
+            await spawn("abc123-42", "1.0", "test-user")
         mock_destroy.assert_awaited_once_with("abc123-42")

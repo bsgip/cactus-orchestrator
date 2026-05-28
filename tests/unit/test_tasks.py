@@ -5,7 +5,6 @@ from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 from uuid import uuid4
 
-from cactus_orchestrator.teststack.manager import PodmanTeststackManager
 
 import pytest
 from assertical.asserts.time import assert_nowish
@@ -26,7 +25,7 @@ class MockedTeststack:
 @pytest.fixture
 def k8s_mock() -> Generator[MockedTeststack, None, None]:
     with (
-        patch.object(PodmanTeststackManager, "destroy", new_callable=AsyncMock) as destroy,
+        patch("cactus_orchestrator.api.run.destroy", new_callable=AsyncMock) as destroy,
         patch("cactus_orchestrator.api.run.RunnerClient.last_interaction") as last_interaction,
     ):
         yield MockedTeststack(
