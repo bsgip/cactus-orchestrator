@@ -9,7 +9,7 @@ where = ["src"]
 [project]
 requires-python = ">= 3.12"
 dependencies = [
-    "kubernetes",
+    "kubernetes==35.0.0",
     "cryptography",
     "fastapi==0.131.0",
     "shortuuid",
