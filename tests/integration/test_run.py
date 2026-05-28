@@ -37,8 +37,8 @@ from sqlalchemy import func, select, update
 from sqlalchemy.orm import selectinload
 
 from cactus_orchestrator.api.run import finalise_run, is_all_criteria_met
-from cactus_orchestrator.k8s.resource import generate_static_test_stack_id
 from cactus_orchestrator.model import Run, RunArtifact, RunGroup, RunStatus, User
+from cactus_orchestrator.teststack.ids import generate_static_test_stack_id
 from tests.integration import MockedK8s
 
 
@@ -95,11 +95,8 @@ async def test_spawn_teststack_and_init_run_dynamic_uris(
     assert os.environ["TEST_EXECUTION_FQDN"] in response_model.test_url, "The returned URI should be public facing"
     assert res.headers["Location"] == f"/run/{response_model.run_id}"
 
-    # Check the k8s services were provisioned
-    k8s_mock.clone_statefulset.assert_called_once()
-    k8s_mock.clone_service.assert_called_once()
-    k8s_mock.add_ingress_rule.assert_called_once()
-    k8s_mock.wait_for_pod.assert_called_once()
+    # Check the teststack was spawned
+    k8s_mock.spawn.assert_awaited_once()
 
     # Check init was called with a single RunRequest (not a list) for backwards compatibility
     k8s_mock.init.assert_awaited_once()
@@ -178,11 +175,8 @@ async def test_spawn_teststack_and_init_run_static_uri(
     assert os.environ["TEST_EXECUTION_FQDN"] in response_model.test_url, "The returned URI should be public facing"
     assert res.headers["Location"] == f"/run/{response_model.run_id}"
 
-    # Check the k8s services were provisioned
-    k8s_mock.clone_statefulset.assert_called_once()
-    k8s_mock.clone_service.assert_called_once()
-    k8s_mock.add_ingress_rule.assert_called_once()
-    k8s_mock.wait_for_pod.assert_called_once()
+    # Check the teststack was spawned
+    k8s_mock.spawn.assert_awaited_once()
 
     # Check init was called with a single RunRequest (not a list) for backwards compatibility
     k8s_mock.init.assert_awaited_once()
@@ -256,11 +250,8 @@ async def test_spawn_teststack_and_init_tolerant_to_status_errors(
     assert os.environ["TEST_EXECUTION_FQDN"] in response_model.test_url, "The returned URI should be public facing"
     assert res.headers["Location"] == f"/run/{response_model.run_id}"
 
-    # Check the k8s services were provisioned
-    k8s_mock.clone_statefulset.assert_called_once()
-    k8s_mock.clone_service.assert_called_once()
-    k8s_mock.add_ingress_rule.assert_called_once()
-    k8s_mock.wait_for_pod.assert_called_once()
+    # Check the teststack was spawned
+    k8s_mock.spawn.assert_awaited_once()
 
     # Check init/status were called
     k8s_mock.init.assert_awaited_once()
@@ -314,14 +305,9 @@ async def test_spawn_teststack_and_init_too_many_status_errors(
     # Assert
     assert res.status_code == HTTPStatus.INTERNAL_SERVER_ERROR
 
-    # Check the k8s services were provisioned - and then torn down
-    k8s_mock.clone_statefulset.assert_called_once()
-    k8s_mock.clone_service.assert_called_once()
-    k8s_mock.wait_for_pod.assert_called_once()
-
-    k8s_mock.delete_service.assert_called_once()
-    k8s_mock.delete_statefulset.assert_called_once()
-    k8s_mock.remove_ingress_rule.assert_called_once()
+    # Check the teststack was spawned then torn down
+    k8s_mock.spawn.assert_awaited_once()
+    k8s_mock.destroy.assert_awaited_once()
 
     # Check init/status were called
     assert k8s_mock.health.call_count > 0
@@ -369,11 +355,8 @@ async def test_spawn_teststack_and_init_run_static_uri_collision(
     # Assert
     assert res.status_code == HTTPStatus.CONFLICT
 
-    # Check the k8s services were NOT provisioned
-    k8s_mock.clone_statefulset.assert_not_called()
-    k8s_mock.clone_service.assert_not_called()
-    k8s_mock.add_ingress_rule.assert_not_called()
-    k8s_mock.wait_for_pod.assert_not_called()
+    # Check the teststack was NOT spawned
+    k8s_mock.spawn.assert_not_awaited()
 
 
 @pytest.mark.parametrize("run_group_id", [3, 99])
@@ -395,11 +378,8 @@ async def test_spawn_teststack_and_init_run_bad_run_group_id(
     # Assert
     assert res.status_code == HTTPStatus.FORBIDDEN
 
-    # Check the k8s services were NOT provisioned
-    k8s_mock.clone_statefulset.assert_not_called()
-    k8s_mock.clone_service.assert_not_called()
-    k8s_mock.add_ingress_rule.assert_not_called()
-    k8s_mock.wait_for_pod.assert_not_called()
+    # Check the teststack was NOT spawned
+    k8s_mock.spawn.assert_not_awaited()
 
 
 @pytest.mark.parametrize(
@@ -435,11 +415,8 @@ async def test_spawn_teststack_and_init_run_expired_certs(
     # Assert
     assert res.status_code == HTTPStatus.EXPECTATION_FAILED
 
-    # Check the k8s services were NOT provisioned
-    k8s_mock.clone_statefulset.assert_not_called()
-    k8s_mock.clone_service.assert_not_called()
-    k8s_mock.add_ingress_rule.assert_not_called()
-    k8s_mock.wait_for_pod.assert_not_called()
+    # Check the teststack was NOT spawned
+    k8s_mock.spawn.assert_not_awaited()
 
 
 @pytest.mark.parametrize(
@@ -479,13 +456,9 @@ async def test_spawn_teststack_and_init_run_teardown_on_init_failure(
     # Assert
     assert res.status_code == HTTPStatus.INTERNAL_SERVER_ERROR
 
-    # Check the k8s services were provisioned AND removed
-    k8s_mock.clone_statefulset.assert_called_once()
-    k8s_mock.clone_service.assert_called_once()
-    k8s_mock.wait_for_pod.assert_called_once()
-    k8s_mock.delete_service.assert_called_once()
-    k8s_mock.delete_statefulset.assert_called_once()
-    k8s_mock.remove_ingress_rule.assert_called_once()
+    # Check the teststack was spawned AND torn down
+    k8s_mock.spawn.assert_awaited_once()
+    k8s_mock.destroy.assert_awaited_once()
 
     # Check init was called the correct params
     k8s_mock.init.assert_called_once()

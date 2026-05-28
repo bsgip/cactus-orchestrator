@@ -6,7 +6,7 @@ from assertical.fixtures.postgres import generate_async_session
 from cactus_schema.orchestrator import UserConfigurationRequest, UserConfigurationResponse
 from sqlalchemy import select
 
-from cactus_orchestrator.k8s.resource import generate_static_test_stack_id
+from cactus_orchestrator.teststack.ids import generate_static_test_stack_id
 from cactus_orchestrator.model import User
 
 

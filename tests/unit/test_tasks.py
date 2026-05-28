@@ -5,6 +5,8 @@ from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 from uuid import uuid4
 
+from cactus_orchestrator.teststack.manager import PodmanTeststackManager
+
 import pytest
 from assertical.asserts.time import assert_nowish
 from assertical.fixtures.postgres import generate_async_session
@@ -16,27 +18,19 @@ from cactus_orchestrator.tasks import generate_idleteardowntask, teardown_idle_t
 
 
 @dataclass
-class MockedK8s:
-    delete_service: Mock
-    delete_statefulset: Mock
-    remove_ingress_rule: Mock
-
-    # RunnerClient
+class MockedTeststack:
+    destroy: AsyncMock
     last_interaction: Mock
 
 
 @pytest.fixture
-def k8s_mock() -> Generator[MockedK8s, None, None]:
+def k8s_mock() -> Generator[MockedTeststack, None, None]:
     with (
-        patch("cactus_orchestrator.api.run.delete_service") as delete_service,
-        patch("cactus_orchestrator.api.run.delete_statefulset") as delete_statefulset,
-        patch("cactus_orchestrator.api.run.remove_ingress_rule") as remove_ingress_rule,
+        patch.object(PodmanTeststackManager, "destroy", new_callable=AsyncMock) as destroy,
         patch("cactus_orchestrator.api.run.RunnerClient.last_interaction") as last_interaction,
     ):
-        yield MockedK8s(
-            delete_service=delete_service,
-            delete_statefulset=delete_statefulset,
-            remove_ingress_rule=remove_ingress_rule,
+        yield MockedTeststack(
+            destroy=destroy,
             last_interaction=last_interaction,
         )
 
@@ -116,11 +110,9 @@ async def test_teardown_idle_teststack(k8s_mock, pg_base_config, client):
             assert r.finalised_at is not None
             assert_nowish(r.finalised_at)
 
-    # Check we cleared up k8's
+    # Check we tore down each teststack
     assert k8s_mock.last_interaction.call_count == len(expected_finalised_run_ids)
-    assert k8s_mock.delete_service.call_count == len(expected_finalised_run_ids)
-    assert k8s_mock.delete_statefulset.call_count == len(expected_finalised_run_ids)
-    assert k8s_mock.remove_ingress_rule.call_count == len(expected_finalised_run_ids)
+    assert k8s_mock.destroy.await_count == len(expected_finalised_run_ids)
 
 
 @pytest.mark.asyncio
