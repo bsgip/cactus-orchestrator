@@ -183,8 +183,11 @@ async def regenerate_run_artifact(session: AsyncSession, run_artifact: RunArtifa
         ValueError: if regeneration of pdf report fails
     """
 
+    # Callers (e.g. admin endpoint) guard reporting_data/version for None before calling: ignore
     updated_zip_data = await regenerate_pdf_report(
-        file_data=run_artifact.file_data, raw_reporting_data=run_artifact.reporting_data, version=run_artifact.version
+        file_data=run_artifact.file_data,
+        raw_reporting_data=run_artifact.reporting_data,  # ty: ignore[invalid-argument-type]
+        version=run_artifact.version,  # ty: ignore[invalid-argument-type]
     )
 
     # Update the file data

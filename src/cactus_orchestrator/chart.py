@@ -63,7 +63,8 @@ async def generate_power_limit_chart(run_artifact: RunArtifact, video_start_seco
     schema_sql, data_sql = extract_envoy_dumps(run_artifact.file_data)
 
     try:
-        reporting_data = ReportingData.from_json(run_artifact.version, run_artifact.reporting_data)
+        # Callers (e.g. admin endpoint) guard reporting_data/version for None before calling: ignore
+        reporting_data = ReportingData.from_json(run_artifact.version, run_artifact.reporting_data)  # ty: ignore[invalid-argument-type]
     except Exception as exc:
         raise ValueError(f"Failed to deserialize reporting data: {exc}") from exc
 
