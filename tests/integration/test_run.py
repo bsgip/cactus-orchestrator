@@ -612,13 +612,9 @@ async def test_delete_individual_run(
             assert after_run_count == before_run_count
 
     if expected_k8s_teardown:
-        k8s_mock.delete_service.assert_called_once()
-        k8s_mock.delete_statefulset.assert_called_once()
-        k8s_mock.remove_ingress_rule.assert_called_once()
+        k8s_mock.destroy.assert_awaited_once()
     else:
-        k8s_mock.delete_service.assert_not_called()
-        k8s_mock.delete_statefulset.assert_not_called()
-        k8s_mock.remove_ingress_rule.assert_not_called()
+        k8s_mock.destroy.assert_not_awaited()
 
 
 @pytest.mark.parametrize(
@@ -909,9 +905,7 @@ async def test_finalise_run_and_teardown_teststack_idempotent(
         assert run.run_artifact.file_data == finalize_data
 
     # We should've only cleaned up and finalised once (for the first request)
-    k8s_mock.delete_statefulset.assert_called_once()
-    k8s_mock.remove_ingress_rule.assert_called_once()
-    k8s_mock.delete_service.assert_called_once()
+    k8s_mock.destroy.assert_awaited_once()
     k8s_mock.finalize.assert_called_once()
     k8s_mock.status.assert_called_once()
 
@@ -930,9 +924,7 @@ async def test_finalise_run_and_teardown_teststack_idempotent(
         assert run.run_artifact.file_data == finalize_data
 
     # We should've only cleaned up and finalised once (for the first request)
-    k8s_mock.delete_statefulset.assert_called_once()
-    k8s_mock.remove_ingress_rule.assert_called_once()
-    k8s_mock.delete_service.assert_called_once()
+    k8s_mock.destroy.assert_awaited_once()
     k8s_mock.finalize.assert_called_once()
     k8s_mock.status.assert_called_once()
 
@@ -1124,11 +1116,8 @@ async def test_spawn_teststack_with_playlist(
     assert response_model.playlist_runs[0].test_procedure_id == TestProcedureId.ALL_01.value
     assert response_model.playlist_runs[1].test_procedure_id == TestProcedureId.ALL_02.value
 
-    # Check k8s - only ONE teststack should be created
-    k8s_mock.clone_statefulset.assert_called_once()
-    k8s_mock.clone_service.assert_called_once()
-    k8s_mock.add_ingress_rule.assert_called_once()
-    k8s_mock.wait_for_pod.assert_called_once()
+    # Check teststack - only ONE teststack should be created
+    k8s_mock.spawn.assert_awaited_once()
     k8s_mock.init.assert_awaited_once()
 
     # Verify RunnerClient.initialise received a list of RunRequests for playlists
@@ -1266,8 +1255,7 @@ async def test_playlist_finalize_advances_to_next_test(
     assert response.status_code == HTTPStatus.OK
 
     # Assert - teststack should NOT be torn down, second run should be started
-    k8s_mock.delete_statefulset.assert_not_called()
-    k8s_mock.delete_service.assert_not_called()
+    k8s_mock.destroy.assert_not_awaited()
 
     async with generate_async_session(pg_base_config) as session:
         first_run = (await session.execute(select(Run).where(Run.run_id == first_run_id))).scalar_one()
@@ -1317,9 +1305,7 @@ async def test_playlist_finalize_teardown_on_last_test(
     assert response.status_code == HTTPStatus.OK
 
     # Assert - teststack should be torn down
-    k8s_mock.delete_statefulset.assert_called_once()
-    k8s_mock.delete_service.assert_called_once()
-    k8s_mock.remove_ingress_rule.assert_called_once()
+    k8s_mock.destroy.assert_awaited_once()
 
     async with generate_async_session(pg_base_config) as session:
         second_run = (await session.execute(select(Run).where(Run.run_id == second_run_id))).scalar_one()
@@ -1351,8 +1337,7 @@ async def test_delete_playlist_run_deletes_all_siblings(
     assert response.status_code == HTTPStatus.NO_CONTENT
 
     # Assert - teststack should be torn down
-    k8s_mock.delete_statefulset.assert_called_once()
-    k8s_mock.delete_service.assert_called_once()
+    k8s_mock.destroy.assert_awaited_once()
 
     # All runs should be deleted
     async with generate_async_session(pg_base_config) as session:

@@ -181,9 +181,7 @@ async def test_delete_group(
         assert remaining_artifact_ids == []
 
         # Ensure any active runs are properly deallocated
-        assert k8s_mock.delete_service.call_count == len(expected_teardown_run_ids)
-        assert k8s_mock.delete_statefulset.call_count == len(expected_teardown_run_ids)
-        assert k8s_mock.remove_ingress_rule.call_count == len(expected_teardown_run_ids)
+        assert k8s_mock.destroy.await_count == len(expected_teardown_run_ids)
 
     else:
         assert after_run_count == before_run_count
@@ -191,6 +189,4 @@ async def test_delete_group(
         assert remaining_run_ids == expected_run_ids
         assert remaining_artifact_ids == expected_run_artifact_ids
 
-        k8s_mock.delete_service.assert_not_called()
-        k8s_mock.delete_statefulset.assert_not_called()
-        k8s_mock.remove_ingress_rule.assert_not_called()
+        k8s_mock.destroy.assert_not_awaited()
