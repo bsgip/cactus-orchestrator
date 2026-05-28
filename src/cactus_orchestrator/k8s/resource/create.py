@@ -22,10 +22,10 @@ logger = logging.getLogger(__name__)
 
 @async_k8s_api_retry()
 async def clone_service(template_names: TemplateResourceNames, run_names: RunResourceNames, user_name: str) -> None:
-    res: ApplyResult = v1_core_api.read_namespaced_service(
+    res: ApplyResult = v1_core_api.read_namespaced_service(  # ty: ignore[invalid-assignment]
         name=template_names.service,
         namespace=template_names.namespace,
-        async_req=True,
+        async_req=True,  # ty: ignore[unknown-argument]
     )
     existing = await asyncio.to_thread(res.get)
 
@@ -40,10 +40,10 @@ async def clone_service(template_names: TemplateResourceNames, run_names: RunRes
     )
 
     # Create the new service
-    res: ApplyResult = v1_core_api.create_namespaced_service(
+    res: ApplyResult = v1_core_api.create_namespaced_service(  # ty: ignore[invalid-assignment]
         namespace=get_current_settings().test_execution_namespace,
         body=new_service,
-        async_req=True,
+        async_req=True,  # ty: ignore[unknown-argument]
     )
     await asyncio.to_thread(res.get)
     logger.info(f"New service {run_names.service} created successfully for user {user_name}!")
@@ -51,10 +51,10 @@ async def clone_service(template_names: TemplateResourceNames, run_names: RunRes
 
 @async_k8s_api_retry()
 async def clone_statefulset(template_names: TemplateResourceNames, run_names: RunResourceNames, user_name: str) -> None:
-    res: ApplyResult = v1_app_api.read_namespaced_stateful_set(
+    res: ApplyResult = v1_app_api.read_namespaced_stateful_set(  # ty: ignore[invalid-assignment]
         name=template_names.stateful_set,
         namespace=template_names.namespace,
-        async_req=True,
+        async_req=True,  # ty: ignore[unknown-argument]
     )
     existing: V1StatefulSet = await asyncio.to_thread(res.get)
 
@@ -104,10 +104,10 @@ async def clone_statefulset(template_names: TemplateResourceNames, run_names: Ru
         spec=new_spec,
     )
 
-    res: ApplyResult = v1_app_api.create_namespaced_stateful_set(
+    res: ApplyResult = v1_app_api.create_namespaced_stateful_set(  # ty: ignore[invalid-assignment]
         body=new_set,
         namespace=get_current_settings().test_execution_namespace,
-        async_req=True,
+        async_req=True,  # ty: ignore[unknown-argument]
     )
     await asyncio.to_thread(res.get)
     logger.info(f"New StatefulSet {run_names.stateful_set} created successfully for user {user_name}!")
@@ -116,10 +116,10 @@ async def clone_statefulset(template_names: TemplateResourceNames, run_names: Ru
 async def is_pod_ready(run_names: RunResourceNames) -> bool:
     """Check entire pod's status, should be ready only when all containers are ready."""
     # get pod status
-    res: ApplyResult = v1_core_api.read_namespaced_pod(
+    res: ApplyResult = v1_core_api.read_namespaced_pod(  # ty: ignore[invalid-assignment]
         name=run_names.pod,
         namespace=run_names.namespace,
-        async_req=True,
+        async_req=True,  # ty: ignore[unknown-argument]
     )
     pod = await asyncio.to_thread(res.get)
 
@@ -151,10 +151,10 @@ async def wait_for_pod(run_names: RunResourceNames, max_retries: int = 20, wait_
 async def add_ingress_rule(run_names: RunResourceNames, user_name: str) -> None:
     """Updates the Ingress definition to include new path to to service (svc_name)."""
 
-    res: ApplyResult = v1_net_api.read_namespaced_ingress(
+    res: ApplyResult = v1_net_api.read_namespaced_ingress(  # ty: ignore[invalid-assignment]
         name=run_names.ingress,
         namespace=run_names.namespace,
-        async_req=True,
+        async_req=True,  # ty: ignore[unknown-argument]
     )
     ingress = await asyncio.to_thread(res.get)
 
@@ -171,11 +171,11 @@ async def add_ingress_rule(run_names: RunResourceNames, user_name: str) -> None:
     )
 
     http_rule.paths.append(new_rule)
-    res: ApplyResult = v1_net_api.patch_namespaced_ingress(
+    res: ApplyResult = v1_net_api.patch_namespaced_ingress(  # ty: ignore[invalid-assignment]
         run_names.ingress,
         run_names.namespace,
         ingress,
-        async_req=True,
+        async_req=True,  # ty: ignore[unknown-argument]
     )
     await asyncio.to_thread(res.get)
 

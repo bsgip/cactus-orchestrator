@@ -438,7 +438,7 @@ async def test_regenerate_run_report_and_get_artifact_data(
                 # We have reporting data so regeneration will update the file_data
                 await regenerate_pdf_report(
                     file_data=artifact.file_data,
-                    raw_reporting_data=artifact.reporting_data,  # ty: ignore[invalid-argument-type]
+                    raw_reporting_data=artifact.reporting_data,
                     version=artifact.version,  # ty: ignore[invalid-argument-type]
                 )
                 original_artifact_data = artifact.file_data
