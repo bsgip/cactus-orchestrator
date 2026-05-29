@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import time
 from dataclasses import dataclass
 
 import podman as podman_api
@@ -10,6 +11,14 @@ logger = logging.getLogger(__name__)
 
 POD_READY_MAX_ATTEMPTS = 30
 POD_READY_INTERVAL_SECONDS = 2
+
+POSTGRES_READY_MAX_ATTEMPTS = 60
+POSTGRES_READY_INTERVAL_SECONDS = 1
+
+RABBIT_MQ_BROKER_URL = "amqp://guest:guest@localhost:5672"
+ENVOY_DATABASE_URL_ASYNCPG = "postgresql+asyncpg://envoy:envoy@localhost/envoy"
+ENVOY_DATABASE_URL_PSYCOPG = "postgresql+psycopg://envoy:envoy@localhost/envoy"
+ENVOY_DATABASE_URL_PLAIN = "postgresql://envoy:envoy@localhost/envoy"
 
 
 @dataclass
@@ -48,7 +57,7 @@ async def spawn(teststack_id: str, csip_aus_version: str, user_name: str) -> Tes
     resource_names = get_resource_names(teststack_id)
 
     try:
-        await asyncio.to_thread(_create_pod_and_containers, pod, images, href_prefix, settings)
+        await asyncio.to_thread(_create_pod_and_containers, pod, images, href_prefix, csip_aus_version, settings)
     except Exception:
         logger.warning(f"Failed to create pod {pod}, cleaning up")
         await destroy(teststack_id)
@@ -60,11 +69,25 @@ async def spawn(teststack_id: str, csip_aus_version: str, user_name: str) -> Tes
     return resource_names
 
 
-def _create_pod_and_containers(pod_name: str, images: dict[str, str], href_prefix: str, settings) -> None:
+def _wait_for_postgres_ready(client: podman_api.PodmanClient, pod_name: str) -> None:
+    container = client.containers.get(f"{pod_name}-postgres")
+    for attempt in range(POSTGRES_READY_MAX_ATTEMPTS):
+        result = container.exec_run(["pg_isready", "-U", "envoy", "-d", "envoy"])
+        if result.exit_code == 0:
+            logger.debug(f"Postgres ready after {attempt + 1} attempts")
+            return
+        logger.debug(f"Postgres not ready (attempt {attempt + 1}): exit_code={result.exit_code}")
+        time.sleep(POSTGRES_READY_INTERVAL_SECONDS)
+    raise CactusOrchestratorError(f"Postgres in pod {pod_name} did not become ready in time.")
+
+
+def _create_pod_and_containers(
+    pod_name: str, images: dict[str, str], href_prefix: str, csip_aus_version: str, settings
+) -> None:
     with _client() as client:
         client.pods.create(name=pod_name, Networks={settings.podman_network: {}})
 
-        # Postgres
+        # 1. Postgres
         client.containers.run(
             images["postgres"],
             detach=True,
@@ -73,15 +96,33 @@ def _create_pod_and_containers(pod_name: str, images: dict[str, str], href_prefi
             environment={"POSTGRES_PASSWORD": "envoy", "POSTGRES_USER": "envoy", "POSTGRES_DB": "envoy"},
         )
 
-        # Pubsub broker
+        # 2. Wait for postgres before running the schema init
+        _wait_for_postgres_ready(client, pod_name)
+
+        # 3. teststack-init — one-shot, blocks until exit, then removes itself
+        client.containers.run(
+            images["teststack-init"],
+            pod=pod_name,
+            name=f"{pod_name}-init",
+            environment={"ENVOY_DATABASE_URL": ENVOY_DATABASE_URL_PLAIN},
+            remove=True,
+        )
+
+        # 4. RabbitMQ
         client.containers.run(
             images["pubsub"],
             detach=True,
             pod=pod_name,
             name=f"{pod_name}-pubsub",
+            environment={
+                "RABBITMQ_DEFAULT_USER": "guest",
+                "RABBITMQ_DEFAULT_PASS": "guest",
+                "RABBITMQ_ERLANG_COOKIE": "teststack_cookie",
+                "RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS": "-setcookie teststack_cookie",
+            },
         )
 
-        # Envoy — Traefik labels enable external routing
+        # 5. Envoy — Traefik labels enable external routing
         traefik_labels = {
             "traefik.enable": "true",
             f"traefik.http.routers.{pod_name}.rule": f"PathPrefix(`{href_prefix}`)",
@@ -94,32 +135,85 @@ def _create_pod_and_containers(pod_name: str, images: dict[str, str], href_prefi
             pod=pod_name,
             name=f"{pod_name}-envoy",
             environment={
+                "DATABASE_URL": ENVOY_DATABASE_URL_ASYNCPG,
                 "HREF_PREFIX": href_prefix,
-                "DATABASE_URL": "postgresql+asyncpg://envoy:envoy@localhost/envoy",
                 "CERT_HEADER": "ssl-client-cert",
+                "ENABLE_NOTIFICATIONS": "True",
+                "RABBIT_MQ_BROKER_URL": RABBIT_MQ_BROKER_URL,
+                "ALLOW_DEVICE_REGISTRATION": "True",
+                "STATIC_REGISTRATION_PIN": "11111",
+                "LOG_CONFIG": "logconf.server.json",
+                "NOTIFICATION_DISABLE_TLS_VERIFY": "True",
             },
             labels=traefik_labels,
         )
 
-        # Taskiq worker
+        # 6. Envoy admin — same image, different entry point
+        client.containers.run(
+            images["envoy"],
+            detach=True,
+            pod=pod_name,
+            name=f"{pod_name}-envoy-admin",
+            environment={
+                "APP_MODULE": "envoy.admin.main:app",
+                "PORT": "8001",
+                "DATABASE_URL": ENVOY_DATABASE_URL_ASYNCPG,
+                "CERT_HEADER": "ssl-client-cert",
+                "ENABLE_NOTIFICATIONS": "True",
+                "RABBIT_MQ_BROKER_URL": RABBIT_MQ_BROKER_URL,
+                "ALLOW_DEVICE_REGISTRATION": "True",
+                "ADMIN_USERNAME": "admin",
+                "ADMIN_PASSWORD": "password",
+                "LOG_CONFIG": "logconf.admin.json",
+            },
+        )
+
+        # 7. Taskiq worker — notification fan-out
         client.containers.run(
             images["taskiq-worker"],
             detach=True,
             pod=pod_name,
             name=f"{pod_name}-taskiq-worker",
-            environment={"HREF_PREFIX": href_prefix},
+            command=[
+                "taskiq",
+                "worker",
+                "--no-configure-logging",
+                "envoy.notification.main:broker",
+                "envoy.notification.task.check",
+                "envoy.notification.task.transmit",
+            ],
+            environment={
+                "DATABASE_URL": ENVOY_DATABASE_URL_ASYNCPG,
+                "HREF_PREFIX": href_prefix,
+                "CERT_HEADER": "ssl-client-cert",
+                "ENABLE_NOTIFICATIONS": "True",
+                "RABBIT_MQ_BROKER_URL": RABBIT_MQ_BROKER_URL,
+                "ALLOW_DEVICE_REGISTRATION": "True",
+                "LOG_CONFIG": "logconf.notification.json",
+            },
         )
 
-        # Runner — internal only, no Traefik labels
+        # 8. Runner — internal only, no Traefik labels
         client.containers.run(
             images["runner"],
             detach=True,
             pod=pod_name,
             name=f"{pod_name}-runner",
+            environment={
+                "APP_PORT": str(settings.podman_runner_port),
+                "SERVER_URL": "http://localhost:8000",
+                "DATABASE_URL": ENVOY_DATABASE_URL_PSYCOPG,
+                "ENVOY_ADMIN_BASICAUTH_USERNAME": "admin",
+                "ENVOY_ADMIN_BASICAUTH_PASSWORD": "password",
+                "HEADER_MEDIA_PARAM_VALUE": csip_aus_version,
+            },
             healthcheck={
-                "test": ["CMD", "curl", "-f", f"http://localhost:{settings.podman_runner_port}/health"],
+                "test": [
+                    "CMD-SHELL",
+                    f"python3 -c 'import urllib.request; urllib.request.urlopen(\"http://localhost:{settings.podman_runner_port}/health\")'",
+                ],
                 "interval": 5_000_000_000,  # nanoseconds
-                "start_period": 10_000_000_000,
+                "start_period": 30_000_000_000,
                 "retries": 5,
             },
         )

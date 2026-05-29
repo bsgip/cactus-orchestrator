@@ -14,7 +14,7 @@ def podman_settings(monkeypatch):
     monkeypatch.setenv("TEST_EXECUTION_FQDN", "cactus.test.local")
     monkeypatch.setenv(
         "PODMAN_TESTSTACK_IMAGES",
-        '{"1.0": {"postgres": "postgres:16", "pubsub": "redis:7", "envoy": "envoy:test", "taskiq-worker": "worker:test", "runner": "runner:test"}}',
+        '{"1.0": {"postgres": "postgres:16", "pubsub": "rabbitmq:3", "teststack-init": "init:test", "envoy": "envoy:test", "taskiq-worker": "worker:test", "runner": "runner:test"}}',
     )
     _reset_current_settings()
     yield
