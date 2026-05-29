@@ -1,6 +1,5 @@
 import asyncio
 import logging
-import time
 from dataclasses import dataclass
 
 import podman as podman_api
@@ -11,9 +10,6 @@ logger = logging.getLogger(__name__)
 
 POD_READY_MAX_ATTEMPTS = 30
 POD_READY_INTERVAL_SECONDS = 2
-
-POSTGRES_READY_MAX_ATTEMPTS = 60
-POSTGRES_READY_INTERVAL_SECONDS = 1
 
 RABBIT_MQ_BROKER_URL = "amqp://guest:guest@localhost:5672"
 ENVOY_DATABASE_URL_ASYNCPG = "postgresql+asyncpg://envoy:envoy@localhost/envoy"
@@ -69,22 +65,12 @@ async def spawn(teststack_id: str, csip_aus_version: str, user_name: str) -> Tes
     return resource_names
 
 
-def _wait_for_postgres_ready(client: podman_api.PodmanClient, pod_name: str) -> None:
-    container = client.containers.get(f"{pod_name}-postgres")
-    for attempt in range(POSTGRES_READY_MAX_ATTEMPTS):
-        result = container.exec_run(["pg_isready", "-U", "envoy", "-d", "envoy"])
-        if result.exit_code == 0:
-            logger.debug(f"Postgres ready after {attempt + 1} attempts")
-            return
-        logger.debug(f"Postgres not ready (attempt {attempt + 1}): exit_code={result.exit_code}")
-        time.sleep(POSTGRES_READY_INTERVAL_SECONDS)
-    raise CactusOrchestratorError(f"Postgres in pod {pod_name} did not become ready in time.")
-
-
 def _create_pod_and_containers(
     pod_name: str, images: dict[str, str], href_prefix: str, csip_aus_version: str, settings
 ) -> None:
+    shared_volume_name = f"{pod_name}-shared"
     with _client() as client:
+        client.volumes.create(shared_volume_name)
         client.pods.create(name=pod_name, Networks={settings.podman_network: {}})
 
         # 1. Postgres
@@ -96,10 +82,7 @@ def _create_pod_and_containers(
             environment={"POSTGRES_PASSWORD": "envoy", "POSTGRES_USER": "envoy", "POSTGRES_DB": "envoy"},
         )
 
-        # 2. Wait for postgres before running the schema init
-        _wait_for_postgres_ready(client, pod_name)
-
-        # 3. teststack-init — one-shot, blocks until exit, then removes itself
+        # 2. teststack-init — polls postgres itself, runs SQL migrations, exits
         client.containers.run(
             images["teststack-init"],
             pod=pod_name,
@@ -146,6 +129,7 @@ def _create_pod_and_containers(
                 "NOTIFICATION_DISABLE_TLS_VERIFY": "True",
             },
             labels=traefik_labels,
+            volumes={shared_volume_name: {"bind": "/shared", "mode": "rw"}},
         )
 
         # 6. Envoy admin — same image, different entry point
@@ -166,6 +150,7 @@ def _create_pod_and_containers(
                 "ADMIN_PASSWORD": "password",
                 "LOG_CONFIG": "logconf.admin.json",
             },
+            volumes={shared_volume_name: {"bind": "/shared", "mode": "rw"}},
         )
 
         # 7. Taskiq worker — notification fan-out
@@ -191,6 +176,7 @@ def _create_pod_and_containers(
                 "ALLOW_DEVICE_REGISTRATION": "True",
                 "LOG_CONFIG": "logconf.notification.json",
             },
+            volumes={shared_volume_name: {"bind": "/shared", "mode": "rw"}},
         )
 
         # 8. Runner — internal only, no Traefik labels
@@ -207,6 +193,7 @@ def _create_pod_and_containers(
                 "ENVOY_ADMIN_BASICAUTH_PASSWORD": "password",
                 "HEADER_MEDIA_PARAM_VALUE": csip_aus_version,
             },
+            volumes={shared_volume_name: {"bind": "/shared", "mode": "rw"}},
             healthcheck={
                 "test": [
                     "CMD-SHELL",
@@ -259,3 +246,7 @@ def _destroy_pod(pod_name: str) -> None:
             pod.remove(force=True)
         except podman_api.errors.NotFound:
             logger.info(f"Pod {pod_name} not found during destroy — already removed")
+        try:
+            client.volumes.get(f"{pod_name}-shared").remove()
+        except podman_api.errors.NotFound:
+            pass
