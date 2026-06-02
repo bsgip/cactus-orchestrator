@@ -25,7 +25,6 @@ class CactusOrchestratorSettings(BaseSettings):
 
     # podman
     podman_socket: str = "/run/podman/podman.sock"
-    podman_network: str = "cactus-net"
     podman_runner_port: int = 8080
     # JSON map: csip_aus_version → {service_name: image_tag}
     podman_teststack_images: dict[str, dict[str, str]] = {}

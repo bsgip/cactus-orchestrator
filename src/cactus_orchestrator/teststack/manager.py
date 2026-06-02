@@ -4,7 +4,13 @@ from dataclasses import dataclass
 
 import podman as podman_api
 
-from cactus_orchestrator.settings import PODMAN_RUNNER_URL, TEST_EXECUTION_URL_FORMAT, CactusOrchestratorError, get_current_settings
+from cactus_orchestrator.settings import (
+    PODMAN_RUNNER_URL,
+    TEST_EXECUTION_URL_FORMAT,
+    CactusOrchestratorError,
+    CactusOrchestratorSettings,
+    get_current_settings,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -66,12 +72,23 @@ async def spawn(teststack_id: str, csip_aus_version: str, user_name: str) -> Tes
 
 
 def _create_pod_and_containers(
-    pod_name: str, images: dict[str, str], href_prefix: str, csip_aus_version: str, settings
+    pod_name: str, images: dict[str, str], href_prefix: str, csip_aus_version: str, settings: CactusOrchestratorSettings
 ) -> None:
     shared_volume_name = f"{pod_name}-shared"
     with _client() as client:
-        client.volumes.create(shared_volume_name)
-        client.pods.create(name=pod_name, Networks={settings.podman_network: {}})
+        client.volumes.create(name=shared_volume_name)
+        shared_volumes = {shared_volume_name: {"bind": "/shared", "mode": "rw"}}
+
+        client.pods.create(
+            name=pod_name,
+            port_mappings=[
+                {
+                    "container_port": settings.podman_runner_port,
+                    "host_port": 0,  # Let the OS find a free port
+                    "protocol": "tcp",
+                }
+            ],
+        )
 
         # 1. Postgres
         client.containers.run(
@@ -87,8 +104,13 @@ def _create_pod_and_containers(
             images["teststack-init"],
             pod=pod_name,
             name=f"{pod_name}-init",
-            environment={"ENVOY_DATABASE_URL": ENVOY_DATABASE_URL_PLAIN},
-            remove=True,
+            environment={
+                "ENVOY_DATABASE_URL": ENVOY_DATABASE_URL_PLAIN,
+                "MIGRATION_SENTINEL": "/shared/migrations.ready",
+            },
+            detach=True,
+            # remove=True,
+            volumes=shared_volumes,
         )
 
         # 4. RabbitMQ
@@ -119,6 +141,7 @@ def _create_pod_and_containers(
             name=f"{pod_name}-envoy",
             environment={
                 "DATABASE_URL": ENVOY_DATABASE_URL_ASYNCPG,
+                "PORT": "8000",
                 "HREF_PREFIX": href_prefix,
                 "CERT_HEADER": "ssl-client-cert",
                 "ENABLE_NOTIFICATIONS": "True",
@@ -127,9 +150,10 @@ def _create_pod_and_containers(
                 "STATIC_REGISTRATION_PIN": "11111",
                 "LOG_CONFIG": "logconf.server.json",
                 "NOTIFICATION_DISABLE_TLS_VERIFY": "True",
+                "MIGRATION_SENTINEL": "/shared/migrations.ready",
             },
             labels=traefik_labels,
-            volumes={shared_volume_name: {"bind": "/shared", "mode": "rw"}},
+            volumes=shared_volumes,
         )
 
         # 6. Envoy admin — same image, different entry point
@@ -149,13 +173,14 @@ def _create_pod_and_containers(
                 "ADMIN_USERNAME": "admin",
                 "ADMIN_PASSWORD": "password",
                 "LOG_CONFIG": "logconf.admin.json",
+                "MIGRATION_SENTINEL": "/shared/migrations.ready",
             },
-            volumes={shared_volume_name: {"bind": "/shared", "mode": "rw"}},
+            volumes=shared_volumes,
         )
 
         # 7. Taskiq worker — notification fan-out
         client.containers.run(
-            images["taskiq-worker"],
+            images["envoy"],
             detach=True,
             pod=pod_name,
             name=f"{pod_name}-taskiq-worker",
@@ -175,8 +200,9 @@ def _create_pod_and_containers(
                 "RABBIT_MQ_BROKER_URL": RABBIT_MQ_BROKER_URL,
                 "ALLOW_DEVICE_REGISTRATION": "True",
                 "LOG_CONFIG": "logconf.notification.json",
+                "MIGRATION_SENTINEL": "/shared/migrations.ready",
             },
-            volumes={shared_volume_name: {"bind": "/shared", "mode": "rw"}},
+            volumes=shared_volumes,
         )
 
         # 8. Runner — internal only, no Traefik labels
@@ -186,23 +212,25 @@ def _create_pod_and_containers(
             pod=pod_name,
             name=f"{pod_name}-runner",
             environment={
-                "APP_PORT": str(settings.podman_runner_port),
+                "PORT": str(settings.podman_runner_port),
                 "SERVER_URL": "http://localhost:8000",
+                "ENVOY_ADMIN_URL": "http://localhost:8001",
                 "DATABASE_URL": ENVOY_DATABASE_URL_PSYCOPG,
                 "ENVOY_ADMIN_BASICAUTH_USERNAME": "admin",
                 "ENVOY_ADMIN_BASICAUTH_PASSWORD": "password",
                 "HEADER_MEDIA_PARAM_VALUE": csip_aus_version,
             },
-            volumes={shared_volume_name: {"bind": "/shared", "mode": "rw"}},
-            healthcheck={
-                "test": [
-                    "CMD-SHELL",
-                    f"python3 -c 'import urllib.request; urllib.request.urlopen(\"http://localhost:{settings.podman_runner_port}/health\")'",
-                ],
-                "interval": 5_000_000_000,  # nanoseconds
-                "start_period": 30_000_000_000,
-                "retries": 5,
-            },
+            volumes=shared_volumes,
+            # These health checks run during normal operation
+            health_cmd=f"CMD-SHELL curl -f 'http://localhost:{settings.podman_runner_port}/health'",
+            health_interval="60s",
+            health_timeout="5s",
+            health_retries="1",
+            # These health checks occur at startup
+            health_startup_cmd=f"CMD-SHELL curl -f 'http://localhost:{settings.podman_runner_port}/health'",
+            health_startup_interval="1s",
+            health_startup_timeout="5s",
+            health_startup_retries="180",
         )
 
 
