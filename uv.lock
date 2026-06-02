@@ -340,7 +340,7 @@ requires-dist = [
     { name = "bandit", marker = "extra == 'dev'" },
     { name = "cactus-runner", git = "https://github.com/bsgip/cactus-runner.git?rev=v2.1.4" },
     { name = "cactus-schema", specifier = "==0.0.23" },
-    { name = "cactus-test-definitions", specifier = "==1.14.4" },
+    { name = "cactus-test-definitions", specifier = "==1.14.5" },
     { name = "coverage", marker = "extra == 'dev'" },
     { name = "cryptography" },
     { name = "fastapi", specifier = "==0.131.0" },
@@ -409,16 +409,16 @@ wheels = [
 
 [[package]]
 name = "cactus-test-definitions"
-version = "1.14.4"
+version = "1.14.5"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "dataclass-wizard" },
     { name = "pyyaml" },
     { name = "pyyaml-include" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/7b/b0/eed64ff926ca57f7ea2b3432ad0673767d1e85ed9668e44402598ec8662f/cactus_test_definitions-1.14.4.tar.gz", hash = "sha256:400b27b59797847409f66d7f575c225494b6ca678b7d44f314b0fd3a850bb8ea", size = 166749, upload-time = "2026-05-26T02:06:12.608Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/0a/e5/e27f65446ca7488328c52d5706ad3504c5e58cc6864127fe75b51249932b/cactus_test_definitions-1.14.5.tar.gz", hash = "sha256:82949a5e43e3a8c220390e585c3a251ef249b35de27c0dd014339a372f17d725", size = 166788, upload-time = "2026-06-01T23:49:12.86Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/35/43/769c9fb17341e99de7997f9f43a5976f6149d6242235470a95f9b610cec1/cactus_test_definitions-1.14.4-py3-none-any.whl", hash = "sha256:e15080a38e92454fdfa52295e12fbc1c611db53c4cbc5f41dac7409eb1159879", size = 318895, upload-time = "2026-05-26T02:06:10.744Z" },
+    { url = "https://files.pythonhosted.org/packages/f4/63/4940998a6194d23f85b3438d61f828b22af637502e6377fa93bd1aaf23b0/cactus_test_definitions-1.14.5-py3-none-any.whl", hash = "sha256:07bb246f9b5b894d860a5386d8180413dede72682d4fc2833668e28cc4829e6e", size = 318896, upload-time = "2026-06-01T23:49:10.188Z" },
 ]
 
 [[package]]
