@@ -81,7 +81,7 @@ def _create_pod_and_containers(
 
         client.pods.create(
             name=pod_name,
-            port_mappings=[
+            portmappings=[
                 {
                     "container_port": settings.podman_runner_port,
                     "host_port": 0,  # Let the OS find a free port
