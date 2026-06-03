@@ -1,4 +1,5 @@
 import asyncio
+import dataclasses
 import logging
 from dataclasses import dataclass
 
@@ -13,6 +14,7 @@ from cactus_orchestrator.settings import (
     CactusOrchestratorSettings,
     get_current_settings,
 )
+from cactus_orchestrator.teststack.images import TeststackImages
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +56,7 @@ def get_resource_names(teststack_id: str) -> TeststackResourceNames:
 async def spawn(teststack_id: str, csip_aus_version: str, user_name: str) -> TeststackResourceNames:
     settings = get_current_settings()
     images = settings.podman_teststack_images.get(csip_aus_version)
-    if not images:
+    if images is None:
         raise CactusOrchestratorError(
             f"No image config for csip_aus_version={csip_aus_version!r}. Set PODMAN_TESTSTACK_IMAGES."
         )
@@ -76,11 +78,28 @@ async def spawn(teststack_id: str, csip_aus_version: str, user_name: str) -> Tes
     return resource_names
 
 
+def _ensure_images_exist(client: podman.PodmanClient, images: TeststackImages) -> None:
+    """Fail fast with a clear error if any teststack image is missing on the podman host, rather than
+    letting an opaque container-create error surface mid-spawn. Images are pre-pulled at deploy time."""
+    refs = list(dict.fromkeys(dataclasses.astuple(images)))
+    missing = [ref for ref in refs if not client.images.exists(ref)]
+    if missing:
+        raise CactusOrchestratorError(
+            f"Teststack images missing on the podman host: {', '.join(missing)}. Pull them before spawning."
+        )
+
+
 def _create_pod_and_containers(
-    pod_name: str, images: dict[str, str], href_prefix: str, csip_aus_version: str, settings: CactusOrchestratorSettings
+    pod_name: str,
+    images: TeststackImages,
+    href_prefix: str,
+    csip_aus_version: str,
+    settings: CactusOrchestratorSettings,
 ) -> None:
     shared_volume_name = f"{pod_name}-shared"
     with _client() as client:
+        _ensure_images_exist(client, images)
+
         client.volumes.create(name=shared_volume_name)
         shared_volumes = {shared_volume_name: {"bind": "/shared", "mode": "rw"}}
 
@@ -91,7 +110,7 @@ def _create_pod_and_containers(
 
         # 1. Postgres — binds localhost so other teststacks on cactus-net can't reach it
         client.containers.run(
-            images["postgres"],
+            images.postgres,
             detach=True,
             pod=pod_name,
             name=f"{pod_name}-postgres",
@@ -101,7 +120,7 @@ def _create_pod_and_containers(
 
         # 2. teststack-init — polls postgres itself, runs SQL migrations, exits
         client.containers.run(
-            images["teststack-init"],
+            images.teststack_init,
             pod=pod_name,
             name=f"{pod_name}-init",
             environment={
@@ -115,7 +134,7 @@ def _create_pod_and_containers(
 
         # 4. RabbitMQ
         client.containers.run(
-            images["pubsub"],
+            images.pubsub,
             detach=True,
             pod=pod_name,
             name=f"{pod_name}-pubsub",
@@ -129,7 +148,7 @@ def _create_pod_and_containers(
 
         # 5. Envoy — internal only; binds 127.0.0.1 so the runner (not other teststacks) reaches it
         client.containers.run(
-            images["envoy"],
+            images.envoy,
             detach=True,
             pod=pod_name,
             name=f"{pod_name}-envoy",
@@ -152,7 +171,7 @@ def _create_pod_and_containers(
 
         # 6. Envoy admin — same image, different entry point
         client.containers.run(
-            images["envoy"],
+            images.envoy,
             detach=True,
             pod=pod_name,
             name=f"{pod_name}-envoy-admin",
@@ -175,7 +194,7 @@ def _create_pod_and_containers(
 
         # 7. Taskiq worker — notification fan-out
         client.containers.run(
-            images["envoy"],
+            images.envoy,
             detach=True,
             pod=pod_name,
             name=f"{pod_name}-taskiq-worker",
@@ -212,7 +231,10 @@ def _create_pod_and_containers(
             f"traefik.http.middlewares.{pod_name}-strip.stripprefix.prefixes": href_prefix,
             f"traefik.http.services.{pod_name}.loadbalancer.server.port": runner_port,
         }
-        runner_health_cmd = f"curl -fiSs 'http://localhost:{runner_port}/health'"
+        # python3 (not curl) — the runner image ships python but not curl.
+        runner_health_cmd = (
+            f"python3 -c 'import urllib.request; urllib.request.urlopen(\"http://localhost:{runner_port}/health\")'"
+        )
         #
         # HERE BE DRAGONS - This is mostly a moment in time workaround while podman v5 isn't widely accessible
         #
@@ -225,7 +247,7 @@ def _create_pod_and_containers(
         # (this handles environment -> env, the volumes dict -> mounts/volumes, pod, name, etc.)
         spec = client.containers._render_payload(
             {
-                "image": images["runner"],
+                "image": images.runner,
                 "pod": pod_name,
                 "name": f"{pod_name}-runner",
                 "labels": traefik_labels,

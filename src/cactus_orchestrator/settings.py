@@ -3,6 +3,8 @@ import logging
 from pydantic import PostgresDsn
 from pydantic_settings import BaseSettings
 
+from cactus_orchestrator.teststack.images import TeststackImages
+
 TEST_EXECUTION_URL_FORMAT = "https://{fqdn}/{svc_name}"
 PODMAN_RUNNER_URL = "http://{pod_name}:{svc_port}"
 
@@ -27,8 +29,8 @@ class CactusOrchestratorSettings(BaseSettings):
     podman_socket: str = "/run/podman/podman.sock"
     podman_network: str = "cactus-net"
     podman_runner_port: int = 8080
-    # JSON map: csip_aus_version → {service_name: image_tag}
-    podman_teststack_images: dict[str, dict[str, str]] = {}
+    # JSON map: csip_aus_version → image references for that version's teststack containers
+    podman_teststack_images: dict[str, TeststackImages] = {}
 
     # certificates (file paths)
     cert_serca_path: str = ""  # path to SERCA ca.crt PEM file

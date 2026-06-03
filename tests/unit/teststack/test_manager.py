@@ -5,9 +5,11 @@ import podman.errors as podman_errors
 import pytest
 
 import cactus_orchestrator.teststack.manager as teststack_manager
-from cactus_orchestrator.settings import _reset_current_settings, get_current_settings
+from cactus_orchestrator.settings import CactusOrchestratorError, _reset_current_settings, get_current_settings
+from cactus_orchestrator.teststack.images import TeststackImages
 from cactus_orchestrator.teststack.manager import (
     _destroy_pod,
+    _ensure_images_exist,
     _pod_name,
     destroy,
     get_resource_names,
@@ -26,7 +28,7 @@ def podman_settings(monkeypatch):
                 "1.0": {
                     "postgres": "postgres:16",
                     "pubsub": "rabbitmq:3",
-                    "teststack-init": "init:test",
+                    "teststack_init": "init:test",
                     "envoy": "envoy:test",
                     "runner": "runner:test",
                 }
@@ -46,6 +48,38 @@ def test_get_resource_names():
 
 def test_pod_name():
     assert _pod_name("abc123-42") == "envoy-svc-abc123-42"
+
+
+def test_settings_parses_typed_images():
+    images = get_current_settings().podman_teststack_images["1.0"]
+    assert isinstance(images, TeststackImages)
+    assert images.teststack_init == "init:test"
+    assert images.runner == "runner:test"
+
+
+@pytest.mark.asyncio
+async def test_spawn_raises_for_unknown_version():
+    with pytest.raises(CactusOrchestratorError):
+        await spawn("abc123-42", "9.9", "test-user")
+
+
+def test_ensure_images_exist_raises_when_missing():
+    images = get_current_settings().podman_teststack_images["1.0"]
+    client = MagicMock()
+    client.images.exists.side_effect = lambda ref: ref != "runner:test"
+
+    with pytest.raises(CactusOrchestratorError, match="runner:test"):
+        _ensure_images_exist(client, images)
+
+
+def test_ensure_images_exist_passes_when_all_present():
+    images = get_current_settings().podman_teststack_images["1.0"]
+    client = MagicMock()
+    client.images.exists.return_value = True
+
+    _ensure_images_exist(client, images)  # should not raise
+    # taskiq-worker reuses envoy, so each distinct image is checked exactly once
+    assert client.images.exists.call_count == 5
 
 
 @pytest.mark.asyncio
