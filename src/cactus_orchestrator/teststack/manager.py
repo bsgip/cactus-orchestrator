@@ -83,7 +83,7 @@ def _create_pod_and_containers(
             name=pod_name,
             portmappings=[
                 {
-                    "container_port": settings.podman_runner_port,
+                    "container_port": 8080,  # The port runner is listening on
                     "host_port": 0,  # Let the OS find a free port
                     "protocol": "tcp",
                 }
@@ -109,7 +109,7 @@ def _create_pod_and_containers(
                 "MIGRATION_SENTINEL": "/shared/migrations.ready",
             },
             detach=True,
-            # remove=True,
+            remove=True,
             volumes=shared_volumes,
         )
 
@@ -212,7 +212,7 @@ def _create_pod_and_containers(
             pod=pod_name,
             name=f"{pod_name}-runner",
             environment={
-                "PORT": str(settings.podman_runner_port),
+                "PORT": "8080",
                 "SERVER_URL": "http://localhost:8000",
                 "ENVOY_ADMIN_URL": "http://localhost:8001",
                 "DATABASE_URL": ENVOY_DATABASE_URL_PSYCOPG,
@@ -222,15 +222,15 @@ def _create_pod_and_containers(
             },
             volumes=shared_volumes,
             # These health checks run during normal operation
-            health_cmd=f"CMD-SHELL curl -f 'http://localhost:{settings.podman_runner_port}/health'",
+            health_cmd="curl -f 'http://localhost:8080/health'",
             health_interval="60s",
             health_timeout="5s",
-            health_retries="1",
+            health_retries=1,
             # These health checks occur at startup
-            health_startup_cmd=f"CMD-SHELL curl -f 'http://localhost:{settings.podman_runner_port}/health'",
+            health_startup_cmd="curl -f 'http://localhost:8080/health'",
             health_startup_interval="1s",
             health_startup_timeout="5s",
-            health_startup_retries="180",
+            health_startup_retries=180,
         )
 
 
