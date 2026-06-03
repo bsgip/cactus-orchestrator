@@ -2,7 +2,9 @@ import asyncio
 import logging
 from dataclasses import dataclass
 
-import podman as podman_api
+import podman
+import podman.api as podman_api
+import podman.errors as podman_errors
 
 from cactus_orchestrator.settings import (
     PODMAN_RUNNER_URL,
@@ -13,6 +15,9 @@ from cactus_orchestrator.settings import (
 )
 
 logger = logging.getLogger(__name__)
+
+SEC = 1_000_000_000  # durations in the podman SpecGenerator are integer NANOSECONDS
+
 
 POD_READY_MAX_ATTEMPTS = 30
 POD_READY_INTERVAL_SECONDS = 2
@@ -33,8 +38,8 @@ def _pod_name(teststack_id: str) -> str:
     return get_current_settings().template_service_name_prefix + teststack_id
 
 
-def _client() -> podman_api.PodmanClient:
-    return podman_api.PodmanClient(base_url=f"unix://{get_current_settings().podman_socket}")
+def _client() -> podman.PodmanClient:
+    return podman.PodmanClient(base_url=f"unix://{get_current_settings().podman_socket}")
 
 
 def get_resource_names(teststack_id: str) -> TeststackResourceNames:
@@ -71,9 +76,7 @@ async def spawn(teststack_id: str, csip_aus_version: str, user_name: str) -> Tes
     return resource_names
 
 
-def _create_pod_and_containers(
-    pod_name: str, images: dict[str, str], href_prefix: str, csip_aus_version: str, settings: CactusOrchestratorSettings
-) -> None:
+def _create_pod_and_containers(pod_name: str, images: dict[str, str], href_prefix: str, csip_aus_version: str) -> None:
     shared_volume_name = f"{pod_name}-shared"
     with _client() as client:
         client.volumes.create(name=shared_volume_name)
@@ -206,32 +209,61 @@ def _create_pod_and_containers(
         )
 
         # 8. Runner — internal only, no Traefik labels
-        client.containers.run(
-            images["runner"],
-            detach=True,
-            pod=pod_name,
-            name=f"{pod_name}-runner",
-            environment={
-                "PORT": "8080",
-                "SERVER_URL": "http://localhost:8000",
-                "ENVOY_ADMIN_URL": "http://localhost:8001",
-                "DATABASE_URL": ENVOY_DATABASE_URL_PSYCOPG,
-                "ENVOY_ADMIN_BASICAUTH_USERNAME": "admin",
-                "ENVOY_ADMIN_BASICAUTH_PASSWORD": "password",
-                "HEADER_MEDIA_PARAM_VALUE": csip_aus_version,
-            },
-            volumes=shared_volumes,
-            # These health checks run during normal operation
-            health_cmd="curl -f 'http://localhost:8080/health'",
-            health_interval="60s",
-            health_timeout="5s",
-            health_retries=1,
-            # These health checks occur at startup
-            health_startup_cmd="curl -f 'http://localhost:8080/health'",
-            health_startup_interval="1s",
-            health_startup_timeout="5s",
-            health_startup_retries=180,
+        #
+        # HERE BE DRAGONS - This is mostly a moment in time workaround while podman v5 isn't widely accessible
+        #
+        # We are using the podman api v5 - but a LOT of our servers / dev environments are podman v4
+        # We have requirements for startup health checks (which podman v4 supports) but the API client does NOT
+        #
+        # The following abuse of the internals is how we can roll us forward
+        #
+        # Let podman-py build the SpecGenerator body for everything EXCEPT health checks
+        # (this handles environment -> env, the volumes dict -> mounts/volumes, pod, name, etc.)
+        spec = client.containers._render_payload(
+            {
+                "image": images["runner"],
+                "pod": pod_name,
+                "name": f"{pod_name}-runner",
+                "environment": {
+                    "PORT": "8080",
+                    "SERVER_URL": "http://localhost:8000",
+                    "ENVOY_ADMIN_URL": "http://localhost:8001",
+                    "DATABASE_URL": ENVOY_DATABASE_URL_PSYCOPG,
+                    "ENVOY_ADMIN_BASICAUTH_USERNAME": "admin",
+                    "ENVOY_ADMIN_BASICAUTH_PASSWORD": "password",
+                    "HEADER_MEDIA_PARAM_VALUE": csip_aus_version,
+                },
+                "volumes": shared_volumes,
+            }
         )
+
+        # Regular healthcheck -> Schema2HealthConfig under "healthconfig"
+        spec["healthconfig"] = {
+            "Test": ["CMD-SHELL", "curl -fiSs 'http://localhost:8080/health'"],
+            "Interval": 600 * SEC,  # every 10 minutes
+            "Timeout": 5 * SEC,
+            "Retries": 1,
+        }
+
+        # Startup healthcheck -> StartupHealthCheck under "startupHealthConfig"
+        # (embeds the same fields as above, plus Successes)
+        spec["startupHealthConfig"] = {
+            "Test": ["CMD-SHELL", "curl -fiSs 'http://localhost:8080/health'"],
+            "Interval": 1 * SEC,
+            "Timeout": 5 * SEC,
+            "Retries": 180,
+        }
+
+        # Submit the create request via the low-level client (mirrors CreateMixin.create)
+        resp = client.api.post(
+            "/containers/create",
+            headers={"content-type": "application/json"},
+            data=podman_api.prepare_body(spec),
+        )
+        resp.raise_for_status()
+        container_id = resp.json()["Id"]
+        container = client.containers.get(container_id)
+        container.start()
 
 
 async def _wait_for_runner_healthy(pod_name: str) -> None:
@@ -272,9 +304,9 @@ def _destroy_pod(pod_name: str) -> None:
             pod = client.pods.get(pod_name)
             pod.stop()
             pod.remove(force=True)
-        except podman_api.errors.NotFound:
+        except podman_errors.NotFound:
             logger.info(f"Pod {pod_name} not found during destroy — already removed")
         try:
             client.volumes.get(f"{pod_name}-shared").remove()
-        except podman_api.errors.NotFound:
+        except podman_errors.NotFound:
             pass
