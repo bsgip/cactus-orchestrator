@@ -76,29 +76,26 @@ async def spawn(teststack_id: str, csip_aus_version: str, user_name: str) -> Tes
     return resource_names
 
 
-def _create_pod_and_containers(pod_name: str, images: dict[str, str], href_prefix: str, csip_aus_version: str) -> None:
+def _create_pod_and_containers(
+    pod_name: str, images: dict[str, str], href_prefix: str, csip_aus_version: str, settings: CactusOrchestratorSettings
+) -> None:
     shared_volume_name = f"{pod_name}-shared"
     with _client() as client:
         client.volumes.create(name=shared_volume_name)
         shared_volumes = {shared_volume_name: {"bind": "/shared", "mode": "rw"}}
 
-        client.pods.create(
-            name=pod_name,
-            portmappings=[
-                {
-                    "container_port": 8080,  # The port runner is listening on
-                    "host_port": 0,  # Let the OS find a free port
-                    "protocol": "tcp",
-                }
-            ],
-        )
+        # Join cactus-net (rather than mapping a host port): podman adds the pod name as a DNS alias, so
+        # Traefik discovers the runner's labels and routes to the pod IP, and the orchestrator reaches the
+        # runner by name.
+        client.pods.create(name=pod_name, Networks={settings.podman_network: {}})
 
-        # 1. Postgres
+        # 1. Postgres — binds localhost so other teststacks on cactus-net can't reach it
         client.containers.run(
             images["postgres"],
             detach=True,
             pod=pod_name,
             name=f"{pod_name}-postgres",
+            command=["-c", "listen_addresses=localhost"],
             environment={"POSTGRES_PASSWORD": "envoy", "POSTGRES_USER": "envoy", "POSTGRES_DB": "envoy"},
         )
 
@@ -130,19 +127,14 @@ def _create_pod_and_containers(pod_name: str, images: dict[str, str], href_prefi
             },
         )
 
-        # 5. Envoy — Traefik labels enable external routing
-        traefik_labels = {
-            "traefik.enable": "true",
-            f"traefik.http.routers.{pod_name}.rule": f"PathPrefix(`{href_prefix}`)",
-            f"traefik.http.routers.{pod_name}.entrypoints": "web",
-            f"traefik.http.services.{pod_name}.loadbalancer.server.port": "8000",
-        }
+        # 5. Envoy — internal only; binds 127.0.0.1 so the runner (not other teststacks) reaches it
         client.containers.run(
             images["envoy"],
             detach=True,
             pod=pod_name,
             name=f"{pod_name}-envoy",
             environment={
+                "HOST": "127.0.0.1",
                 "DATABASE_URL": ENVOY_DATABASE_URL_ASYNCPG,
                 "PORT": "8000",
                 "HREF_PREFIX": href_prefix,
@@ -155,7 +147,6 @@ def _create_pod_and_containers(pod_name: str, images: dict[str, str], href_prefi
                 "NOTIFICATION_DISABLE_TLS_VERIFY": "True",
                 "MIGRATION_SENTINEL": "/shared/migrations.ready",
             },
-            labels=traefik_labels,
             volumes=shared_volumes,
         )
 
@@ -167,6 +158,7 @@ def _create_pod_and_containers(pod_name: str, images: dict[str, str], href_prefi
             name=f"{pod_name}-envoy-admin",
             environment={
                 "APP_MODULE": "envoy.admin.main:app",
+                "HOST": "127.0.0.1",
                 "PORT": "8001",
                 "DATABASE_URL": ENVOY_DATABASE_URL_ASYNCPG,
                 "CERT_HEADER": "ssl-client-cert",
@@ -208,7 +200,19 @@ def _create_pod_and_containers(pod_name: str, images: dict[str, str], href_prefi
             volumes=shared_volumes,
         )
 
-        # 8. Runner — internal only, no Traefik labels
+        # 8. Runner — the ingress: the Traefik labels (with a StripPrefix middleware) live here, not on
+        # envoy, so external device traffic flows through the runner's proxy before reaching envoy.
+        runner_port = str(settings.podman_runner_port)
+        traefik_labels = {
+            "traefik.enable": "true",
+            "traefik.docker.network": settings.podman_network,
+            f"traefik.http.routers.{pod_name}.rule": f"PathPrefix(`{href_prefix}`)",
+            f"traefik.http.routers.{pod_name}.entrypoints": "web",
+            f"traefik.http.routers.{pod_name}.middlewares": f"{pod_name}-strip",
+            f"traefik.http.middlewares.{pod_name}-strip.stripprefix.prefixes": href_prefix,
+            f"traefik.http.services.{pod_name}.loadbalancer.server.port": runner_port,
+        }
+        runner_health_cmd = f"curl -fiSs 'http://localhost:{runner_port}/health'"
         #
         # HERE BE DRAGONS - This is mostly a moment in time workaround while podman v5 isn't widely accessible
         #
@@ -224,8 +228,9 @@ def _create_pod_and_containers(pod_name: str, images: dict[str, str], href_prefi
                 "image": images["runner"],
                 "pod": pod_name,
                 "name": f"{pod_name}-runner",
+                "labels": traefik_labels,
                 "environment": {
-                    "PORT": "8080",
+                    "PORT": runner_port,
                     "SERVER_URL": "http://localhost:8000",
                     "ENVOY_ADMIN_URL": "http://localhost:8001",
                     "DATABASE_URL": ENVOY_DATABASE_URL_PSYCOPG,
@@ -239,7 +244,7 @@ def _create_pod_and_containers(pod_name: str, images: dict[str, str], href_prefi
 
         # Regular healthcheck -> Schema2HealthConfig under "healthconfig"
         spec["healthconfig"] = {
-            "Test": ["CMD-SHELL", "curl -fiSs 'http://localhost:8080/health'"],
+            "Test": ["CMD-SHELL", runner_health_cmd],
             "Interval": 600 * SEC,  # every 10 minutes
             "Timeout": 5 * SEC,
             "Retries": 1,
@@ -248,7 +253,7 @@ def _create_pod_and_containers(pod_name: str, images: dict[str, str], href_prefi
         # Startup healthcheck -> StartupHealthCheck under "startupHealthConfig"
         # (embeds the same fields as above, plus Successes)
         spec["startupHealthConfig"] = {
-            "Test": ["CMD-SHELL", "curl -fiSs 'http://localhost:8080/health'"],
+            "Test": ["CMD-SHELL", runner_health_cmd],
             "Interval": 1 * SEC,
             "Timeout": 5 * SEC,
             "Retries": 180,
