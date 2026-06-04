@@ -1,6 +1,7 @@
 import asyncio
 import dataclasses
 import logging
+import time
 from dataclasses import dataclass
 
 import podman
@@ -65,16 +66,22 @@ async def spawn(teststack_id: str, csip_aus_version: str, user_name: str) -> Tes
     href_prefix = f"/{pod}"
     resource_names = get_resource_names(teststack_id)
 
+    t0 = time.monotonic()
     try:
         await asyncio.to_thread(_create_pod_and_containers, pod, images, href_prefix, csip_aus_version, settings)
     except Exception:
         logger.warning(f"Failed to create pod {pod}, cleaning up")
         await destroy(teststack_id)
         raise
+    created = time.monotonic()
 
     await _wait_for_runner_healthy(pod)
+    ready = time.monotonic()
 
-    logger.info(f"Teststack pod {pod} ready for user {user_name}")
+    logger.info(
+        f"Teststack pod {pod} ready for user {user_name} "
+        f"(create {created - t0:.1f}s, healthy +{ready - created:.1f}s, total {ready - t0:.1f}s)"
+    )
     return resource_names
 
 
@@ -97,6 +104,8 @@ def _create_pod_and_containers(
     settings: CactusOrchestratorSettings,
 ) -> None:
     shared_volume_name = f"{pod_name}-shared"
+    t0 = time.monotonic()
+    timings: list[tuple[str, float]] = []
     with _client() as client:
         _ensure_images_exist(client, images)
 
@@ -107,6 +116,7 @@ def _create_pod_and_containers(
         # Traefik discovers the runner's labels and routes to the pod IP, and the orchestrator reaches the
         # runner by name.
         client.pods.create(name=pod_name, Networks={settings.podman_network: {}})
+        timings.append(("pod", time.monotonic() - t0))
 
         # 1. Postgres — binds localhost so other teststacks on cactus-net can't reach it
         client.containers.run(
@@ -117,6 +127,7 @@ def _create_pod_and_containers(
             command=["-c", "listen_addresses=localhost"],
             environment={"POSTGRES_PASSWORD": "envoy", "POSTGRES_USER": "envoy", "POSTGRES_DB": "envoy"},
         )
+        timings.append(("postgres", time.monotonic() - t0))
 
         # 2. teststack-init — polls postgres itself, runs SQL migrations, exits
         client.containers.run(
@@ -131,6 +142,7 @@ def _create_pod_and_containers(
             remove=True,
             volumes=shared_volumes,
         )
+        timings.append(("init", time.monotonic() - t0))
 
         # 4. RabbitMQ
         client.containers.run(
@@ -145,6 +157,7 @@ def _create_pod_and_containers(
                 "RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS": "-setcookie teststack_cookie",
             },
         )
+        timings.append(("pubsub", time.monotonic() - t0))
 
         # 5. Envoy — internal only; binds 127.0.0.1 so the runner (not other teststacks) reaches it
         client.containers.run(
@@ -168,6 +181,7 @@ def _create_pod_and_containers(
             },
             volumes=shared_volumes,
         )
+        timings.append(("envoy", time.monotonic() - t0))
 
         # 6. Envoy admin — same image, different entry point
         client.containers.run(
@@ -191,6 +205,7 @@ def _create_pod_and_containers(
             },
             volumes=shared_volumes,
         )
+        timings.append(("envoy-admin", time.monotonic() - t0))
 
         # 7. Taskiq worker — notification fan-out
         client.containers.run(
@@ -218,6 +233,7 @@ def _create_pod_and_containers(
             },
             volumes=shared_volumes,
         )
+        timings.append(("taskiq-worker", time.monotonic() - t0))
 
         # 8. Runner — the ingress: the Traefik labels (with a StripPrefix middleware) live here, not on
         # envoy, so external device traffic flows through the runner's proxy before reaching envoy.
@@ -291,6 +307,11 @@ def _create_pod_and_containers(
         container_id = resp.json()["Id"]
         container = client.containers.get(container_id)
         container.start()
+        timings.append(("runner", time.monotonic() - t0))
+
+    if logger.isEnabledFor(logging.DEBUG):
+        breakdown = ", ".join(f"{name} +{offset:.2f}s" for name, offset in timings)
+        logger.debug(f"Pod {pod_name} container create timeline: {breakdown}")
 
 
 async def _wait_for_runner_healthy(pod_name: str) -> None:
