@@ -134,6 +134,10 @@ class _EnrichedControl:
     step_name: str  # step active when the device received this control
 
     @property
+    def label(self) -> str:
+        return self.step_name or f"DERC{self.doe.dynamic_operating_envelope_id}"
+
+    @property
     def export_limit(self) -> float | None:
         return self.doe.export_limit_watts
 
@@ -1020,7 +1024,7 @@ def _build_trace(  # noqa: C901
             ramp_secs, desc = _compute_ramp(ev.source, ev.time, delta_w, set_max_w, defaults_by_group)
         rel_secs = (ev.time - test_start).total_seconds() + video_offset_seconds
         if isinstance(ev.source, _EnrichedControl):
-            ctrl_label = f"DERC{ev.source.doe.dynamic_operating_envelope_id}"
+            ctrl_label = ev.source.label
         elif ev.source is not None:
             gid = getattr(ev.source, "site_control_group_id", "?")
             ctrl_label = f"Default DERP{gid}"
