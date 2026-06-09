@@ -20,10 +20,10 @@ logger = logging.getLogger(__name__)
 
 SEC = 1_000_000_000  # durations in the podman SpecGenerator are integer NANOSECONDS
 
-
 POD_READY_MAX_ATTEMPTS = 30
 POD_READY_INTERVAL_SECONDS = 2
 
+# These are NOT security concerns - They are only used internally within a test pod and are not exposed externally
 RABBIT_MQ_BROKER_URL = "amqp://guest:guest@localhost:5672"
 ENVOY_DATABASE_URL_ASYNCPG = "postgresql+asyncpg://envoy:envoy@localhost/envoy"
 ENVOY_DATABASE_URL_PSYCOPG = "postgresql+psycopg://envoy:envoy@localhost/envoy"
@@ -244,10 +244,6 @@ def _create_pod_and_containers(
             f"traefik.http.middlewares.{pod_name}-strip.stripprefix.prefixes": href_prefix,
             f"traefik.http.services.{pod_name}.loadbalancer.server.port": runner_port,
         }
-        # python3 (not curl) — the runner image ships python but not curl.
-        runner_health_cmd = (
-            f"python3 -c 'import urllib.request; urllib.request.urlopen(\"http://localhost:{runner_port}/health\")'"
-        )
         #
         # HERE BE DRAGONS - This is mostly a moment in time workaround while podman v5 isn't widely accessible
         #
@@ -280,7 +276,7 @@ def _create_pod_and_containers(
 
         # Regular healthcheck -> Schema2HealthConfig under "healthconfig"
         spec["healthconfig"] = {
-            "Test": ["CMD-SHELL", runner_health_cmd],
+            "Test": ["CMD-SHELL", f"curl -fiSs 'http://localhost:{runner_port}/health'"],
             "Interval": 600 * SEC,  # every 10 minutes
             "Timeout": 5 * SEC,
             "Retries": 1,
@@ -289,7 +285,7 @@ def _create_pod_and_containers(
         # Startup healthcheck -> StartupHealthCheck under "startupHealthConfig"
         # (embeds the same fields as above, plus Successes)
         spec["startupHealthConfig"] = {
-            "Test": ["CMD-SHELL", runner_health_cmd],
+            "Test": ["CMD-SHELL", f"curl -fiSs 'http://localhost:{runner_port}/health'"],
             "Interval": 1 * SEC,
             "Timeout": 5 * SEC,
             "Retries": 180,
