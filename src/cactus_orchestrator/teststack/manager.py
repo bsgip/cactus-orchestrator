@@ -1,5 +1,4 @@
 import asyncio
-import dataclasses
 import logging
 import time
 from dataclasses import dataclass
@@ -85,17 +84,6 @@ async def spawn(teststack_id: str, csip_aus_version: str, user_name: str) -> Tes
     return resource_names
 
 
-def _ensure_images_exist(client: podman.PodmanClient, images: TeststackImages) -> None:
-    """Fail fast with a clear error if any teststack image is missing on the podman host, rather than
-    letting an opaque container-create error surface mid-spawn. Images are pre-pulled at deploy time."""
-    refs = list(dict.fromkeys(dataclasses.astuple(images)))
-    missing = [ref for ref in refs if not client.images.exists(ref)]
-    if missing:
-        raise CactusOrchestratorError(
-            f"Teststack images missing on the podman host: {', '.join(missing)}. Pull them before spawning."
-        )
-
-
 def _create_pod_and_containers(
     pod_name: str,
     images: TeststackImages,
@@ -107,15 +95,18 @@ def _create_pod_and_containers(
     t0 = time.monotonic()
     timings: list[tuple[str, float]] = []
     with _client() as client:
-        _ensure_images_exist(client, images)
-
         client.volumes.create(name=shared_volume_name)
         shared_volumes = {shared_volume_name: {"bind": "/shared", "mode": "rw"}}
 
         # Join cactus-net (rather than mapping a host port): podman adds the pod name as a DNS alias, so
         # Traefik discovers the runner's labels and routes to the pod IP, and the orchestrator reaches the
         # runner by name.
-        client.pods.create(name=pod_name, Networks={settings.podman_network: {}})
+        # userns=auto maps the pod's container-root to a high, unprivileged host UID range (allocated
+        # from the rootful user's /etc/subuid + /etc/subgid). Under the rootful socket this is what keeps
+        # a teststack breakout from being host-root. The pod owns the single shared namespace; every
+        # member below must also pass userns_mode="auto" to join it — without it podman-py emits a
+        # conflicting container-level id-mapping and the OCI runtime refuses the join.
+        client.pods.create(name=pod_name, Networks={settings.podman_network: {}}, userns={"nsmode": "auto"})
         timings.append(("pod", time.monotonic() - t0))
 
         # 1. Postgres — binds localhost so other teststacks on cactus-net can't reach it
@@ -123,6 +114,7 @@ def _create_pod_and_containers(
             images.postgres,
             detach=True,
             pod=pod_name,
+            userns_mode="auto",
             name=f"{pod_name}-postgres",
             command=["-c", "listen_addresses=localhost"],
             environment={"POSTGRES_PASSWORD": "envoy", "POSTGRES_USER": "envoy", "POSTGRES_DB": "envoy"},
@@ -133,6 +125,7 @@ def _create_pod_and_containers(
         client.containers.run(
             images.teststack_init,
             pod=pod_name,
+            userns_mode="auto",
             name=f"{pod_name}-init",
             environment={
                 "ENVOY_DATABASE_URL": ENVOY_DATABASE_URL_PLAIN,
@@ -149,6 +142,7 @@ def _create_pod_and_containers(
             images.pubsub,
             detach=True,
             pod=pod_name,
+            userns_mode="auto",
             name=f"{pod_name}-pubsub",
             environment={
                 "RABBITMQ_DEFAULT_USER": "guest",
@@ -164,6 +158,7 @@ def _create_pod_and_containers(
             images.envoy,
             detach=True,
             pod=pod_name,
+            userns_mode="auto",
             name=f"{pod_name}-envoy",
             environment={
                 "HOST": "127.0.0.1",
@@ -188,6 +183,7 @@ def _create_pod_and_containers(
             images.envoy,
             detach=True,
             pod=pod_name,
+            userns_mode="auto",
             name=f"{pod_name}-envoy-admin",
             environment={
                 "APP_MODULE": "envoy.admin.main:app",
@@ -212,6 +208,7 @@ def _create_pod_and_containers(
             images.envoy,
             detach=True,
             pod=pod_name,
+            userns_mode="auto",
             name=f"{pod_name}-taskiq-worker",
             command=[
                 "taskiq",
@@ -265,6 +262,7 @@ def _create_pod_and_containers(
             {
                 "image": images.runner,
                 "pod": pod_name,
+                "userns_mode": "auto",
                 "name": f"{pod_name}-runner",
                 "labels": traefik_labels,
                 "environment": {

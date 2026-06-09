@@ -9,7 +9,6 @@ from cactus_orchestrator.settings import CactusOrchestratorError, _reset_current
 from cactus_orchestrator.teststack.images import TeststackImages
 from cactus_orchestrator.teststack.manager import (
     _destroy_pod,
-    _ensure_images_exist,
     _pod_name,
     destroy,
     get_resource_names,
@@ -63,25 +62,6 @@ async def test_spawn_raises_for_unknown_version():
         await spawn("abc123-42", "9.9", "test-user")
 
 
-def test_ensure_images_exist_raises_when_missing():
-    images = get_current_settings().podman_teststack_images["1.0"]
-    client = MagicMock()
-    client.images.exists.side_effect = lambda ref: ref != "runner:test"
-
-    with pytest.raises(CactusOrchestratorError, match="runner:test"):
-        _ensure_images_exist(client, images)
-
-
-def test_ensure_images_exist_passes_when_all_present():
-    images = get_current_settings().podman_teststack_images["1.0"]
-    client = MagicMock()
-    client.images.exists.return_value = True
-
-    _ensure_images_exist(client, images)  # should not raise
-    # taskiq-worker reuses envoy, so each distinct image is checked exactly once
-    assert client.images.exists.call_count == 5
-
-
 @pytest.mark.asyncio
 async def test_destroy_handles_not_found():
     with patch.object(teststack_manager, "_destroy_pod", side_effect=podman_errors.NotFound("pod", None)):
@@ -129,10 +109,16 @@ def test_pod_on_cactus_net_runner_public_internals_localhost():
     assert pod_kwargs["name"] == "envoy-svc-abc123-42"
     assert set(pod_kwargs["Networks"]) == {settings.podman_network}
 
-    # Every container (run-created internals + the low-level runner) is a member of the pod.
+    # The pod owns a userns=auto namespace so container-root maps off host-root under the rootful socket.
+    assert pod_kwargs["userns"] == {"nsmode": "auto"}
+
+    # Every container (run-created internals + the low-level runner) is a member of the pod, and each
+    # must carry userns_mode="auto" to join the pod's namespace (else the OCI runtime rejects the join).
     for c in runs.values():
         assert c["pod"] == "envoy-svc-abc123-42"
+        assert c["userns_mode"] == "auto"
     assert runner_spec["pod"] == "envoy-svc-abc123-42"
+    assert runner_spec["userns_mode"] == "auto"
 
     # Traefik routing lives on the runner (the ingress), incl. the StripPrefix middleware.
     runner_labels = runner_spec["labels"]
