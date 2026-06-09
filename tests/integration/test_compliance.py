@@ -98,3 +98,18 @@ async def test_update_compliance_request(client, pg_compliance_config, valid_jwt
 
     # Assert
     assert res.status_code == HTTPStatus.OK
+
+
+@pytest.mark.asyncio
+async def test_delete_compliance_request(client, pg_compliance_config, valid_jwt_user1):
+    # Arrange
+    compliance_request_id = 1
+
+    # Act
+    res = await client.delete(
+        uri.ComplianceRequest.format(compliance_request_id=compliance_request_id),
+        headers={"Authorization": f"Bearer {valid_jwt_user1}"},
+    )
+
+    # Assert
+    assert res.status_code == HTTPStatus.OK

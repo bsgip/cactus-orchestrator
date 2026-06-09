@@ -14,6 +14,7 @@ from cactus_orchestrator.auth import UserContext
 from cactus_orchestrator.crud import (
     ProcedureRunAggregated,
     count_playlist_runs,
+    delete_compliance_request,
     insert_compliance_generation_record,
     insert_compliance_request,
     insert_playlist_runs,
@@ -784,6 +785,22 @@ async def test_update_compliance_request(pg_compliance_config):
 
         for field, value in new_compliance_values.items():
             assert getattr(request, field) == value
+
+
+async def test_delete_compliance_request(pg_compliance_config):
+    # Arrange
+    compliance_request_id = 1
+
+    async with generate_async_session(pg_compliance_config) as session:
+        request = await select_compliance_request(session=session, compliance_request_id=compliance_request_id)
+        assert request is not None
+        await delete_compliance_request(session=session, compliance_request=request)
+        await session.commit()
+
+    # Assert
+    async with generate_async_session(pg_compliance_config) as session:
+        with pytest.raises(NoResultFound):
+            await select_compliance_request(session=session, compliance_request_id=compliance_request_id)
 
 
 @pytest.mark.asyncio
