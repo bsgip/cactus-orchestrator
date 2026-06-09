@@ -1,52 +1,9 @@
 # cactus-orchestrator
 
-Web API for management of the Kubernetes platform and orchestration of test execution environments.
-
-The current implementation relies on 'template' resources (defined in YAML) that are cloned into active instances as requests come in.
-
-## Core Resources
-
-- **teststack StatefulSet resource**: Templated resource that defines the Pod running the teststack components (envoy, envoy-admin, db, pubsub, etc.).
-- **teststack Service resource**: A templated `Service` resource created alongside the StatefulSet, used to route requests to the teststack Pod.
-- **mTLS Ingress resource**: An NGINX-based ingress controller configured for mutual TLS. It handles certificate forwarding and client authentication in the `test-execution` namespace.
-- **TLS Ingress resource**: *TODO* — This will secure the orchestrator API itself.
-
-## mTLS Ingress Certificates
-
-- **Custom CA cert/key pair**: Used to sign client certificates. These are stored as separate Kubernetes `Secrets`. The CA certificate is referenced in the Ingress spec for client certificate validation.
-- **Server cert/key pair**: Signed by the custom CA above. Stored in a single TLS secret and referenced in the Ingress.
-- **Client cert/key pair**: Generated and signed dynamically for each request to the orchestrator API.
+Web API for management of the podman platform and orchestration of test execution environments.
 
 
-
-# Nomenclature
-
-- **teststack instance**: A full deployment of the cactus test environment, composed of:
-  - A Kubernetes `Service` resource (for routing)
-  - A Kubernetes `StatefulSet` resource that runs a single `Pod`  consisting of multiple containers:
-    - **cactus-runner**: The main engine responsible for executing tests.
-    - **envoy**: A network proxy used for routing and traffic control within the teststack.
-    - **envoy-admin**: An administrative interface for Envoy, used for inspection, debugging, and dynamic configuration.
-    - **envoy-db**: The database component used by Envoy for storing state and configuration.
-    - **subscription/notification**: Components enabling Envoy’s pub/sub functionality, such as pushing updates or results.
-
-- **template**: A pre-created Kubernetes resource (StatefulSet, Service, etc.) stored in a dedicated namespace and used as a blueprint for launching new teststack instances.
-
-- **test-execution namespace**: The namespace in which active teststack instances are created and managed.
-
-- **test-orchestration namespace**: The namespace where the cactus-orchestrator and cactus-ui components run.
-
-- **teststack template namespace**: The namespace where the reusable resource templates for teststack instances are stored.
-
-- **mTLS Ingress**: An NGINX-based ingress configured for mutual TLS, securing traffic between clients and teststack instances.
-
-- **TLS Ingress**: A planned ingress for securing access to the Cactus orchestrator and UI components.
-
-- **idle teardown**: A background task that identifies and tears down inactive or long-lived teststack instances to free up resources.
-
----
-
-# Environment Variables
+## Environment Variables
 
 | Environment Variable | Default Value | Description |
 |----------------------|----------------|-------------|
@@ -69,7 +26,46 @@ The current implementation relies on 'template' resources (defined in YAML) that
 | `IDLETEARDOWNTASK_REPEAT_EVERY_SECONDS` | `120` | Frequency (in seconds) at which the idle teardown task runs. |
 | `IGNORED_CSIP_AUS_VERSIONS` | `[]` | JSON Encoded list of strings - what CSIP-Aus versions to be removed/ignored from the supported version list |
 
----
+
+## rooful podman setup
+
+The test pods will be assigned unique hostnames which requires a rootful podman setup
+
+```bash
+# Enable the rootful podman socket
+sudo systemctl enable --now podman.socket
+
+# Verify the socket is active
+sudo systemctl status podman.socket
+sudo ls -la /run/podman/podman.sock
+
+# Allow your user to access it via new group "podman"
+sudo groupadd podman
+sudo usermod -aG podman $USER
+sudo chown root:podman /run/podman/
+sudo chown root:podman /run/podman/podman.sock
+sudo chmod 770 /run/podman/podman.sock
+
+# Then export in your shell profile 
+# This will make all podman commands use the root socket rather than your user socket
+echo 'export CONTAINER_HOST=unix:///run/podman/podman.sock' >> ~/.bashrc
+source ~/.bashrc
+
+# The podman.sock will be recreated every restart - to make the socket group permanent
+sudo mkdir -p /etc/systemd/system/podman.socket.d
+sudo tee /etc/systemd/system/podman.socket.d/override.conf <<EOF
+[Socket]
+SocketGroup=podman
+SocketMode=0770
+
+[Service]
+RuntimeDirectoryMode=0770
+EOF
+sudo systemctl daemon-reload
+sudo systemctl restart podman.socket
+```
+
+
 ## Database-related
 - Only tested with **PostgreSQL 16**.
 - Uses **SQLAlchemy with asyncpg**.
