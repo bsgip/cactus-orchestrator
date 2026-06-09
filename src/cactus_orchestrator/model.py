@@ -32,9 +32,6 @@ class User(Base):
     subscription_domain: Mapped[str | None] = mapped_column(
         String, nullable=True
     )  # What FQDN is allowed to be subscribed
-    is_static_uri: Mapped[bool] = mapped_column(
-        BOOLEAN, server_default="0"
-    )  # If True - always use the same URI for all spawned instances (this will limit them to a single run at a time)
     pen: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0
     )  # 0 is the only reserved PEN so can be used as the NULL value.
@@ -92,6 +89,10 @@ class RunGroup(Base):
         Integer, server_default="0"
     )  # This is a "best effort" counter - can be subject to race conditions
 
+    is_static_uri: Mapped[bool] = mapped_column(
+        BOOLEAN
+    )  # If True - always use the same URI for all spawned instances (this will limit users to a single run at a time)
+
     runs: Mapped[list["Run"]] = relationship(lazy="raise", back_populates="run_group")
     user: Mapped["User"] = relationship(lazy="raise")
 
@@ -130,9 +131,6 @@ class Run(Base):
 
     run_id: Mapped[int] = mapped_column(name="id", primary_key=True, autoincrement=True)
     run_group_id: Mapped[int] = mapped_column(ForeignKey("run_group.id"))
-    teststack_id: Mapped[str] = mapped_column(
-        String, nullable=False, index=True
-    )  # We can't guarantee uniqueness as some users have "is_static_uri" set. Enforce uniqueness for running instances
 
     testprocedure_id: Mapped[str] = mapped_column(String, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

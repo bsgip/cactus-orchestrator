@@ -3,11 +3,6 @@ import logging
 from pydantic import PostgresDsn
 from pydantic_settings import BaseSettings
 
-from cactus_orchestrator.teststack.images import TeststackImages
-
-TEST_EXECUTION_URL_FORMAT = "https://{fqdn}/{svc_name}"
-PODMAN_RUNNER_URL = "http://{pod_name}:{svc_port}"
-
 logger = logging.getLogger(__name__)
 
 
@@ -22,15 +17,15 @@ class CactusOrchestratorSettings(BaseSettings):
     test_execution_fqdn: str
     test_execution_comms_timeout_seconds: int = 120
 
-    # teststack pod naming — prefix applied to teststack_id to form pod name and external URL path
-    template_service_name_prefix: str = "envoy-svc-"
+    # teststack pod naming — prefix applied to pod_id to form pod name and external URL path
+    pod_name_prefix: str = "run-"
 
     # podman
     podman_socket: str = "/run/podman/podman.sock"
-    podman_network: str = "cactus-net"
+    podman_network: str = (
+        "cactus-net"  # The network that the test pods will execute under (and that orchestrator runs in)
+    )
     podman_runner_port: int = 8080
-    # JSON map: csip_aus_version → image references for that version's teststack containers
-    podman_teststack_images: dict[str, TeststackImages] = {}
 
     # certificates (file paths)
     cert_serca_path: str = ""  # path to SERCA ca.crt PEM file
