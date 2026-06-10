@@ -10,7 +10,7 @@ from cactus_schema.orchestrator import (
     ComplianceRequestUpdateRequest,
     uri,
 )
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from fastapi_async_sqlalchemy import db
 from fastapi_pagination import Page, paginate
 from sqlalchemy.exc import NoResultFound
@@ -18,6 +18,7 @@ from sqlalchemy.exc import NoResultFound
 from cactus_orchestrator.api.common import map_to_compliance_request_response, select_user_or_raise
 from cactus_orchestrator.auth import AuthPerm, UserContext, jwt_validator
 from cactus_orchestrator.crud import (
+    delete_compliance_request,
     insert_compliance_request,
     select_user_compliance_request,
     select_user_compliance_requests,
@@ -132,3 +133,28 @@ async def update_compliance_request_endpoint(
 
     await db.session.commit()
     return await map_to_compliance_request_response(request)
+
+
+# delete_compliance_request
+@router.delete(uri.ComplianceRequest, status_code=HTTPStatus.OK)
+async def delete_compliance_request_endpoint(
+    compliance_request_id: int,
+    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.user_all}))],
+) -> Response:
+    user = await select_user_or_raise(db.session, user_context)
+
+    # get compliance request
+    try:
+        request = await select_user_compliance_request(
+            session=db.session,
+            user_id=user.user_id,
+            compliance_request_id=compliance_request_id,
+        )
+    except NoResultFound as exc:
+        logger.debug(exc)
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Not Found") from exc
+
+    await delete_compliance_request(session=db.session, compliance_request=request)
+
+    await db.session.commit()
+    return Response(status_code=HTTPStatus.OK)

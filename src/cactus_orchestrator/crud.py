@@ -553,6 +553,10 @@ async def update_compliance_request(
     await session.flush()
 
 
+async def delete_compliance_request(session: AsyncSession, compliance_request: ComplianceRequest) -> None:
+    await session.delete(compliance_request)
+
+
 async def insert_playlist_runs(
     session: AsyncSession,
     run_group_id: int,
