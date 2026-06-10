@@ -7,7 +7,7 @@ import podman.api as podman_api
 import podman.errors as podman_errors
 
 from cactus_orchestrator.pod.models import PodImages, PodResources, PodRoutes
-from cactus_orchestrator.settings import CactusOrchestratorError, CactusOrchestratorSettings
+from cactus_orchestrator.settings import CactusOrchestratorError
 
 logger = logging.getLogger(__name__)
 
@@ -24,15 +24,46 @@ ENVOY_DATABASE_URL_PSYCOPG = "postgresql+psycopg://envoy:envoy@localhost/envoy"
 ENVOY_DATABASE_URL_PLAIN = "postgresql://envoy:envoy@localhost/envoy"
 
 
-def _pod_name(settings: CactusOrchestratorSettings, pod_id: str) -> str:
-    return settings.pod_name_prefix + pod_id
-
-
 def _client(podman_socket: str) -> podman.PodmanClient:
     return podman.PodmanClient(base_url=f"unix://{podman_socket}")
 
 
-def _do_ensure_images(podman_socket: str, images: PodImages) -> None:
+async def get_podman_version(podman_socket: str) -> tuple[int, int, int]:
+    """Fetches the underlying podman version detected via the podman_socket"""
+    with _client(podman_socket) as client:
+        try:
+            raw_version = await asyncio.to_thread(_fetch_raw_podman_version, client)
+        except Exception as exc:
+            logger.warning(f"Failed to fetch version for {podman_socket}", exc_info=exc)
+            raise
+
+    # We are going to make a lot of assumptions here
+    version_parts: list[int] = []
+    for raw_v_part in raw_version.split("."):
+        try:
+            version_parts.append(int(raw_v_part))
+        except (ValueError, TypeError):
+            version_parts.append(0)
+            logger.error(f"Unable to properly parse version '{raw_version}' - '{raw_v_part}' is not a number")
+
+    if len(version_parts) < 3:
+        # If we have "2.3" return (2,3,0)
+        return tuple(version_parts + [0] * (3 - len(version_parts)))  # ty:ignore[invalid-return-type]
+    else:
+        return tuple(version_parts[:3])  # ty:ignore[invalid-return-type]
+
+
+def _fetch_raw_podman_version(client: podman.PodmanClient) -> str:
+    version_string: str | None = client.version().get("Version", None)
+    if not version_string:
+        raise Exception(
+            "Couldn't extract 'Version' property from the version response. Unable to determine podman version."
+        )
+    return version_string
+
+
+def _do_ensure_images(podman_socket: str, images: PodImages) -> int:
+    pulled_images = 0
     with _client(podman_socket) as client:
         for name, image_name in images.__dict__.items():
             if name == "csip_aus_version":
@@ -47,13 +78,23 @@ def _do_ensure_images(podman_socket: str, images: PodImages) -> None:
             except podman.errors.ImageNotFound:
                 logger.info(f"PodImages.{name} '{image_name}' doesn't exist and will be fetched.")
                 client.images.pull(image_name)
+                pulled_images = pulled_images + 1
                 logger.debug(f"PodImages.{name} '{image_name}' successfully pulled.")
+    return pulled_images
 
 
 async def ensure_images(podman_socket: str, images: PodImages) -> None:
     """Ensures that the specified images have been pulled for the configured podman socket. Raises an exception
     if the images cannot be pulled for whatever reason. Should return relatively quickly if all images exist."""
-    await asyncio.to_thread(_do_ensure_images, podman_socket, images)
+
+    t0 = time.monotonic()
+    pulled_images = await asyncio.to_thread(_do_ensure_images, podman_socket, images)
+    pulled_t = time.monotonic()
+
+    if pulled_images:
+        logger.info(f"{pulled_images} images were pulled in {pulled_t - t0:.1f}s")
+    else:
+        logger.debug("No images needed to be pulled.")
 
 
 async def create_pod_run(
@@ -97,12 +138,11 @@ def _create_pod_and_containers(
     resources: PodResources,
     routes: PodRoutes,
 ) -> None:
-    shared_volume_name = f"{resources.pod_name}-shared"
     t0 = time.monotonic()
     timings: list[tuple[str, float]] = []
 
-    client.volumes.create(name=shared_volume_name)
-    shared_volumes = {shared_volume_name: {"bind": "/shared", "mode": "rw"}}
+    client.volumes.create(name=resources.volume_name)
+    shared_volumes = {resources.volume_name: {"bind": "/shared", "mode": "rw"}}
 
     # Join cactus-net (rather than mapping a host port): podman adds the pod name as a DNS alias, so
     # Traefik discovers the runner's labels and routes to the pod IP, and the orchestrator reaches the
@@ -162,7 +202,7 @@ def _create_pod_and_containers(
             "RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS": "-setcookie teststack_cookie",
         },
     )
-    timings.append(("pubsub", time.monotonic() - t0))
+    timings.append(("rabbitmq", time.monotonic() - t0))
 
     # 5. Envoy — internal only; binds 127.0.0.1 so the runner (not other teststacks) reaches it
     client.containers.run(
@@ -358,7 +398,7 @@ def _destroy_pod(client: podman.PodmanClient, resources: PodResources) -> None:
 
     # Cleanup any volumes
     try:
-        client.volumes.get(resources.volume_name).remove()
+        client.volumes.get(resources.volume_name).remove(force=True)
         logger.debug(f"Destroyed volume '{resources.volume_name}'")
     except podman_errors.NotFound:
         pass

@@ -59,6 +59,7 @@ SocketGroup=podman
 SocketMode=0770
 
 [Service]
+Group=podman
 RuntimeDirectoryMode=0770
 EOF
 sudo systemctl daemon-reload
