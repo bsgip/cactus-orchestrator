@@ -1,12 +1,14 @@
 import asyncio
 import logging
 import time
+from datetime import datetime
+from typing import cast
 
 import podman
 import podman.api as podman_api
 import podman.errors as podman_errors
 
-from cactus_orchestrator.pod.models import PodImages, PodResources, PodRoutes
+from cactus_orchestrator.pod.models import PodImages, PodResources, PodRoutes, RunningPod
 from cactus_orchestrator.settings import CactusOrchestratorError
 
 logger = logging.getLogger(__name__)
@@ -323,6 +325,14 @@ def _create_pod_and_containers(
         }
     )
 
+    # Regular healthcheck -> Schema2HealthConfig under "healthconfig"
+    spec["healthconfig"] = {
+        "Test": ["CMD-SHELL", f"curl -fiSs 'http://localhost:{routes.exposed_port}/health'"],
+        "Interval": 3600 * SEC,  # every hour (we don't care too much about this once running)
+        "Timeout": 5 * SEC,
+        "Retries": 1,
+    }
+
     # Startup healthcheck -> StartupHealthCheck under "startupHealthConfig"
     # (embeds the same fields as above, plus Successes)
     spec["startupHealthConfig"] = {
@@ -402,3 +412,37 @@ def _destroy_pod(client: podman.PodmanClient, resources: PodResources) -> None:
         logger.debug(f"Destroyed volume '{resources.volume_name}'")
     except podman_errors.NotFound:
         pass
+
+
+def _fetch_running_pods(client: podman.PodmanClient) -> list[RunningPod]:
+    running_pods: list[RunningPod] = []
+    for pod in client.pods.list(filters={"label": "cactus=true"}):
+        created = datetime.fromisoformat(pod.attrs["Created"])
+        is_running = cast(str, pod.attrs["Status"]).casefold() == "Running".casefold()
+        run_id = int(pod.attrs["Labels"]["cactus:run"])
+        run_group_id = int(pod.attrs["Labels"]["cactus:run_group"])
+        all_networks: list[str] = pod.attrs["Networks"]
+        if not all_networks:
+            shared_network_name = ""
+        else:
+            shared_network_name = all_networks[0]
+
+        pod_resources = PodResources.from_raw_data(shared_network_name, run_group_id, run_id)
+        running_pods.append(
+            RunningPod(
+                id=pod.attrs["Id"],
+                run_group_id=run_group_id,
+                run_id=run_id,
+                resources=pod_resources,
+                created_time=created,
+                is_running=is_running,
+            )
+        )
+
+    return running_pods
+
+
+async def fetch_running_pods(podman_socket: str) -> list[RunningPod]:
+    """Enumerates all pods - returns the cactus pods with basic metadata"""
+    with _client(podman_socket) as client:
+        return await asyncio.to_thread(_fetch_running_pods, client)

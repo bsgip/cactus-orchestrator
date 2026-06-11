@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from datetime import datetime
 
 from cactus_orchestrator.model import Run, RunGroup
 from cactus_orchestrator.settings import CactusOrchestratorSettings
@@ -70,16 +71,20 @@ class PodResources:
 
     @staticmethod
     def from_run(settings: CactusOrchestratorSettings, run: Run) -> "PodResources":
-        pod_name = f"run-{run.run_id}"
+        return PodResources.from_raw_data(settings.podman_network, run.run_group_id, run.run_id)
+
+    @staticmethod
+    def from_raw_data(shared_network_name: str, run_group_id: int, run_id: int) -> "PodResources":
+        pod_name = f"run-{run_id}"
         return PodResources(
             pod_name=pod_name,
             volume_name=pod_name + "-volume",
             pod_labels={
                 "cactus": "true",
-                "cactus:run": str(run.run_id),
-                "cactus:run_group": str(run.run_group_id),
+                "cactus:run": str(run_id),
+                "cactus:run_group": str(run_group_id),
             },
-            shared_network_name=settings.podman_network,
+            shared_network_name=shared_network_name,
             container_init_name=pod_name + "-init",
             container_runner_name=pod_name + "-runner",
             container_envoy_server_name=pod_name + "-envoy",
@@ -88,3 +93,15 @@ class PodResources:
             container_postgres_name=pod_name + "-postgres",
             container_rabbitmq_name=pod_name + "-rabbitmq",
         )
+
+
+@dataclass(frozen=True)
+class RunningPod:
+    """Metadata about a cactus pod that is still registered in podman"""
+
+    id: str
+    run_group_id: int  # Which run/group created this pod
+    run_id: int  # Which run/group created this pod
+    created_time: datetime  # tz aware
+    is_running: bool
+    resources: PodResources
