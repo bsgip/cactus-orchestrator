@@ -74,9 +74,9 @@ from cactus_orchestrator.crud import (
     update_run_with_runartifact_and_finalise,
 )
 from cactus_orchestrator.model import Run, RunArtifact, RunStatus, User
+from cactus_orchestrator.pod.manager import create_pod_run, destroy_pod_resources, ensure_images
+from cactus_orchestrator.pod.models import PodResources, PodRoutes
 from cactus_orchestrator.settings import CactusOrchestratorError, get_current_settings
-from cactus_orchestrator.teststack.ids import generate_dynamic_test_stack_id, generate_static_test_stack_id
-from cactus_orchestrator.teststack.manager import TeststackResourceNames, destroy, get_resource_names, spawn
 
 logger = logging.getLogger(__name__)
 
@@ -84,39 +84,8 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-def _envoy_dcap_uri(resources: TeststackResourceNames) -> str:
-    return resources.envoy_base_url + DeviceCapabilityUri
-
-
-async def prepare_run_for_delete(run: Run) -> None:
-    if run.run_status in ACTIVE_RUN_STATUSES:
-        try:
-            await teardown_teststack(run.teststack_id)
-        except Exception as exc:
-            logger.error(f"Error tearing down test stack for run {run.run_id}", exc_info=exc)
-
-
-async def wait_for_runner_health(s: ClientSession) -> None:
-    """Executes the RunnerClient.health function (which works pre-init) until it successfully connects (or enough
-    attempts have passed). This is primarily to avoid situations where k8's says a pod is ready to go but the runner
-    is either not fully up or networking isn't routing"""
-
-    MAX_ATTEMPTS = 15  # noqa: N806
-
-    for attempt in range(MAX_ATTEMPTS):
-        try:
-            if await RunnerClient.health(s):
-                logger.debug(f"Runner is healthy after attempt {attempt}")
-                return
-        except Exception as exc:
-            logger.error(f"Failure accessing RunnerClient.health attempt {attempt}", exc_info=exc)
-
-        # Add a slight delay to give the pod a chance to standup
-        await asyncio.sleep(2)
-
-    raise CactusOrchestratorError(
-        f"Unable to fetch health from RunnerClient after {attempt + 1} attempts. Will be treated as a failed start."
-    )
+def _envoy_dcap_uri(routes: PodRoutes) -> str:
+    return routes.external_base_url + routes.href_prefix + DeviceCapabilityUri
 
 
 async def get_run_artifact_response_for_user(user: User, run_id: int) -> Response:
@@ -215,24 +184,31 @@ async def spawn_teststack_and_init_run(  # noqa: C901
             detail="Your certificate has expired. Please regenerate your certificate and try again.",
         )
 
-    # Discover the test stack ID - check for potential conflicts
-    teststack_id: str | None = None
-    if user.is_static_uri:
-        teststack_id = generate_static_test_stack_id(user)
+    # Ensure the CSIP-Aus version images are loaded
+    settings = get_current_settings()
+    pod_images = settings.images.get(run_group.csip_aus_version)
+    if pod_images is None:
+        raise HTTPException(
+            HTTPStatus.BAD_REQUEST,
+            detail=f"RunGroup {run_group.run_group_id} '{run_group.name}' has version '{run_group.csip_aus_version}'"
+            + " but this orchestrator has no pod images configured for that version.",
+        )
+    await ensure_images(settings.podman_socket, pod_images)
 
+    # check for potential conflicts
+    if run_group.is_static_uri:
         # Because this is a static URI - we need to make sure there are no running test instances with this value set
         # (otherwise we are going to cause a collision and problems)
         # This is a limitation of enabling static URIs and the user will be warned about it when enabling things
-        active_runs = await select_active_runs_for_user(db.session, user.user_id)
+        active_runs = await select_runs_for_group(
+            db.session, run_group.run_group_id, finalised=False, created_at_gte=None
+        )
         if len(active_runs) > 0:
             run_ids_str = ",".join(str(r.run_id) for r in active_runs)
             raise HTTPException(
                 HTTPStatus.CONFLICT,
-                detail=f"Static URIs are enabled therefore only a single run can be active. The following run IDs are still active and will need to be finalised first: {run_ids_str}.",  # noqa: E501
+                detail=f"Static URIs for group {run_group.run_group_id} are enabled therefore only a single run can be active. The following run IDs are still active and will need to be finalised first: {run_ids_str}.",  # noqa: E501
             )
-
-    else:
-        teststack_id = generate_dynamic_test_stack_id(user)
 
     # Create Run records - either single or playlist
     runs: list[Run] | None = None
@@ -240,44 +216,37 @@ async def spawn_teststack_and_init_run(  # noqa: C901
         runs = await insert_playlist_runs(
             db.session,
             run_group_id,
-            teststack_id,
             playlist_execution_id,  # type: ignore  # We know it's not None when is_playlist
             [p.value for p in procedure_ids],  # Convert TestProcedureId enums to strings
             run_group.is_device_cert,
             start_index,
         )
         # First active run is at start_index
-        first_run_id = runs[start_index].run_id
+        first_run = runs[start_index]
     else:
-        first_run_id = await insert_run_for_run_group(
+        first_run = await insert_run_for_run_group(
             db.session,
             run_group_id,
-            teststack_id,
             procedure_ids[0].value,
             RunStatus.provisioning,
             run_group.is_device_cert,
         )
+        runs = [first_run]
 
-    settings = get_current_settings()
+    pod_resources = PodResources.from_run(settings.podman_network, first_run)
+    pod_routes = PodRoutes.from_run(
+        settings.test_execution_fqdn, settings.podman_runner_port, pod_resources, run_group, first_run
+    )
 
     try:
         user_identifier = user.user_name or user.subject_id
-        pod_start_time = datetime.now(UTC)
-        run_resource_names = await spawn(
-            teststack_id=teststack_id,
-            csip_aus_version=run_group.csip_aus_version,
-            user_name=user_identifier,
-        )
+        pod_name = await create_pod_run(settings.podman_socket, pod_images, pod_resources, pod_routes)
 
         # inject initial state with either the device or aggregator cert data
         async with ClientSession(
-            base_url=run_resource_names.runner_base_url,
+            base_url=pod_routes.internal_base_url,
             timeout=ClientTimeout(settings.test_execution_comms_timeout_seconds),
         ) as session:
-            await wait_for_runner_health(session)
-            pod_startup_seconds = (datetime.now(UTC) - pod_start_time).total_seconds()
-            logger.info(f"Teststack {teststack_id} ready in {pod_startup_seconds:.1f}s")
-
             # Build RunRequest objects for all tests
             run_requests: list[RunRequest] = []
             if is_playlist and runs:
@@ -288,8 +257,8 @@ async def spawn_teststack_and_init_run(  # noqa: C901
                         run_id=str(run.run_id),
                         test_definition=TestDefinition(test_procedure_id=test_proc_id, yaml_definition=yaml_definition),
                         run_group=RunRequestRunGroup(
-                            run_group_id="1",
-                            name="group 1",
+                            run_group_id=str(run_group.run_group_id),
+                            name=run_group.name,
                             csip_aus_version=CSIPAusVersion(run_group.csip_aus_version),
                             test_certificates=TestCertificates(
                                 aggregator=None if run_group.is_device_cert else run_group.certificate_pem.decode(),
@@ -297,19 +266,21 @@ async def spawn_teststack_and_init_run(  # noqa: C901
                             ),
                         ),
                         test_config=TestConfig(
-                            pen=user.pen, subscription_domain=user.subscription_domain, is_static_url=user.is_static_uri
+                            pen=user.pen,
+                            subscription_domain=user.subscription_domain,
+                            is_static_url=run_group.is_static_uri,
                         ),
-                        test_user=TestUser(user_id=str(user.user_id), name="user1"),
+                        test_user=TestUser(user_id=str(user.user_id), name=user_identifier),
                     )
                     run_requests.append(run_request)
             else:
                 yaml_definition = get_yaml_contents(procedure_ids[0])
                 run_request = RunRequest(
-                    run_id=str(first_run_id),
+                    run_id=str(first_run.run_id),
                     test_definition=TestDefinition(test_procedure_id=procedure_ids[0], yaml_definition=yaml_definition),
                     run_group=RunRequestRunGroup(
-                        run_group_id="1",
-                        name="group 1",
+                        run_group_id=str(run_group.run_group_id),
+                        name=run_group.name,
                         csip_aus_version=CSIPAusVersion(run_group.csip_aus_version),
                         test_certificates=TestCertificates(
                             aggregator=None if run_group.is_device_cert else run_group.certificate_pem.decode(),
@@ -317,9 +288,11 @@ async def spawn_teststack_and_init_run(  # noqa: C901
                         ),
                     ),
                     test_config=TestConfig(
-                        pen=user.pen, subscription_domain=user.subscription_domain, is_static_url=user.is_static_uri
+                        pen=user.pen,
+                        subscription_domain=user.subscription_domain,
+                        is_static_url=run_group.is_static_uri,
                     ),
-                    test_user=TestUser(user_id=str(user.user_id), name="user1"),
+                    test_user=TestUser(user_id=str(user.user_id), name=user_identifier),
                 )
                 run_requests.append(run_request)
 
@@ -337,17 +310,19 @@ async def spawn_teststack_and_init_run(  # noqa: C901
             init_result = await RunnerClient.initialise(**init_kwargs)
 
     except (CactusOrchestratorError, RunnerClientError) as err:
-        logger.info("Failure to initialise runner. Will teardown any resources.")
-        await teardown_teststack(teststack_id)
+        logger.info("Failure to initialise runner. Will teardown any resources.", exc_info=err)
+        await destroy_pod_resources(settings.podman_socket, pod_resources)
         raise HTTPException(HTTPStatus.INTERNAL_SERVER_ERROR, detail="Internal Server Error") from err
 
-    # commit DB changes - update first run status
+    # commit DB changes - update first run status and the pod names
     new_run_status = RunStatus.started if init_result.is_started else RunStatus.initialised
-    await update_run_run_status(db.session, first_run_id, new_run_status)
+    await update_run_run_status(db.session, first_run.run_id, new_run_status)
+    for run in runs:
+        run.pod_name = pod_name
     await db.session.commit()
 
     # set location header
-    response.headers["Location"] = f"/run/{first_run_id}"
+    response.headers["Location"] = f"/run/{first_run.run_id}"
 
     # Build response with playlist info if applicable
     if is_playlist and runs:
@@ -360,13 +335,13 @@ async def spawn_teststack_and_init_run(  # noqa: C901
             for run in runs
         ]
         return InitRunResponse(
-            run_id=first_run_id,
-            test_url=_envoy_dcap_uri(run_resource_names),
+            run_id=first_run.run_id,
+            test_url=_envoy_dcap_uri(pod_routes),
             playlist_execution_id=playlist_execution_id,
             playlist_runs=playlist_runs,
         )
     else:
-        return InitRunResponse(run_id=first_run_id, test_url=_envoy_dcap_uri(run_resource_names))
+        return InitRunResponse(run_id=first_run.run_id, test_url=_envoy_dcap_uri(pod_routes))
 
 
 @router.post(
@@ -405,11 +380,16 @@ async def start_run(
                 f"Run {current_active_run.run_id} is the current active test in this playlist.",
             )
 
+    settings = get_current_settings()
+    pod_resources = PodResources.from_run(settings.podman_network, run)
+    pod_routes = PodRoutes.from_run(
+        settings.test_execution_fqdn, settings.podman_runner_port, pod_resources, run_group, first_run
+    )
+
     # resource ids
     run_resource_names = get_resource_names(run.teststack_id)
 
     # request runner starts run
-    settings = get_current_settings()
     async with ClientSession(
         base_url=run_resource_names.runner_base_url,
         timeout=ClientTimeout(settings.test_execution_comms_timeout_seconds),

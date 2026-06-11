@@ -102,21 +102,20 @@ async def select_user_from_run(session: AsyncSession, run_id: int) -> User | Non
 async def insert_run_for_run_group(
     session: AsyncSession,
     run_group_id: int,
-    teststack_id: str,
     testprocedure_id: str,
     run_status: RunStatus,
     is_device_cert: bool,
-) -> int:
+) -> Run:
     run = Run(
         run_group_id=run_group_id,
-        teststack_id=teststack_id,
+        pod_name=None,
         testprocedure_id=testprocedure_id,
         run_status=run_status,
         is_device_cert=is_device_cert,
     )
     session.add(run)
     await session.flush()
-    return run.run_id
+    return run
 
 
 async def select_run_groups_by_user(session: AsyncSession) -> dict[int, list[RunGroup]]:
@@ -556,7 +555,6 @@ async def update_compliance_request(
 async def insert_playlist_runs(
     session: AsyncSession,
     run_group_id: int,
-    teststack_id: str,
     playlist_execution_id: str,
     test_procedure_ids: list[str],
     is_device_cert: bool,
@@ -580,7 +578,7 @@ async def insert_playlist_runs(
             # Runs before start_index are skipped
             run = Run(
                 run_group_id=run_group_id,
-                teststack_id=teststack_id,
+                pod_name=None,
                 testprocedure_id=procedure_id,
                 run_status=RunStatus.skipped,
                 is_device_cert=is_device_cert,
@@ -592,7 +590,7 @@ async def insert_playlist_runs(
             # The run at start_index is the first active run
             run = Run(
                 run_group_id=run_group_id,
-                teststack_id=teststack_id,
+                pod_name=None,
                 testprocedure_id=procedure_id,
                 run_status=RunStatus.provisioning,
                 is_device_cert=is_device_cert,
@@ -603,7 +601,7 @@ async def insert_playlist_runs(
             # Runs after start_index are pending
             run = Run(
                 run_group_id=run_group_id,
-                teststack_id=teststack_id,
+                pod_name=None,
                 testprocedure_id=procedure_id,
                 run_status=RunStatus.initialised,
                 is_device_cert=is_device_cert,

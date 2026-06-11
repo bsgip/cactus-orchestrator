@@ -359,9 +359,10 @@ async def test_insert_run_for_run_group(pg_base_config):
 
     # Act
     async with generate_async_session(pg_base_config) as session:
-        run_id = await insert_run_for_run_group(session, 2, "teststack-new", "ALL_20", RunStatus.initialised, True)
-        assert isinstance(run_id, int)
+        run = await insert_run_for_run_group(session, 2, "ALL_20", RunStatus.initialised, True)
+        assert isinstance(run, Run)
         await session.commit()
+        run_id = run.run_id
 
     # Assert
     async with generate_async_session(pg_base_config) as session:
@@ -369,7 +370,7 @@ async def test_insert_run_for_run_group(pg_base_config):
         assert count_after == (count_before + 1)
 
         new_run = (await session.execute(select(Run).where(Run.run_id == run_id))).scalar_one()
-        assert new_run.teststack_id == "teststack-new"
+        assert new_run.pod_name is None
         assert new_run.testprocedure_id == "ALL_20"
         assert new_run.run_status == RunStatus.initialised
         assert new_run.is_device_cert is True

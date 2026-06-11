@@ -307,9 +307,11 @@ async def test_create_pod_run_success(mock_client: MockedPodmanClient, health_va
     mock_client.volumes_get.return_value = mock_volume
 
     # Act
-    await create_pod_run("/fake/socket", images, resources, routes)
+    returned_pod_name = await create_pod_run("/fake/socket", images, resources, routes)
 
     # Assert
+    assert isinstance(returned_pod_name, str)
+    assert returned_pod_name == resources.pod_name
 
     # We created a shared volume / pod
     mock_client.volumes_create.assert_called_once_with(name=resources.volume_name)
@@ -364,7 +366,7 @@ async def test_fetch_running_pods(mock_client: MockedPodmanClient):
                 "Containers": [],
                 "Created": "2026-06-11T11:09:05.717943643+10:00",
                 "Id": "17b61669f63b39f251b4deb3ac3b04609e9edda3933504280118fcabc6847988",
-                "Name": "run-11",
+                "Name": "my-run-11",
                 "Namespace": "",
                 "Networks": ["cactus-net"],
                 "Status": "Running",
@@ -376,7 +378,7 @@ async def test_fetch_running_pods(mock_client: MockedPodmanClient):
                 "Containers": [],
                 "Created": "2026-05-10T01:02:03+00:00",
                 "Id": "d9631e0019f949f1b31c04fdf2ae630d814215f45b0e45d88c9d231fad5811af",
-                "Name": "run-22",
+                "Name": "my-run-22",
                 "Namespace": "",
                 "Networks": ["cactus-net"],
                 "Status": "Stopped",
@@ -396,11 +398,13 @@ async def test_fetch_running_pods(mock_client: MockedPodmanClient):
     assert running_pods[0].is_running is True
     assert running_pods[0].run_group_id == 22
     assert running_pods[0].run_id == 11
-    assert running_pods[0].resources.pod_name == "run-11"
+    assert running_pods[0].name == "my-run-11"
+    assert running_pods[0].resources.volume_name == "run-11-volume"
 
     assert running_pods[1].id == "d9631e0019f949f1b31c04fdf2ae630d814215f45b0e45d88c9d231fad5811af"
     assert running_pods[1].created_time == datetime(2026, 5, 10, 1, 2, 3, 0, timezone(timedelta(hours=0)))
     assert running_pods[1].is_running is False
     assert running_pods[1].run_group_id == 33
     assert running_pods[1].run_id == 22
-    assert running_pods[1].resources.pod_name == "run-22"
+    assert running_pods[1].name == "my-run-22"
+    assert running_pods[1].resources.volume_name == "run-22-volume"

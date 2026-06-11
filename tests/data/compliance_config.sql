@@ -8,25 +8,25 @@ INSERT INTO user_ (subject_id, issuer_id, pen, user_name)
 VALUES ('admin-user', 'https://test-cactus-issuer.example.com', 64, 'admin1@cactus.example.com');
 
 -- Run Groups
-INSERT INTO run_group (user_id, name, csip_aus_version, is_device_cert, certificate_pem, certificate_generated_at, certificate_id)
-VALUES (1, 'user-1-device-1', 'v1.2', TRUE, '\x01', '2023-01-01T00:01:00Z', 11);
-INSERT INTO run_group (user_id, name, csip_aus_version, is_device_cert, certificate_pem, certificate_generated_at, certificate_id)
-VALUES (1, 'user-1-device-2', 'v1.3-beta/storage', NULL, NULL, NULL, 0);
-INSERT INTO run_group (user_id, name, csip_aus_version, is_device_cert, certificate_pem, certificate_generated_at, certificate_id)
-VALUES (2, 'user-2-device-1', 'v1.2', TRUE, '\x01', '2023-01-01T00:01:00Z', 11);
+INSERT INTO run_group (user_id, name, csip_aus_version, is_device_cert, certificate_pem, certificate_generated_at, certificate_id, is_static_uri)
+VALUES (1, 'user-1-device-1', 'v1.2', TRUE, '\x01', '2023-01-01T00:01:00Z', 11, FALSE);
+INSERT INTO run_group (user_id, name, csip_aus_version, is_device_cert, certificate_pem, certificate_generated_at, certificate_id, is_static_uri)
+VALUES (1, 'user-1-device-2', 'v1.3-beta/storage', NULL, NULL, NULL, 0, TRUE);
+INSERT INTO run_group (user_id, name, csip_aus_version, is_device_cert, certificate_pem, certificate_generated_at, certificate_id, is_static_uri)
+VALUES (2, 'user-2-device-1', 'v1.2', TRUE, '\x01', '2023-01-01T00:01:00Z', 11, FALSE);
 
 -- Runs
-INSERT INTO run (run_group_id, run_artifact_id, teststack_id, testprocedure_id, created_at, finalised_at, run_status, all_criteria_met)
+INSERT INTO run (run_group_id, run_artifact_id, pod_name, testprocedure_id, created_at, finalised_at, run_status, all_criteria_met)
 VALUES 
-(1, NULL, 'teststack1', 'ALL-03', '2024-01-01T00:01:00Z', '2024-01-01T01:01:00Z', 4, true), -- run_id 1
-(1, NULL, 'teststack1', 'OPT-1-IN-BAND', '2024-01-01T00:01:00Z', '2024-01-01T01:01:00Z', 4, true), -- run_id 2
-(1, NULL, 'teststack1', 'OPT-1-OUT-OF-BAND', '2024-01-01T00:01:00Z', '2024-01-01T01:01:00Z', 4, true), -- run_id 3
-(1, NULL, 'teststack1', 'ALL-26', '2024-01-01T00:01:00Z', '2024-01-01T01:01:00Z', 4, true), -- run_id 4
-(1, NULL, 'teststack1', 'ALL-27', '2024-01-01T00:01:00Z', '2024-01-01T01:01:00Z', 4, true), -- run_id 5
-(1, NULL, 'teststack1', 'ALL-28', '2024-01-01T00:01:00Z', '2024-01-01T01:01:00Z', 4, true), -- run_id 6
-(1, NULL, 'teststack1', 'ALL-29', '2024-01-01T00:01:00Z', '2024-01-01T01:01:00Z', 4, true), -- run_id 7
-(1, NULL, 'teststack1', 'ALL-30', '2024-01-01T00:01:00Z', '2024-01-01T01:01:00Z', 4, true), -- run_id 8
-(3, NULL, 'teststack1', 'ALL-30', '2024-01-01T00:01:00Z', '2024-01-01T01:01:00Z', 4, true); -- run_id 9
+(1, NULL, 'run-1', 'ALL-03', '2024-01-01T00:01:00Z', '2024-01-01T01:01:00Z', 4, true), -- run_id 1
+(1, NULL, 'run-2', 'OPT-1-IN-BAND', '2024-01-01T00:01:00Z', '2024-01-01T01:01:00Z', 4, true), -- run_id 2
+(1, NULL, 'run-3', 'OPT-1-OUT-OF-BAND', '2024-01-01T00:01:00Z', '2024-01-01T01:01:00Z', 4, true), -- run_id 3
+(1, NULL, 'run-4', 'ALL-26', '2024-01-01T00:01:00Z', '2024-01-01T01:01:00Z', 4, true), -- run_id 4
+(1, NULL, 'run-5', 'ALL-27', '2024-01-01T00:01:00Z', '2024-01-01T01:01:00Z', 4, true), -- run_id 5
+(1, NULL, 'run-6', 'ALL-28', '2024-01-01T00:01:00Z', '2024-01-01T01:01:00Z', 4, true), -- run_id 6
+(1, NULL, 'run-7', 'ALL-29', '2024-01-01T00:01:00Z', '2024-01-01T01:01:00Z', 4, true), -- run_id 7
+(1, NULL, 'run-8', 'ALL-30', '2024-01-01T00:01:00Z', '2024-01-01T01:01:00Z', 4, true), -- run_id 8
+(3, NULL, 'run-9', 'ALL-30', '2024-01-01T00:01:00Z', '2024-01-01T01:01:00Z', 4, true); -- run_id 9
 
 -- Compliance Records
 INSERT INTO compliance_record (run_group_id, requester_id, created_at)

@@ -7,25 +7,47 @@ Web API for management of the podman platform and orchestration of test executio
 
 | Environment Variable | Default Value | Description |
 |----------------------|----------------|-------------|
-| `KUBERNETES_LOAD_CONFIG` | `true` | For testing only. Set to `false` to skip loading Kubernetes configuration. |
-| `TEST_ORCHESTRATION_NAMESPACE` | `test-orchestration` | Namespace used by the cactus-orchestrator components. |
 | `ORCHESTRATOR_DATABASE_URL` | – | SQLAlchemy-style database connection string using `postgresql+asyncpg` scheme. |
-| `TEST_EXECUTION_NAMESPACE` | `test-execution` | Namespace used for live cactus teststack instances (cactus-runner, envoy, etc.). |
-| `TEST_EXECUTION_INGRESS_NAME` | `test-execution-ingress` | Name of the ingress resource managing external access to teststack instances. |
-| `TESTSTACK_SERVICE_PORT` | `80` | Port exposed by the Kubernetes `Service` for teststack instances. |
-| `TESTSTACK_TEMPLATES_NAMESPACE` | `teststack-templates` | Namespace where teststack templates are stored. |
-| `TEMPLATE_SERVICE_NAME` | `envoy-svc` | Name of the templated Kubernetes `Service`. |
-| `TEMPLATE_APP_NAME` | `envoy` | Name of the main app (container) defined in the template. |
-| `TEMPLATE_STATEFULSET_NAME` | `envoy-set` | Name of the templated StatefulSet for deploying teststack instances. |
-| `TLS_CA_CERTIFICATE_GENERIC_SECRET_NAME` | `tls-ca-certificate` | Name of the generic secret that stores the CA certificate used for client certificate validation. |
-| `TLS_CA_TLS_SECRET_NAME` | `tls-ca-cert-key-pair` | Name of the TLS secret that holds the CA certificate and key used to sign client certificates. |
 | `TEST_EXECUTION_FQDN` | – | Fully qualified domain name for accessing test execution instances. |
-| `IDLETEARDOWNTASK_ENABLE` | `true` | Enables the background task that tears down idle teststack instances. |
-| `IDLETEARDOWNTASK_MAX_LIFETIME_SECONDS` | `86400` | Maximum lifetime (in seconds) allowed for a teststack instance. |
-| `IDLETEARDOWNTASK_IDLE_TIMEOUT_SECONDS` | `3600` | Time (in seconds) after last interaction before an instance is considered idle. |
-| `IDLETEARDOWNTASK_REPEAT_EVERY_SECONDS` | `120` | Frequency (in seconds) at which the idle teardown task runs. |
-| `IGNORED_CSIP_AUS_VERSIONS` | `[]` | JSON Encoded list of strings - what CSIP-Aus versions to be removed/ignored from the supported version list |
+| `TEST_EXECUTION_COMMS_TIMEOUT_SECONDS` | 120 | Backend timeout when proxying requests to test pods |
+| `PODMAN_SOCKET` | `/run/podman/podman.sock` | Path to rootful podman socket - will be used to create test pods |
+| `PODMAN_NETWORK` | `cactus-net` | Name of a pre-existing podman bridge network that test pods will operate under |
+| `PODMAN_RUNNER_PORT` | `8080` | The exposed port in each test pod that will route to the cactus-runner test harness |
+| `CACTUS_IMAGE__XXX__CSIP_AUS_VERSION` * | – | Replace `XXX` with a version tag - The full CSIP-Aus version tag |
+| `CACTUS_IMAGE__XXX__POSTGRES` * | – | Replace `XXX` with a version tag - The postgres image for version `XXX` |
+| `CACTUS_IMAGE__XXX__RABBITMQ` * | – | Replace `XXX` with a version tag - The Rabbit MQ image for version `XXX` |
+| `CACTUS_IMAGE__XXX__INIT` * | – | Replace `XXX` with a version tag - The db migration script image for version `XXX` |
+| `CACTUS_IMAGE__XXX__ENVOY` * | – | Replace `XXX` with a version tag - The envoy image for version `XXX` |
+| `CACTUS_IMAGE__XXX__RUNNER` * | – | Replace `XXX` with a version tag - The runner image for version `XXX` |
+| `CERT_SERCA_PATH` | – | Path on disk to the SERCA ca.crt PEM file - used for showing server signing chain |
+| `CERT_MCA_PATH` | – | Path on disk to the MCA ca.crt PEM file - used for showing server signing chain |
+| `CERT_MICA_CRT_PATH` | – | Path on disk to the MICA tls.crt PEM file - used for generating new client certs |
+| `CERT_MICA_KEY_PATH` | – | Path on disk to the MICA tls.key PEM file - used for generating new client certs |
+| `IDLETEARDOWNTASK_ENABLE` | `True` | If `True` - Start a background service for monitoring idle/old test pods |
+| `IDLETEARDOWNTASK_MAX_LIFETIME_SECONDS` | `3600 * 24 * 4` | Test runs older than this will be destroyed |
+| `IDLETEARDOWNTASK_IDLE_TIMEOUT_SECONDS` | `3600 * 2` | Test runs with no comms for longer than this will be destroyed |
+| `IDLETEARDOWNTASK_REPEAT_EVERY_SECONDS` | `120` | Check for idle test runs at this frequency |
+| `PULLTASK_REPEAT_EVERY_SECONDS` | `120` | Check for unpulled podman images at this frequency |
+| `IGNORED_CSIP_AUS_VERSIONS` | - | JSON encoded list of strings - each representing a CSIP-Aus version to be ignored |
+| `IGNORED_TEST_PROCEDURES` | - | JSON encoded list of strings - each representing a TestProcedureID to be ignored |
 
+```
+# * All image versions work together as a series of blocks eg:
+
+CACTUS_IMAGE__V1_99__CSIP_AUS_VERSION = "v1.99"
+CACTUS_IMAGE__V1_99__POSTGRES = "postgres:123"
+CACTUS_IMAGE__V1_99__RABBITMQ = "rabbitmq:123"
+CACTUS_IMAGE__V1_99__INIT = "init-script:123"
+CACTUS_IMAGE__V1_99__ENVOY = "envoy:123"
+CACTUS_IMAGE__V1_99__RUNNER = "runner:123"
+
+CACTUS_IMAGE__V1_2__CSIP_AUS_VERSION" = "v1.2"
+CACTUS_IMAGE__V1_2__POSTGRES = "postgres:456"
+CACTUS_IMAGE__V1_2__RABBITMQ = "rabbitmq:456"
+CACTUS_IMAGE__V1_2__INIT = "init-script:456"
+CACTUS_IMAGE__V1_2__ENVOY = "envoy:456"
+CACTUS_IMAGE__V1_2__RUNNER = "runner:456"
+```
 
 ## rooful podman setup
 

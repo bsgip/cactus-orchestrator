@@ -2,9 +2,6 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from cactus_orchestrator.model import Run, RunGroup
-from cactus_orchestrator.settings import CactusOrchestratorSettings
-
-POD_EXPOSED_PORT = 8080  # No need to configure this - it really only matters on the "internal" of a pod
 
 
 @dataclass(frozen=True)
@@ -34,18 +31,19 @@ class PodRoutes:
     external_host: str
 
     @staticmethod
-    def from_run(settings: CactusOrchestratorSettings, run_group: RunGroup, run: Run) -> "PodRoutes":
-        resources = PodResources.from_run(settings, run)
+    def from_run(
+        test_execution_fqdn: str, exposed_port: int, resources: "PodResources", run_group: RunGroup, run: Run
+    ) -> "PodRoutes":
         if run_group.is_static_uri:
             subdomain_name = f"rg-{run.run_group_id}"
         else:
             subdomain_name = f"rg-{run.run_group_id}-r-{run.run_id}"
 
-        external_host = f"{subdomain_name}.{settings.test_execution_fqdn}"
+        external_host = f"{subdomain_name}.{test_execution_fqdn}"
         return PodRoutes(
-            href_prefix="/envoy/",
-            exposed_port=settings.podman_runner_port,
-            internal_base_url=f"http://{resources.pod_name}:{settings.podman_runner_port}",
+            href_prefix="/envoy",
+            exposed_port=exposed_port,
+            internal_base_url=f"http://{resources.pod_name}:{exposed_port}",
             external_base_url=f"https://{external_host}",
             external_host=external_host,
         )
@@ -70,8 +68,8 @@ class PodResources:
     container_rabbitmq_name: str
 
     @staticmethod
-    def from_run(settings: CactusOrchestratorSettings, run: Run) -> "PodResources":
-        return PodResources.from_raw_data(settings.podman_network, run.run_group_id, run.run_id)
+    def from_run(shared_network_name: str, run: Run) -> "PodResources":
+        return PodResources.from_raw_data(shared_network_name, run.run_group_id, run.run_id)
 
     @staticmethod
     def from_raw_data(shared_network_name: str, run_group_id: int, run_id: int) -> "PodResources":
@@ -100,6 +98,7 @@ class RunningPod:
     """Metadata about a cactus pod that is still registered in podman"""
 
     id: str
+    name: str  # Name of the pod - as reported by podman (should be the same as resources.pod_name unless changes)
     run_group_id: int  # Which run/group created this pod
     run_id: int  # Which run/group created this pod
     created_time: datetime  # tz aware

@@ -131,6 +131,10 @@ class Run(Base):
 
     run_id: Mapped[int] = mapped_column(name="id", primary_key=True, autoincrement=True)
     run_group_id: Mapped[int] = mapped_column(ForeignKey("run_group.id"))
+    pod_name: Mapped[str | None] = mapped_column(
+        String, nullable=True, index=True
+    )  # This is the pod name that is servicing this run - it won't be unique due to playlists runs sharing a pod.
+    # Only set once the podman resources have been created
 
     testprocedure_id: Mapped[str] = mapped_column(String, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

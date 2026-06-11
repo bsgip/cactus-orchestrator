@@ -104,16 +104,18 @@ async def create_pod_run(
     images: PodImages,
     resources: PodResources,
     routes: PodRoutes,
-) -> None:
+) -> str:
     """Creates a new pod with the specified pod resources using the specified set of images/config options. Will wait
     until the pod is healthy before returning. Raises an exception (and attempts to clean up) on failure.
 
-    Will not initialise runner or make any other calls into runner beyond the internal health checks."""
+    Will not initialise runner or make any other calls into runner beyond the internal health checks.
+
+    Returns the name of the pod."""
 
     t0 = time.monotonic()
     with _client(podman_socket) as client:
         try:
-            await asyncio.to_thread(_create_pod_and_containers, client, images, resources, routes)
+            pod_name = await asyncio.to_thread(_create_pod_and_containers, client, images, resources, routes)
         except Exception as exc:
             logger.warning(f"Failed to create pod {resources.pod_name}, cleaning up", exc_info=exc)
             await _do_destroy_pod_resources(client, resources)
@@ -129,9 +131,10 @@ async def create_pod_run(
         ready = time.monotonic()
 
     logger.info(
-        f"Pod '{resources.pod_name}' ready "
-        f"(create {created - t0:.1f}s, healthy +{ready - created:.1f}s, total {ready - t0:.1f}s)"
+        f"Pod '{pod_name}' ready (create {created - t0:.1f}s, healthy +{ready - created:.1f}s, total {ready - t0:.1f}s)"
     )
+
+    return pod_name
 
 
 def _create_pod_and_containers(
@@ -139,7 +142,8 @@ def _create_pod_and_containers(
     images: PodImages,
     resources: PodResources,
     routes: PodRoutes,
-) -> None:
+) -> str:
+    """Returns pod-name on success"""
     t0 = time.monotonic()
     timings: list[tuple[str, float]] = []
 
@@ -358,6 +362,8 @@ def _create_pod_and_containers(
         breakdown = ", ".join(f"{name} +{offset:.2f}s" for name, offset in timings)
         logger.debug(f"Pod {resources.pod_name} container create timeline: {breakdown}")
 
+    return resources.pod_name
+
 
 async def _wait_for_runner_healthy(client: podman.PodmanClient, resources: PodResources) -> None:
     for attempt in range(POD_READY_MAX_ATTEMPTS):
@@ -431,6 +437,7 @@ def _fetch_running_pods(client: podman.PodmanClient) -> list[RunningPod]:
         running_pods.append(
             RunningPod(
                 id=pod.attrs["Id"],
+                name=pod.attrs["Name"],
                 run_group_id=run_group_id,
                 run_id=run_id,
                 resources=pod_resources,
