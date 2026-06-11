@@ -1,18 +1,22 @@
 import unittest.mock as mock
 from collections.abc import Callable, Generator
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 
 import pytest
+from assertical.asserts.type import assert_list_type
 from assertical.fake.generator import generate_class_instance
+from podman.domain.pods import Pod
 from podman.errors import ImageNotFound, NotFound
 
 from cactus_orchestrator.pod.manager import (
     create_pod_run,
     destroy_pod_resources,
     ensure_images,
+    fetch_running_pods,
     get_podman_version,
 )
-from cactus_orchestrator.pod.models import PodImages, PodResources, PodRoutes
+from cactus_orchestrator.pod.models import PodImages, PodResources, PodRoutes, RunningPod
 
 
 @dataclass(frozen=True)
@@ -24,6 +28,7 @@ class MockedPodmanClient:
     volumes_get: mock.Mock
     pods_create: mock.Mock
     pods_get: mock.Mock
+    pods_list: mock.Mock
     containers_run: mock.Mock
     containers_get: mock.Mock
     containers_render_payload: mock.Mock
@@ -60,6 +65,7 @@ def mock_client() -> Generator[MockedPodmanClient]:
             mock.Mock(),
             mock.Mock(),
             mock.Mock(),
+            mock.Mock(),
             assert_client,
         )
 
@@ -73,6 +79,7 @@ def mock_client() -> Generator[MockedPodmanClient]:
         mocked_client.pods = mock.Mock(name="client.pods")
         mocked_client.pods.get = all_mocks.pods_get
         mocked_client.pods.create = all_mocks.pods_create
+        mocked_client.pods.list = all_mocks.pods_list
         mocked_client.containers = mock.Mock(name="client.containers")
         mocked_client.containers.get = all_mocks.containers_get
         mocked_client.containers.run = all_mocks.containers_run
@@ -347,3 +354,53 @@ async def test_create_pod_run_success(mock_client: MockedPodmanClient, health_va
 
     mock_pod.remove.assert_not_called()
     mock_volume.remove.assert_not_called()
+
+
+async def test_fetch_running_pods(mock_client: MockedPodmanClient):
+    # Arrange
+    mock_client.pods_list.return_value = [
+        Pod(
+            attrs={
+                "Containers": [],
+                "Created": "2026-06-11T11:09:05.717943643+10:00",
+                "Id": "17b61669f63b39f251b4deb3ac3b04609e9edda3933504280118fcabc6847988",
+                "Name": "run-11",
+                "Namespace": "",
+                "Networks": ["cactus-net"],
+                "Status": "Running",
+                "Labels": {"cactus": "true", "cactus:run": "11", "cactus:run_group": "22"},
+            }
+        ),
+        Pod(
+            attrs={
+                "Containers": [],
+                "Created": "2026-05-10T01:02:03+00:00",
+                "Id": "d9631e0019f949f1b31c04fdf2ae630d814215f45b0e45d88c9d231fad5811af",
+                "Name": "run-22",
+                "Namespace": "",
+                "Networks": ["cactus-net"],
+                "Status": "Stopped",
+                "Labels": {"cactus": "true", "cactus:run": "22", "cactus:run_group": "33"},
+            }
+        ),
+    ]
+
+    # Act
+    running_pods = await fetch_running_pods("/mock/sock.sock")
+
+    # Assert
+    assert_list_type(RunningPod, running_pods, count=2)
+
+    assert running_pods[0].id == "17b61669f63b39f251b4deb3ac3b04609e9edda3933504280118fcabc6847988"
+    assert running_pods[0].created_time == datetime(2026, 6, 11, 11, 9, 5, 717943, timezone(timedelta(hours=10)))
+    assert running_pods[0].is_running is True
+    assert running_pods[0].run_group_id == 22
+    assert running_pods[0].run_id == 11
+    assert running_pods[0].resources.pod_name == "run-11"
+
+    assert running_pods[1].id == "d9631e0019f949f1b31c04fdf2ae630d814215f45b0e45d88c9d231fad5811af"
+    assert running_pods[1].created_time == datetime(2026, 5, 10, 1, 2, 3, 0, timezone(timedelta(hours=0)))
+    assert running_pods[1].is_running is False
+    assert running_pods[1].run_group_id == 33
+    assert running_pods[1].run_id == 22
+    assert running_pods[1].resources.pod_name == "run-22"
