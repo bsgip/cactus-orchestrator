@@ -7,13 +7,9 @@ from cactus_schema.orchestrator import UserConfigurationRequest, UserConfigurati
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi_async_sqlalchemy import db
 
-from envoy_schema.server.schema.uri import DeviceCapabilityUri
-
 from cactus_orchestrator.api.common import select_user_or_create
 from cactus_orchestrator.auth import AuthPerm, UserContext, jwt_validator
 from cactus_orchestrator.model import User
-from cactus_orchestrator.teststack.ids import generate_static_test_stack_id
-from cactus_orchestrator.teststack.manager import get_resource_names
 
 logger = logging.getLogger(__name__)
 
@@ -31,14 +27,8 @@ def parse_domain(d: str) -> str:
 def user_to_config(user: User) -> UserConfigurationResponse:
     """Requires aggregator_certificate_x509_der and device_certificate_x509_der to be undeferred"""
 
-    static_uri: str | None = None
-    if user.is_static_uri:
-        static_uri = get_resource_names(generate_static_test_stack_id(user)).envoy_base_url + DeviceCapabilityUri
-
     return UserConfigurationResponse(
         subscription_domain="" if user.subscription_domain is None else user.subscription_domain,
-        is_static_uri=user.is_static_uri,
-        static_uri=static_uri,
         pen=0 if user.pen is None else user.pen,
     )
 

@@ -3,6 +3,16 @@ from datetime import datetime
 
 from cactus_orchestrator.model import Run, RunGroup
 
+ENVOY_HREF_PREFIX = "/envoy"
+
+
+def generate_static_uri_external_host(test_execution_fqdn: str, run_group_id: int) -> str:
+    return f"rg-{run_group_id}.{test_execution_fqdn}"
+
+
+def generate_dynamic_uri_external_host(test_execution_fqdn: str, run_group_id: int, run_id: int) -> str:
+    return f"rg-{run_group_id}-r-{run_id}.{test_execution_fqdn}"
+
 
 @dataclass(frozen=True)
 class PodImages:
@@ -25,9 +35,6 @@ class PodRoutes:
     href_prefix: str
 
     internal_base_url: str  # For use from orchestrator -> runner pod.
-    external_base_url: (
-        str  # For use from public networks trying to access envoy (will not include any path elements for dcap/prefix)
-    )
     external_host: str
 
     @staticmethod
@@ -35,16 +42,14 @@ class PodRoutes:
         test_execution_fqdn: str, exposed_port: int, resources: "PodResources", run_group: RunGroup, run: Run
     ) -> "PodRoutes":
         if run_group.is_static_uri:
-            subdomain_name = f"rg-{run.run_group_id}"
+            external_host = generate_static_uri_external_host(test_execution_fqdn, run.run_group_id)
         else:
-            subdomain_name = f"rg-{run.run_group_id}-r-{run.run_id}"
+            external_host = generate_dynamic_uri_external_host(test_execution_fqdn, run.run_group_id, run.run_id)
 
-        external_host = f"{subdomain_name}.{test_execution_fqdn}"
         return PodRoutes(
-            href_prefix="/envoy",
+            href_prefix=ENVOY_HREF_PREFIX,
             exposed_port=exposed_port,
             internal_base_url=f"http://{resources.pod_name}:{exposed_port}",
-            external_base_url=f"https://{external_host}",
             external_host=external_host,
         )
 
@@ -53,7 +58,7 @@ class PodRoutes:
 class PodResources:
     """The podman names for various resources belonging to a test pod"""
 
-    pod_name: str
+    pod_name: str  # The name to be used when creating a new pod
     volume_name: str
     pod_labels: dict[str, str]
 
@@ -69,18 +74,14 @@ class PodResources:
 
     @staticmethod
     def from_run(shared_network_name: str, run: Run) -> "PodResources":
-        return PodResources.from_raw_data(shared_network_name, run.run_group_id, run.run_id)
-
-    @staticmethod
-    def from_raw_data(shared_network_name: str, run_group_id: int, run_id: int) -> "PodResources":
-        pod_name = f"run-{run_id}"
+        pod_name = run.pod_name if run.pod_name is not None else f"run-{run.run_id}"
         return PodResources(
             pod_name=pod_name,
             volume_name=pod_name + "-volume",
             pod_labels={
                 "cactus": "true",
-                "cactus:run": str(run_id),
-                "cactus:run_group": str(run_group_id),
+                "cactus:run": str(run.run_id),
+                "cactus:run_group": str(run.run_group_id),
             },
             shared_network_name=shared_network_name,
             container_init_name=pod_name + "-init",

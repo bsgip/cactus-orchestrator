@@ -1,4 +1,3 @@
-import asyncio
 import io
 import json
 import logging
@@ -38,7 +37,6 @@ from cactus_schema.runner import RunGroup as RunRequestRunGroup
 from cactus_test_definitions import CSIPAusVersion
 from cactus_test_definitions.client.test_procedures import TestProcedureId, get_yaml_contents
 from cryptography import x509
-from envoy_schema.server.schema.uri import DeviceCapabilityUri
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi_async_sqlalchemy import db
 from fastapi_pagination import Page, paginate
@@ -46,10 +44,12 @@ from sqlalchemy.exc import NoResultFound
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from cactus_orchestrator.api.common import (
+    envoy_dcap_uri,
     map_run_status_to_run_status_response,
     map_run_to_run_response,
     select_user_or_raise,
     select_user_run_group_or_raise,
+    select_user_run_group_run_or_raise,
 )
 from cactus_orchestrator.artifact import regenerate_pdf_report
 from cactus_orchestrator.auth import AuthPerm, UserContext, jwt_validator
@@ -60,7 +60,6 @@ from cactus_orchestrator.crud import (
     delete_runs,
     insert_playlist_runs,
     insert_run_for_run_group,
-    select_active_runs_for_user,
     select_next_playlist_run,
     select_passed_runs_for_user,
     select_playlist_runs,
@@ -82,10 +81,6 @@ logger = logging.getLogger(__name__)
 
 
 router = APIRouter()
-
-
-def _envoy_dcap_uri(routes: PodRoutes) -> str:
-    return routes.external_base_url + routes.href_prefix + DeviceCapabilityUri
 
 
 async def get_run_artifact_response_for_user(user: User, run_id: int) -> Response:
@@ -211,7 +206,6 @@ async def spawn_teststack_and_init_run(  # noqa: C901
             )
 
     # Create Run records - either single or playlist
-    runs: list[Run] | None = None
     if is_playlist:
         runs = await insert_playlist_runs(
             db.session,
@@ -336,12 +330,12 @@ async def spawn_teststack_and_init_run(  # noqa: C901
         ]
         return InitRunResponse(
             run_id=first_run.run_id,
-            test_url=_envoy_dcap_uri(pod_routes),
+            test_url=envoy_dcap_uri(pod_routes),
             playlist_execution_id=playlist_execution_id,
             playlist_runs=playlist_runs,
         )
     else:
-        return InitRunResponse(run_id=first_run.run_id, test_url=_envoy_dcap_uri(pod_routes))
+        return InitRunResponse(run_id=first_run.run_id, test_url=envoy_dcap_uri(pod_routes))
 
 
 @router.post(
@@ -356,14 +350,7 @@ async def start_run(
 
     For playlist runs, only the currently active test can be started.
     """
-    # get user
-    user = await select_user_or_raise(db.session, user_context)
-
-    # get run
-    try:
-        run = await select_user_run(db.session, user.user_id, run_id)
-    except NoResultFound as err:
-        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Not Found") from err
+    user, run_group, run = await select_user_run_group_run_or_raise(db.session, user_context, run_id)
 
     # For playlist runs, validate this is the current active test
     if run.playlist_execution_id:
@@ -383,15 +370,12 @@ async def start_run(
     settings = get_current_settings()
     pod_resources = PodResources.from_run(settings.podman_network, run)
     pod_routes = PodRoutes.from_run(
-        settings.test_execution_fqdn, settings.podman_runner_port, pod_resources, run_group, first_run
+        settings.test_execution_fqdn, settings.podman_runner_port, pod_resources, run_group, run
     )
-
-    # resource ids
-    run_resource_names = get_resource_names(run.teststack_id)
 
     # request runner starts run
     async with ClientSession(
-        base_url=run_resource_names.runner_base_url,
+        base_url=pod_routes.internal_base_url,
         timeout=ClientTimeout(settings.test_execution_comms_timeout_seconds),
     ) as s:
         try:
@@ -419,11 +403,7 @@ async def start_run(
     await update_run_run_status(session=db.session, run_id=run.run_id, run_status=RunStatus.started)
     await db.session.commit()
 
-    return StartRunResponse(test_url=_envoy_dcap_uri(run_resource_names))
-
-
-async def teardown_teststack(teststack_id: str) -> None:
-    await destroy(teststack_id)
+    return StartRunResponse(test_url=envoy_dcap_uri(pod_routes))
 
 
 def is_all_criteria_met(runner_status: RunnerStatus | None) -> bool | None:
@@ -542,27 +522,23 @@ async def delete_individual_run(
     since they share a teststack."""
 
     # get user
-    user = await select_user_or_raise(db.session, user_context)
-
-    # get run
-    try:
-        run = await select_user_run(db.session, user.user_id, run_id)
-    except NoResultFound as err:
-        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Not Found") from err
-
+    user, run_group, run = await select_user_run_group_run_or_raise(db.session, user_context, run_id)
     logger.info(f"Delete requested for run {run_id} by user {user.subject_id}")
+
+    settings = get_current_settings()
+    pod_resources = PodResources.from_run(settings.podman_network, run)
 
     # For playlist runs, delete all siblings
     if run.playlist_execution_id:
         playlist_runs = await select_playlist_runs(db.session, run.playlist_execution_id)
         run_ids = [r.run_id for r in playlist_runs]
         # Teardown shared teststack (only need once)
-        await prepare_run_for_delete(run)
+        await destroy_pod_resources(settings.podman_socket, pod_resources)
         # Delete all runs in the playlist
         await delete_runs(db.session, list(playlist_runs))
         logger.info(f"Deleted playlist runs {run_ids} for user {user.subject_id}")
     else:
-        await prepare_run_for_delete(run)
+        await destroy_pod_resources(settings.podman_socket, pod_resources)
         await delete_runs(db.session, [run])
         logger.info(f"Deleted run {run_id} for user {user.subject_id}")
 
@@ -582,25 +558,23 @@ async def finalise_run_and_teardown_teststack(  # noqa: C901
     The teststack is only torn down after the last test in the playlist completes.
     """
     # get user
-    user = await select_user_or_raise(db.session, user_context)
+    user, run_group, run = await select_user_run_group_run_or_raise(db.session, user_context, run_id)
+    logger.info(f"Finalise requested for run {run_id} by user {user.subject_id}")
 
-    # get run
-    try:
-        run = await select_user_run_with_artifact(db.session, user.user_id, run_id)
-    except NoResultFound as err:
-        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Not Found") from err
+    settings = get_current_settings()
+    pod_resources = PodResources.from_run(settings.podman_network, run)
+    pod_routes = PodRoutes.from_run(
+        settings.test_execution_fqdn, settings.podman_runner_port, pod_resources, run_group, run
+    )
 
     # Don't attempt to cleanup / teardown if this has already been finalised
     if run.run_status in ACTIVE_RUN_STATUSES:
         settings = get_current_settings()
 
-        # get resource names
-        run_resource_names = get_resource_names(run.teststack_id)
-
         # finalise
         artifact = await finalise_run(
             run,
-            run_resource_names.runner_base_url,
+            pod_routes.internal_base_url,
             db.session,
             RunStatus.finalised_by_client,
             datetime.now(UTC),
@@ -615,7 +589,7 @@ async def finalise_run_and_teardown_teststack(  # noqa: C901
             next_run = await select_next_playlist_run(db.session, run.playlist_execution_id, run.playlist_order)
             if next_run:
                 async with ClientSession(
-                    base_url=run_resource_names.runner_base_url,
+                    base_url=pod_routes.internal_base_url,
                     timeout=ClientTimeout(settings.test_execution_comms_timeout_seconds),
                 ) as session:
                     try:
@@ -650,7 +624,7 @@ async def finalise_run_and_teardown_teststack(  # noqa: C901
                         # If we can't check status, assume playlist failed and teardown
 
         if should_teardown:
-            await teardown_teststack(run.teststack_id)
+            await destroy_pod_resources(settings.podman_socket, pod_resources)
     else:
         artifact = run.run_artifact
 
@@ -678,25 +652,22 @@ async def finalise_playlist(
 
     Returns the artifact from the current test if available.
     """
-    user = await select_user_or_raise(db.session, user_context)
-
-    try:
-        run = await select_user_run_with_artifact(db.session, user.user_id, run_id)
-    except NoResultFound as err:
-        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Not Found") from err
+    _, run_group, run = await select_user_run_group_run_or_raise(db.session, user_context, run_id)
 
     if not run.playlist_execution_id:
         raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail="Run is not part of a playlist")
 
-    artifact = None
     settings = get_current_settings()
-    run_resource_names = get_resource_names(run.teststack_id)
+    pod_resources = PodResources.from_run(settings.podman_network, run)
+    pod_routes = PodRoutes.from_run(
+        settings.test_execution_fqdn, settings.podman_runner_port, pod_resources, run_group, run
+    )
 
     # Finalize current test if it's active
     if run.run_status in ACTIVE_RUN_STATUSES:
         artifact = await finalise_run(
             run,
-            run_resource_names.runner_base_url,
+            pod_routes.internal_base_url,
             db.session,
             RunStatus.finalised_by_client,
             datetime.now(UTC),
@@ -713,8 +684,7 @@ async def finalise_playlist(
     await db.session.commit()
 
     # Teardown the teststack
-    await teardown_teststack(run.teststack_id)
-
+    await destroy_pod_resources(settings.podman_socket, pod_resources)
     logger.info(f"Playlist skipped: run {run.run_id} finalized, remaining runs marked as skipped")
 
     if artifact is None:
@@ -815,13 +785,8 @@ async def get_run_status(
 
     returns HTTP 200 on success with"""
 
-    user = await select_user_or_raise(db.session, user_context)
-
     # get the run - make sure it's still "running"
-    try:
-        run = await select_user_run(db.session, user.user_id, run_id)
-    except NoResultFound as err:
-        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Run does not exist.") from err
+    _, run_group, run = await select_user_run_group_run_or_raise(db.session, user_context, run_id)
     if run.run_status not in ACTIVE_RUN_STATUSES:
         raise HTTPException(
             status_code=HTTPStatus.GONE,
@@ -829,17 +794,20 @@ async def get_run_status(
         )
 
     # Connect to the pod and talk to the runner's "status" endpoint. Forward the result along
-    run_resource_names = get_resource_names(run.teststack_id)
     settings = get_current_settings()
+    pod_resources = PodResources.from_run(settings.podman_network, run)
+    pod_routes = PodRoutes.from_run(
+        settings.test_execution_fqdn, settings.podman_runner_port, pod_resources, run_group, run
+    )
     async with ClientSession(
-        base_url=run_resource_names.runner_base_url,
+        base_url=pod_routes.internal_base_url,
         timeout=ClientTimeout(settings.test_execution_comms_timeout_seconds),
     ) as s:
         try:
             return await RunnerClient.status(s)
         except Exception as err:
             logger.error(
-                f"Error fetching runner status for run {run.run_id} @ {run_resource_names.runner_base_url}.",
+                f"Error fetching runner status for run {run.run_id} @ {pod_routes.internal_base_url}.",
             )
             raise HTTPException(
                 status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
@@ -856,13 +824,8 @@ async def get_run_request_list(
 
     returns HTTP 200 on success with a RequestList model"""
 
-    user = await select_user_or_raise(db.session, user_context)
-
     # get the run - make sure it's still "running"
-    try:
-        run = await select_user_run(db.session, user.user_id, run_id)
-    except NoResultFound as err:
-        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Run does not exist.") from err
+    _, run_group, run = await select_user_run_group_run_or_raise(db.session, user_context, run_id)
     if run.run_status not in ACTIVE_RUN_STATUSES:
         raise HTTPException(
             status_code=HTTPStatus.GONE,
@@ -870,17 +833,20 @@ async def get_run_request_list(
         )
 
     # Connect to the pod and talk to the runner's "status" endpoint. Forward the result along
-    run_resource_names = get_resource_names(run.teststack_id)
     settings = get_current_settings()
+    pod_resources = PodResources.from_run(settings.podman_network, run)
+    pod_routes = PodRoutes.from_run(
+        settings.test_execution_fqdn, settings.podman_runner_port, pod_resources, run_group, run
+    )
     async with ClientSession(
-        base_url=run_resource_names.runner_base_url,
+        base_url=pod_routes.internal_base_url,
         timeout=ClientTimeout(settings.test_execution_comms_timeout_seconds),
     ) as s:
         try:
             return await RunnerClient.list_requests(s)
         except Exception as err:
             logger.error(
-                f"Error fetching runner request list for run {run.run_id} @ {run_resource_names.runner_base_url}.",
+                f"Error fetching runner request list for run {run.run_id} @ {pod_routes.internal_base_url}.",
             )
             raise HTTPException(
                 status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
@@ -899,13 +865,8 @@ async def get_run_request_data(
 
     returns HTTP 200 on success with a RequestData model"""
 
-    user = await select_user_or_raise(db.session, user_context)
-
     # get the run - make sure it's still "running"
-    try:
-        run = await select_user_run(db.session, user.user_id, run_id)
-    except NoResultFound as err:
-        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Run does not exist.") from err
+    _, run_group, run = await select_user_run_group_run_or_raise(db.session, user_context, run_id)
     if run.run_status not in ACTIVE_RUN_STATUSES:
         raise HTTPException(
             status_code=HTTPStatus.GONE,
@@ -913,17 +874,20 @@ async def get_run_request_data(
         )
 
     # Connect to the pod and talk to the runner's "status" endpoint. Forward the result along
-    run_resource_names = get_resource_names(run.teststack_id)
     settings = get_current_settings()
+    pod_resources = PodResources.from_run(settings.podman_network, run)
+    pod_routes = PodRoutes.from_run(
+        settings.test_execution_fqdn, settings.podman_runner_port, pod_resources, run_group, run
+    )
     async with ClientSession(
-        base_url=run_resource_names.runner_base_url,
+        base_url=pod_routes.internal_base_url,
         timeout=ClientTimeout(settings.test_execution_comms_timeout_seconds),
     ) as s:
         try:
             return await RunnerClient.get_request(s, request_id)
         except Exception as err:
             logger.error(
-                f"Error fetching runner req {request_id} for run {run.run_id} @ {run_resource_names.runner_base_url}.",
+                f"Error fetching runner req {request_id} for run {run.run_id} @ {pod_routes.internal_base_url}.",
             )
             raise HTTPException(
                 status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
@@ -939,23 +903,21 @@ async def proceed_proxy(
     """Forwards the proceed request to the appropriate runner instance and returns the runners response back
     to the client.
     """
-    user = await select_user_or_raise(db.session, user_context)
 
     # get the run - make sure it's still "running"
-    try:
-        run = await select_user_run(db.session, user.user_id, run_id)
-    except NoResultFound as err:
-        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Run does not exist.") from err
-
+    _, run_group, run = await select_user_run_group_run_or_raise(db.session, user_context, run_id)
     if run.run_status not in ACTIVE_RUN_STATUSES:
         raise HTTPException(
             status_code=HTTPStatus.GONE, detail="Run {run_id} has terminated. Unable to send proceed signal."
         )
 
-    run_resource_names = get_resource_names(run.teststack_id)
     settings = get_current_settings()
+    pod_resources = PodResources.from_run(settings.podman_network, run)
+    pod_routes = PodRoutes.from_run(
+        settings.test_execution_fqdn, settings.podman_runner_port, pod_resources, run_group, run
+    )
     async with ClientSession(
-        base_url=run_resource_names.runner_base_url,
+        base_url=pod_routes.internal_base_url,
         timeout=ClientTimeout(settings.test_execution_comms_timeout_seconds),
     ) as s:
         try:

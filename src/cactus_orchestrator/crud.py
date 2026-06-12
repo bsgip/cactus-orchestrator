@@ -162,12 +162,33 @@ async def select_run_group_for_user(
     return resp.scalar_one_or_none()
 
 
+async def select_run_with_run_group_for_user(
+    session: AsyncSession, user_id: int, run_id: int, with_cert: bool = False
+) -> Run | None:
+    """Selects a Run underneath a specific user_id with the parent RunGroup relationship populated."""
+
+    stmt = select(Run).join(RunGroup).where((Run.run_id == run_id) & (RunGroup.user_id == user_id))
+    if with_cert:
+        stmt = stmt.options(selectinload(Run.run_group).undefer(RunGroup.certificate_pem))
+    else:
+        stmt = stmt.options(selectinload(Run.run_group))
+
+    resp = await session.execute(stmt)
+    return resp.scalar_one_or_none()
+
+
 async def delete_runs(session: AsyncSession, runs: Sequence[Run]) -> None:
     run_artifact_ids = [r.run_artifact_id for r in runs if r.run_artifact_id is not None]
     for run in runs:
         await session.delete(run)
     if run_artifact_ids:
         await session.execute(delete(RunArtifact).where(RunArtifact.run_artifact_id.in_(run_artifact_ids)))
+
+
+async def select_run_for_group(session: AsyncSession, run_group_id: int, run_id: int) -> Run | None:
+    stmt = select(Run).where((Run.run_id == run_id) & (Run.run_group_id == run_group_id)).limit(1)
+    resp = await session.execute(stmt)
+    return resp.scalar_one_or_none()
 
 
 async def select_runs_for_group(

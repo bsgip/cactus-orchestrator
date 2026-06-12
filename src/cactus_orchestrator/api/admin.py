@@ -61,7 +61,6 @@ from cactus_orchestrator.crud import (
     update_compliance_generation_record_with_file_data,
     update_compliance_request,
 )
-from cactus_orchestrator.teststack.manager import get_resource_names
 from cactus_orchestrator.model import ComplianceRequest, User
 from cactus_orchestrator.settings import get_current_settings
 

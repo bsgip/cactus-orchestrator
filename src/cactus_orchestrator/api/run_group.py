@@ -8,8 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi_async_sqlalchemy import db
 from fastapi_pagination import Page, paginate
 
-from cactus_orchestrator.api.common import select_user_or_raise, select_user_run_group_or_raise
-from cactus_orchestrator.api.run import prepare_run_for_delete
+from cactus_orchestrator.api.common import envoy_dcap_uri_for_host, select_user_or_raise, select_user_run_group_or_raise
 from cactus_orchestrator.auth import AuthPerm, UserContext, jwt_validator
 from cactus_orchestrator.crud import (
     delete_runs,
@@ -19,6 +18,9 @@ from cactus_orchestrator.crud import (
     select_runs_for_group,
 )
 from cactus_orchestrator.model import RunGroup
+from cactus_orchestrator.pod.manager import destroy_pod_resources
+from cactus_orchestrator.pod.models import ENVOY_HREF_PREFIX, PodResources, generate_static_uri_external_host
+from cactus_orchestrator.settings import get_current_settings
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +28,13 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-def map_group_to_group_response(group: RunGroup, total_runs: int) -> RunGroupResponse:
+def map_group_to_group_response(group: RunGroup, test_execution_fqdn: str, total_runs: int) -> RunGroupResponse:
+    if group.is_static_uri:
+        static_uri = envoy_dcap_uri_for_host(
+            generate_static_uri_external_host(test_execution_fqdn, group.run_group_id), ENVOY_HREF_PREFIX
+        )
+    else:
+        static_uri = None
     return RunGroupResponse(
         run_group_id=group.run_group_id,
         name=group.name,
@@ -36,6 +44,8 @@ def map_group_to_group_response(group: RunGroup, total_runs: int) -> RunGroupRes
         certificate_id=group.certificate_id,
         certificate_created_at=group.certificate_generated_at,
         is_device_cert=group.is_device_cert,
+        is_static_uri=group.is_static_uri,
+        static_uri=static_uri,
     )
 
 
@@ -50,9 +60,12 @@ async def get_groups_paginated(
     run_groups = await select_run_groups_for_user(db.session, user.user_id)
     run_group_counts = await select_run_group_counts_for_user(db.session, [r.run_group_id for r in run_groups])
 
+    settings = get_current_settings()
     if run_groups:
         resp = [
-            map_group_to_group_response(group, run_group_counts.get(group.run_group_id, 0))
+            map_group_to_group_response(
+                group, settings.test_execution_fqdn, run_group_counts.get(group.run_group_id, 0)
+            )
             for group in run_groups
             if group
         ]
@@ -80,7 +93,9 @@ async def create_group(
     # get runs
     run_group = await insert_run_group(db.session, user.user_id, csip_aus_version.value)
     await db.session.commit()
-    return map_group_to_group_response(run_group, 0)
+
+    settings = get_current_settings()
+    return map_group_to_group_response(run_group, settings.test_execution_fqdn, 0)
 
 
 @router.put(uri.RunGroup, status_code=HTTPStatus.OK)
@@ -98,7 +113,9 @@ async def update_group(
 
     # get runs
     await db.session.commit()
-    return map_group_to_group_response(run_group, 0)
+
+    settings = get_current_settings()
+    return map_group_to_group_response(run_group, settings.test_execution_fqdn, 0)
 
 
 @router.delete(uri.RunGroup, status_code=HTTPStatus.NO_CONTENT)
@@ -110,10 +127,13 @@ async def delete_group(
     # get group
     _, run_group = await select_user_run_group_or_raise(db.session, user_context, run_group_id)
 
-    # Close out any existing k8s resources for runs before deletion
+    settings = get_current_settings()
+
+    # Close out any existing pod resources for runs before deletion
     all_runs = await select_runs_for_group(db.session, run_group_id, finalised=None, created_at_gte=None)
     for run in all_runs:
-        await prepare_run_for_delete(run)
+        pod_resources = PodResources.from_run(settings.podman_network, run)
+        await destroy_pod_resources(settings.podman_socket, pod_resources)
 
     # Delete the runs + groups
     await delete_runs(db.session, all_runs)

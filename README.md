@@ -49,7 +49,7 @@ CACTUS_IMAGE__V1_2__ENVOY = "envoy:456"
 CACTUS_IMAGE__V1_2__RUNNER = "runner:456"
 ```
 
-## rooful podman setup
+## rootful podman setup
 
 The test pods will be assigned unique hostnames which requires a rootful podman setup
 

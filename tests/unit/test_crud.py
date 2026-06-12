@@ -30,10 +30,12 @@ from cactus_orchestrator.crud import (
     select_nonfinalised_runs,
     select_passed_runs_for_user,
     select_playlist_runs,
+    select_run_for_group,
     select_run_group_counts_for_user,
     select_run_group_for_user,
     select_run_groups_by_user,
     select_run_groups_for_user,
+    select_run_with_run_group_for_user,
     select_runs_for_group,
     select_user,
     select_user_compliance_request,
@@ -271,6 +273,47 @@ async def test_select_passed_runs_for_user(pg_base_config):
         assert_list_type(Run, user_3_runs, 0)
 
 
+@pytest.mark.parametrize(
+    "user_id, run_id, expected_run_id, expected_run_group_id, expected_cert_bytes",
+    [
+        (1, 1, 1, 1, bytes([1])),
+        (1, 2, 2, 1, bytes([1])),
+        (1, 5, 5, 2, None),
+        (2, 6, 6, 3, bytes([3])),
+        (2, 1, None, None, None),  # Wrong user
+        (99, 1, None, None, None),  # Wrong user
+        (1, 99, None, None, None),  # Wrong run id
+    ],
+)
+async def test_select_run_with_run_group_for_user(
+    pg_base_config,
+    user_id: int,
+    run_id: int,
+    expected_run_id: int | None,
+    expected_run_group_id: int | None,
+    expected_cert_bytes: bytes | None,
+):
+    for with_cert in [True, False]:
+        async with generate_async_session(pg_base_config) as session:
+            run = await select_run_with_run_group_for_user(session, user_id, run_id, with_cert)
+
+            if expected_run_id is None or expected_run_group_id is None:
+                assert run is None
+            else:
+                assert run is not None and isinstance(run, Run)
+                assert run.run_id == expected_run_id
+
+                assert run.run_group is not None and isinstance(run.run_group, RunGroup)
+                assert run.run_group_id == expected_run_group_id
+                assert run.run_group.run_group_id == expected_run_group_id
+
+                if with_cert:
+                    assert run.run_group.certificate_pem == expected_cert_bytes
+                else:
+                    with pytest.raises(Exception):  # noqa: B017
+                        _ = run.run_group.certificate_pem
+
+
 @pytest.mark.parametrize("with_cert", [True, False])
 @pytest.mark.asyncio
 async def test_select_run_group_user(pg_base_config, with_cert: bool):
@@ -323,6 +366,20 @@ async def test_insert_user_unique_constraint(pg_base_config):
         async with generate_async_session(pg_base_config) as s:
             _ = await insert_user(s, uc)
             await s.commit()
+
+
+@pytest.mark.parametrize(
+    "run_group_id, run_id, expected_run_id",
+    [(1, 1, 1), (1, 2, 2), (3, 6, 6), (1, 6, None), (99, 6, None), (1, 99, None)],
+)
+async def test_select_run_for_group(pg_base_config, run_group_id: int, run_id: int, expected_run_id: int | None):
+    async with generate_async_session(pg_base_config) as session:
+        run = await select_run_for_group(session, run_group_id, run_id)
+        if expected_run_id is None:
+            assert run is None
+        else:
+            assert run is not None and isinstance(run, Run)
+            assert run.run_id == expected_run_id
 
 
 @pytest.mark.parametrize(
