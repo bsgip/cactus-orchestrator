@@ -338,6 +338,11 @@ async def test_select_run_group_user(pg_base_config, with_cert: bool):
         assert run_group_3.run_group_id == 3
         assert run_group_3.is_device_cert is False
         assert run_group_3.certificate_id == 33
+        run_group_3 = await select_run_group_for_user(session, 2, 3, with_cert)
+        assert isinstance(run_group_3, RunGroup)
+        assert run_group_3.run_group_id == 3
+        assert run_group_3.is_device_cert is False
+        assert run_group_3.certificate_id == 33
 
         if with_cert:
             assert run_group_1.certificate_pem == bytes([1])
@@ -443,6 +448,7 @@ async def test_select_nonfinalised_runs(pg_base_config):
         runs = await select_nonfinalised_runs(session)
         assert [1, 5, 6, 8] == [r.run_id for r in runs]
         assert_list_type(Run, runs, 4)
+        assert all([isinstance(r.run_group, RunGroup) for r in runs])
 
 
 @pytest.mark.parametrize(

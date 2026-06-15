@@ -74,11 +74,13 @@ echo 'export CONTAINER_HOST=unix:///run/podman/podman.sock' >> ~/.bashrc
 source ~/.bashrc
 
 # The podman.sock will be recreated every restart - to make the socket group permanent
-sudo mkdir -p /etc/systemd/system/podman.service.d
-sudo tee /etc/systemd/system/podman.service.d/override.conf <<EOF
-[Service]
-RuntimeDirectoryMode=0770
+sudo tee /etc/tmpfiles.d/podman.conf <<EOF
+d /run/podman 0770 root podman - -
 EOF
+
+# Apply immediately without rebooting
+sudo systemd-tmpfiles --create /etc/tmpfiles.d/podman.conf
+
 sudo mkdir -p /etc/systemd/system/podman.socket.d
 sudo tee /etc/systemd/system/podman.socket.d/override.conf <<EOF
 [Socket]

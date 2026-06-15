@@ -74,14 +74,18 @@ class PodResources:
 
     @staticmethod
     def from_run(shared_network_name: str, run: Run) -> "PodResources":
-        pod_name = run.pod_name if run.pod_name is not None else f"run-{run.run_id}"
+        return PodResources.from_raw_data(shared_network_name, run.pod_name, run.run_id, run.run_group_id)
+
+    @staticmethod
+    def from_raw_data(shared_network_name: str, pod_name: str | None, run_id: int, run_group_id: int) -> "PodResources":
+        pod_name = pod_name if pod_name is not None else f"run-{run_id}"
         return PodResources(
             pod_name=pod_name,
             volume_name=pod_name + "-volume",
             pod_labels={
                 "cactus": "true",
-                "cactus:run": str(run.run_id),
-                "cactus:run_group": str(run.run_group_id),
+                "cactus:run": str(run_id),
+                "cactus:run_group": str(run_group_id),
             },
             shared_network_name=shared_network_name,
             container_init_name=pod_name + "-init",

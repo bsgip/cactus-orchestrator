@@ -24,6 +24,7 @@ from cactus_orchestrator.api.common import (
 )
 from cactus_orchestrator.auth import AuthPerm, UserContext, jwt_validator
 from cactus_orchestrator.crud import select_group_runs_aggregated_by_procedure, select_group_runs_for_procedure
+from cactus_orchestrator.pod.models import PodResources, PodRoutes
 from cactus_orchestrator.settings import get_current_settings
 
 logger = logging.getLogger(__name__)
@@ -143,13 +144,19 @@ async def get_runs_for_procedure_in_group(
     test_procedure_id: str,
 ) -> Page[RunResponse]:
     # Check permissions
-    await select_user_run_group_or_raise(db.session, user_context, run_group_id)
+
+    user, run_group = await select_user_run_group_or_raise(db.session, user_context, run_group_id)
 
     # Get runs
     runs = await select_group_runs_for_procedure(db.session, run_group_id, test_procedure_id)
 
-    if runs:
-        resp = [map_run_to_run_response(run) for run in runs if run]
-    else:
-        resp = []
-    return paginate(resp)
+    settings = get_current_settings()
+    run_responses: list[RunResponse] = []
+    for run in runs:
+        pod_resources = PodResources.from_run(settings.podman_network, run)
+        pod_routes = PodRoutes.from_run(
+            settings.test_execution_fqdn, settings.podman_runner_port, pod_resources, run_group, run
+        )
+        run_responses.append(map_run_to_run_response(run, pod_routes))
+
+    return paginate(run_responses)

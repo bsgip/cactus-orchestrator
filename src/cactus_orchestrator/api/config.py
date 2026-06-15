@@ -61,9 +61,6 @@ async def update_config(
                 )
             user.subscription_domain = parsed_domain
 
-    if body.is_static_uri is not None:
-        user.is_static_uri = body.is_static_uri
-
     if body.pen is not None:
         user.pen = body.pen
 

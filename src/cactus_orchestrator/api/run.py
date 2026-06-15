@@ -66,7 +66,6 @@ from cactus_orchestrator.crud import (
     select_playlist_runs_with_status,
     select_run_group_for_user,
     select_runs_for_group,
-    select_user_run,
     select_user_run_with_artifact,
     select_user_runs_with_artifacts,
     update_run_run_status,
@@ -119,13 +118,27 @@ async def get_group_runs_paginated(
     created_after: datetime = Query(default=None),  # noqa: B008
 ) -> Page[RunResponse]:
     # check permissions
-    await select_user_run_group_or_raise(db.session, user_context, run_group_id)
+    _, run_group = await select_user_run_group_or_raise(db.session, user_context, run_group_id)
 
     # get runs
     runs = await select_runs_for_group(db.session, run_group_id, finalised=finalised, created_at_gte=created_after)
 
+    settings = get_current_settings()
     if runs:
-        resp = [map_run_to_run_response(run) for run in runs if run]
+        resp = [
+            map_run_to_run_response(
+                run,
+                PodRoutes.from_run(
+                    settings.test_execution_fqdn,
+                    settings.podman_runner_port,
+                    PodResources.from_run(settings.podman_network, run),
+                    run_group,
+                    run,
+                ),
+            )
+            for run in runs
+            if run
+        ]
     else:
         resp = []
     return paginate(resp)
@@ -492,14 +505,13 @@ async def get_individual_run(
     user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.user_all}))],
 ) -> RunResponse:
 
-    # get user
-    user = await select_user_or_raise(db.session, user_context)
-
     # get run
-    try:
-        run = await select_user_run(db.session, user.user_id, run_id)
-    except NoResultFound as err:
-        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Not Found") from err
+    _, run_group, run = await select_user_run_group_run_or_raise(db.session, user_context, run_id)
+    settings = get_current_settings()
+    pod_resources = PodResources.from_run(settings.podman_network, run)
+    pod_routes = PodRoutes.from_run(
+        settings.test_execution_fqdn, settings.podman_runner_port, pod_resources, run_group, run
+    )
 
     # Fetch playlist_runs if this is a playlist run
     playlist_runs = None
@@ -510,7 +522,7 @@ async def get_individual_run(
             status = map_run_status_to_run_status_response(r.run_status)
             playlist_runs.append(PlaylistRunInfo(run_id=r.run_id, test_procedure_id=r.testprocedure_id, status=status))
 
-    return map_run_to_run_response(run, playlist_runs)
+    return map_run_to_run_response(run, pod_routes, playlist_runs)
 
 
 @router.delete(uri.Run, status_code=HTTPStatus.NO_CONTENT)
@@ -948,12 +960,16 @@ async def get_run_list(
         raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail=msg)
 
     user = await select_user_or_raise(db.session, user_context)
-
     runs = await select_passed_runs_for_user(db.session, user_id=user.user_id)
 
-    if runs:
-        resp = [map_run_to_run_response(run) for run in runs if run]
-    else:
-        resp = []
+    settings = get_current_settings()
 
-    return resp
+    run_responses: list[RunResponse] = []
+    for run in runs:
+        pod_resources = PodResources.from_run(settings.podman_network, run)
+        pod_routes = PodRoutes.from_run(
+            settings.test_execution_fqdn, settings.podman_runner_port, pod_resources, run.run_group, run
+        )
+        run_responses.append(map_run_to_run_response(run, pod_routes))
+
+    return run_responses

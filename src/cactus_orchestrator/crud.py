@@ -254,7 +254,8 @@ async def select_passed_runs_for_user(session: AsyncSession, user_id: int) -> Se
 
 
 async def select_nonfinalised_runs(session: AsyncSession) -> Sequence[Run]:
-    stmt = select(Run).where(Run.run_status.in_(ACTIVE_RUN_STATUSES))
+    """Will include RunGroup relationship"""
+    stmt = select(Run).where(Run.run_status.in_(ACTIVE_RUN_STATUSES)).options(selectinload(Run.run_group))
     resp = await session.execute(stmt)
     return resp.scalars().all()
 

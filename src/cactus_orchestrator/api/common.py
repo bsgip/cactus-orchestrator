@@ -47,7 +47,9 @@ def map_run_status_to_run_status_response(run_status: RunStatus) -> RunStatusRes
     return status
 
 
-def map_run_to_run_response(run: Run, playlist_runs: list[PlaylistRunInfo] | None = None) -> RunResponse:
+def map_run_to_run_response(
+    run: Run, pod_routes: PodRoutes, playlist_runs: list[PlaylistRunInfo] | None = None
+) -> RunResponse:
     status = map_run_status_to_run_status_response(run.run_status)
     try:
         definition = test_procedures_by_id.get(TestProcedureId(run.testprocedure_id), None)
@@ -57,7 +59,7 @@ def map_run_to_run_response(run: Run, playlist_runs: list[PlaylistRunInfo] | Non
     return RunResponse(
         run_id=run.run_id,
         test_procedure_id=run.testprocedure_id,
-        test_url=get_resource_names(run.teststack_id).envoy_base_url + DeviceCapabilityUri,
+        test_url=envoy_dcap_uri(pod_routes),
         status=status,
         all_criteria_met=run.all_criteria_met,
         created_at=run.created_at,

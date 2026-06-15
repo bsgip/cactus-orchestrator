@@ -428,16 +428,17 @@ def _fetch_running_pods(client: podman.PodmanClient) -> list[RunningPod]:
         run_id = int(pod.attrs["Labels"]["cactus:run"])
         run_group_id = int(pod.attrs["Labels"]["cactus:run_group"])
         all_networks: list[str] = pod.attrs["Networks"]
+        pod_name: str = pod.attrs["Name"]
         if not all_networks:
             shared_network_name = ""
         else:
             shared_network_name = all_networks[0]
 
-        pod_resources = PodResources.from_raw_data(shared_network_name, run_group_id, run_id)
+        pod_resources = PodResources.from_raw_data(shared_network_name, pod_name, run_group_id, run_id)
         running_pods.append(
             RunningPod(
                 id=pod.attrs["Id"],
-                name=pod.attrs["Name"],
+                name=pod_name,
                 run_group_id=run_group_id,
                 run_id=run_id,
                 resources=pod_resources,
