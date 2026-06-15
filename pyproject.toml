@@ -59,6 +59,7 @@ test = [
     "assertical >= 0.4.0",
     "pytest-asyncio",
     "asgi_lifespan",
+    "freezegun"
 ]
 
 [tool.ruff]

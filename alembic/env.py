@@ -1,4 +1,5 @@
 import asyncio
+import re
 from logging.config import fileConfig
 
 from sqlalchemy import Connection, pool
@@ -29,7 +30,14 @@ target_metadata = model.Base.metadata
 # can be acquired:
 # my_important_option = config.get_main_option("my_important_option")
 # ... etc.
-config.set_main_option("sqlalchemy.url", str(main_settings.orchestrator_database_url))
+
+
+def _strip_async(dsn: str) -> str:
+    # Get the async URL and convert it to sync
+    return re.sub(r"postgresql\+asyncpg", "postgresql+psycopg2", dsn)
+
+
+config.set_main_option("sqlalchemy.url", _strip_async(str(main_settings.orchestrator_database_url)))
 
 
 def run_migrations_offline() -> None:

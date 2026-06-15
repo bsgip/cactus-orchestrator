@@ -75,7 +75,6 @@ async def test_insert_user(pg_empty_config):
 
         assert user1.user_id == 1
         assert user1.subscription_domain is None
-        assert isinstance(user1.is_static_uri, bool)
         assert user1.subject_id == uc1.subject_id
         assert user1.issuer_id == uc1.issuer_id
 
@@ -87,7 +86,6 @@ async def test_insert_user(pg_empty_config):
 
         assert user2.user_id == 2
         assert user2.subscription_domain is None
-        assert isinstance(user2.is_static_uri, bool)
         assert user2.subject_id == uc2.subject_id
         assert user2.issuer_id == uc2.issuer_id
 
@@ -103,7 +101,6 @@ async def test_insert_user(pg_empty_config):
 
         assert user3.user_id == 4, "The sequence would have been incremented for the above two insert attempts"
         assert user3.subscription_domain is None
-        assert isinstance(user3.is_static_uri, bool)
         assert user3.subject_id == uc2.subject_id
         assert user3.issuer_id == uc2.issuer_id
 
@@ -124,10 +121,13 @@ async def test_insert_run_group(pg_base_config):
 
     # Act
     async with generate_async_session(pg_base_config) as s:
-        group1 = await insert_run_group(s, user_id=2, csip_aus_version=CSIPAusVersion.RELEASE_1_2.value)
+        group1 = await insert_run_group(
+            s, user_id=2, csip_aus_version=CSIPAusVersion.RELEASE_1_2.value, is_static_uri=True
+        )
 
         assert group1.run_group_id == 4
         assert group1.user_id == 2
+        assert group1.is_static_uri is True
         assert group1.name and isinstance(group1.name, str)
         assert group1.csip_aus_version == CSIPAusVersion.RELEASE_1_2.value
         assert_nowish(group1.created_at)
@@ -135,10 +135,13 @@ async def test_insert_run_group(pg_base_config):
 
     # Test we can rollback
     async with generate_async_session(pg_base_config) as s:
-        group2 = await insert_run_group(s, user_id=2, csip_aus_version=CSIPAusVersion.BETA_1_3_STORAGE.value)
+        group2 = await insert_run_group(
+            s, user_id=2, csip_aus_version=CSIPAusVersion.BETA_1_3_STORAGE.value, is_static_uri=False
+        )
 
         assert group2.run_group_id == 5
         assert group2.user_id == 2
+        assert group2.is_static_uri is False
         assert group2.name and isinstance(group2.name, str)
         assert group2.csip_aus_version == CSIPAusVersion.BETA_1_3_STORAGE.value
         assert_nowish(group2.created_at)
@@ -146,10 +149,13 @@ async def test_insert_run_group(pg_base_config):
 
     # Test we can insert as expected
     async with generate_async_session(pg_base_config) as s:
-        group3 = await insert_run_group(s, user_id=2, csip_aus_version=CSIPAusVersion.RELEASE_1_2.value)
+        group3 = await insert_run_group(
+            s, user_id=2, csip_aus_version=CSIPAusVersion.RELEASE_1_2.value, is_static_uri=False
+        )
 
         assert group3.run_group_id == 6
         assert group3.user_id == 2
+        assert group3.is_static_uri is False
         assert group3.name and isinstance(group3.name, str)
         assert group3.csip_aus_version == CSIPAusVersion.RELEASE_1_2.value
         assert_nowish(group3.created_at)
@@ -423,8 +429,8 @@ async def test_insert_run_for_run_group(pg_base_config):
     async with generate_async_session(pg_base_config) as session:
         run = await insert_run_for_run_group(session, 2, "ALL_20", RunStatus.initialised, True)
         assert isinstance(run, Run)
-        await session.commit()
         run_id = run.run_id
+        await session.commit()
 
     # Assert
     async with generate_async_session(pg_base_config) as session:
@@ -590,47 +596,21 @@ async def test_select_group_runs_aggregated_by_procedure(pg_base_config):
 
         runs = [
             Run(
-                run_group_id=1, teststack_id="", testprocedure_id="NOT-A-TEST", run_status=1, all_criteria_met=True
+                run_group_id=1, testprocedure_id="NOT-A-TEST", run_status=1, all_criteria_met=True
             ),  # run 9 (8 runs comes from the pg_base_config)
-            Run(
-                run_group_id=1, teststack_id="", testprocedure_id="ALL-01", run_status=1, all_criteria_met=True
-            ),  # run 10
-            Run(
-                run_group_id=1, teststack_id="", testprocedure_id="ALL-01", run_status=1, all_criteria_met=False
-            ),  # run 11
-            Run(
-                run_group_id=1, teststack_id="", testprocedure_id="ALL-02", run_status=1, all_criteria_met=None
-            ),  # run 12
-            Run(
-                run_group_id=1, teststack_id="", testprocedure_id="ALL-03", run_status=1, all_criteria_met=True
-            ),  # run 13
-            Run(
-                run_group_id=1, teststack_id="", testprocedure_id="ALL-04", run_status=1, all_criteria_met=None
-            ),  # run 14
-            Run(
-                run_group_id=1, teststack_id="", testprocedure_id="ALL-04", run_status=1, all_criteria_met=True
-            ),  # run 15
-            Run(
-                run_group_id=1, teststack_id="", testprocedure_id="ALL-05", run_status=1, all_criteria_met=True
-            ),  # run 16
-            Run(
-                run_group_id=1, teststack_id="", testprocedure_id="ALL-05", run_status=1, all_criteria_met=True
-            ),  # run 17
-            Run(
-                run_group_id=1, teststack_id="", testprocedure_id="ALL-06", run_status=1, all_criteria_met=True
-            ),  # run 18
-            Run(
-                run_group_id=1, teststack_id="", testprocedure_id="ALL-06", run_status=1, all_criteria_met=None
-            ),  # run 19
-            Run(
-                run_group_id=2, teststack_id="", testprocedure_id="ALL-01", run_status=1, all_criteria_met=False
-            ),  # run 20
-            Run(
-                run_group_id=2, teststack_id="", testprocedure_id="ALL-01", run_status=1, all_criteria_met=None
-            ),  # run 21
-            Run(
-                run_group_id=2, teststack_id="", testprocedure_id="ALL-01", run_status=1, all_criteria_met=True
-            ),  # run 22
+            Run(run_group_id=1, testprocedure_id="ALL-01", run_status=1, all_criteria_met=True),  # run 10
+            Run(run_group_id=1, testprocedure_id="ALL-01", run_status=1, all_criteria_met=False),  # run 11
+            Run(run_group_id=1, testprocedure_id="ALL-02", run_status=1, all_criteria_met=None),  # run 12
+            Run(run_group_id=1, testprocedure_id="ALL-03", run_status=1, all_criteria_met=True),  # run 13
+            Run(run_group_id=1, testprocedure_id="ALL-04", run_status=1, all_criteria_met=None),  # run 14
+            Run(run_group_id=1, testprocedure_id="ALL-04", run_status=1, all_criteria_met=True),  # run 15
+            Run(run_group_id=1, testprocedure_id="ALL-05", run_status=1, all_criteria_met=True),  # run 16
+            Run(run_group_id=1, testprocedure_id="ALL-05", run_status=1, all_criteria_met=True),  # run 17
+            Run(run_group_id=1, testprocedure_id="ALL-06", run_status=1, all_criteria_met=True),  # run 18
+            Run(run_group_id=1, testprocedure_id="ALL-06", run_status=1, all_criteria_met=None),  # run 19
+            Run(run_group_id=2, testprocedure_id="ALL-01", run_status=1, all_criteria_met=False),  # run 20
+            Run(run_group_id=2, testprocedure_id="ALL-01", run_status=1, all_criteria_met=None),  # run 21
+            Run(run_group_id=2, testprocedure_id="ALL-01", run_status=1, all_criteria_met=True),  # run 22
         ]
         session.add_all(runs)
         await session.commit()
@@ -860,7 +840,6 @@ async def test_insert_playlist_runs(pg_base_config):
         runs = await insert_playlist_runs(
             session,
             run_group_id=1,
-            teststack_id="test-stack-playlist",
             playlist_execution_id=playlist_execution_id,
             test_procedure_ids=test_procedure_ids,
             is_device_cert=True,
@@ -872,7 +851,7 @@ async def test_insert_playlist_runs(pg_base_config):
         assert runs[2].run_status == RunStatus.initialised
         assert all(r.playlist_execution_id == playlist_execution_id for r in runs)
         assert [r.playlist_order for r in runs] == [0, 1, 2]
-        assert all(r.teststack_id == "test-stack-playlist" for r in runs)
+        assert all(r.pod_name is None for r in runs)
         assert [r.testprocedure_id for r in runs] == test_procedure_ids
         assert all(r.is_device_cert is True for r in runs)
 
@@ -888,7 +867,6 @@ async def test_select_playlist_runs(pg_base_config):
         await insert_playlist_runs(
             session,
             run_group_id=1,
-            teststack_id="test-stack",
             playlist_execution_id=playlist_execution_id,
             test_procedure_ids=["ALL-03", "ALL-02", "ALL-01"],  # Insert in mixed order
             is_device_cert=False,
@@ -912,7 +890,6 @@ async def test_count_playlist_runs(pg_base_config):
         await insert_playlist_runs(
             session,
             run_group_id=1,
-            teststack_id="test-stack",
             playlist_execution_id=playlist_execution_id,
             test_procedure_ids=["ALL-01", "ALL-02", "ALL-03", "ALL-04"],
             is_device_cert=False,
@@ -933,7 +910,6 @@ async def test_select_next_playlist_run(pg_base_config):
         runs = await insert_playlist_runs(
             session,
             run_group_id=1,
-            teststack_id="test-stack",
             playlist_execution_id=playlist_execution_id,
             test_procedure_ids=["ALL-01", "ALL-02", "ALL-03"],
             is_device_cert=False,
@@ -964,14 +940,14 @@ async def test_select_next_playlist_run(pg_base_config):
 @pytest.mark.asyncio
 async def test_playlist_backward_compatibility_single_runs(pg_base_config):
     async with generate_async_session(pg_base_config) as session:
-        run_id = await insert_run_for_run_group(
+        run = await insert_run_for_run_group(
             session,
             run_group_id=1,
-            teststack_id="single-stack",
             testprocedure_id="ALL-01",
             run_status=RunStatus.initialised,
             is_device_cert=True,
         )
+        run_id = run.run_id
         await session.commit()
 
     async with generate_async_session(pg_base_config) as session:

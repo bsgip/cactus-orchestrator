@@ -113,18 +113,12 @@ async def destroy_idle_pods(
                     comms_timeout_seconds,
                 )
                 await session.commit()
-                await destroy_pod_resources(settings.podman_socket, pod_resources)
-
             except Exception as exc:
                 logger.warning(
-                    f"Failed to teardown idle instance {run.run_id} at pod {pod_resources.pod_name}: {exc}",
+                    f"Failed to finalize idle instance {run.run_id} at pod {pod_resources.pod_name}: {exc}",
                     exc_info=exc,
                 )
-                await finalize_teststack_runs(
-                    session, run, pod_routes.internal_base_url, RunStatus.terminated, now, comms_timeout_seconds
-                )
-                await session.commit()
-                continue
+            await destroy_pod_resources(settings.podman_socket, pod_resources)
 
 
 async def destroy_orphaned_pods(session: AsyncSession) -> None:

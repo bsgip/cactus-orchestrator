@@ -35,10 +35,12 @@ FINALISED_RUN_STATUSES: set[RunStatus] = {
 }
 
 
-async def insert_run_group(session: AsyncSession, user_id: int, csip_aus_version: str) -> RunGroup:
+async def insert_run_group(session: AsyncSession, user_id: int, csip_aus_version: str, is_static_uri: bool) -> RunGroup:
     """Inserts a new RunGroup with the specified csip_aus_version. Returns the inserted RunGroup."""
 
-    new_group = RunGroup(name="New Group", csip_aus_version=csip_aus_version, user_id=user_id)
+    new_group = RunGroup(
+        name="New Group", csip_aus_version=csip_aus_version, user_id=user_id, is_static_uri=is_static_uri
+    )
     session.add(new_group)
     await session.flush()
     return new_group
@@ -51,7 +53,9 @@ async def insert_user(session: AsyncSession, user_context: UserContext) -> User:
     user = User(
         subject_id=user_context.subject_id,
         issuer_id=user_context.issuer_id,
-        run_groups=[RunGroup(name="Default Group", csip_aus_version=CSIPAusVersion.RELEASE_1_2.value)],
+        run_groups=[
+            RunGroup(name="Default Group", csip_aus_version=CSIPAusVersion.RELEASE_1_2.value, is_static_uri=True)
+        ],
     )
     session.add(user)
     await session.flush()

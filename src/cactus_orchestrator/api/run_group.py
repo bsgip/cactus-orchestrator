@@ -91,7 +91,7 @@ async def create_group(
         ) from err
 
     # get runs
-    run_group = await insert_run_group(db.session, user.user_id, csip_aus_version.value)
+    run_group = await insert_run_group(db.session, user.user_id, csip_aus_version.value, group_request.is_static_uri)
     await db.session.commit()
 
     settings = get_current_settings()
