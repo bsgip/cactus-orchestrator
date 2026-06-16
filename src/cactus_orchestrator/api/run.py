@@ -245,10 +245,16 @@ async def spawn_teststack_and_init_run(  # noqa: C901
         settings.test_execution_fqdn, settings.podman_runner_port, pod_resources, run_group, first_run
     )
 
+    # create a new pod
     try:
         user_identifier = user.user_name or user.subject_id
         pod_name = await create_pod_run(settings.podman_socket, pod_images, pod_resources, pod_routes)
+    except Exception as exc:
+        logger.error(f"Failed to create new pod for run_group {run_group_id}", exc_info=exc)
+        raise HTTPException(HTTPStatus.INTERNAL_SERVER_ERROR, detail="Internal Server Error") from exc
 
+    # Initialise the runner instance in the new pod
+    try:
         # inject initial state with either the device or aggregator cert data
         async with ClientSession(
             base_url=pod_routes.internal_base_url,
@@ -316,10 +322,10 @@ async def spawn_teststack_and_init_run(  # noqa: C901
                 init_kwargs["start_index"] = start_index
             init_result = await RunnerClient.initialise(**init_kwargs)
 
-    except (CactusOrchestratorError, RunnerClientError) as err:
-        logger.info("Failure to initialise runner. Will teardown any resources.", exc_info=err)
+    except (CactusOrchestratorError, RunnerClientError) as exc:
+        logger.info("Failure to initialise runner. Will teardown any resources.", exc_info=exc)
         await destroy_pod_resources(settings.podman_socket, pod_resources)
-        raise HTTPException(HTTPStatus.INTERNAL_SERVER_ERROR, detail="Internal Server Error") from err
+        raise HTTPException(HTTPStatus.INTERNAL_SERVER_ERROR, detail="Internal Server Error") from exc
 
     # commit DB changes - update first run status and the pod names
     new_run_status = RunStatus.started if init_result.is_started else RunStatus.initialised
@@ -550,7 +556,8 @@ async def delete_individual_run(
         await delete_runs(db.session, list(playlist_runs))
         logger.info(f"Deleted playlist runs {run_ids} for user {user.subject_id}")
     else:
-        await destroy_pod_resources(settings.podman_socket, pod_resources)
+        if run.run_status in ACTIVE_RUN_STATUSES:
+            await destroy_pod_resources(settings.podman_socket, pod_resources)
         await delete_runs(db.session, [run])
         logger.info(f"Deleted run {run_id} for user {user.subject_id}")
 
@@ -570,7 +577,9 @@ async def finalise_run_and_teardown_teststack(  # noqa: C901
     The teststack is only torn down after the last test in the playlist completes.
     """
     # get user
-    user, run_group, run = await select_user_run_group_run_or_raise(db.session, user_context, run_id)
+    user, run_group, run = await select_user_run_group_run_or_raise(
+        db.session, user_context, run_id, with_artifact=True
+    )
     logger.info(f"Finalise requested for run {run_id} by user {user.subject_id}")
 
     settings = get_current_settings()

@@ -300,24 +300,34 @@ async def test_select_run_with_run_group_for_user(
     expected_cert_bytes: bytes | None,
 ):
     for with_cert in [True, False]:
-        async with generate_async_session(pg_base_config) as session:
-            run = await select_run_with_run_group_for_user(session, user_id, run_id, with_cert)
+        for with_artifact in [True, False]:
+            async with generate_async_session(pg_base_config) as session:
+                run = await select_run_with_run_group_for_user(session, user_id, run_id, with_cert, with_artifact)
 
-            if expected_run_id is None or expected_run_group_id is None:
-                assert run is None
-            else:
-                assert run is not None and isinstance(run, Run)
-                assert run.run_id == expected_run_id
-
-                assert run.run_group is not None and isinstance(run.run_group, RunGroup)
-                assert run.run_group_id == expected_run_group_id
-                assert run.run_group.run_group_id == expected_run_group_id
-
-                if with_cert:
-                    assert run.run_group.certificate_pem == expected_cert_bytes
+                if expected_run_id is None or expected_run_group_id is None:
+                    assert run is None
                 else:
-                    with pytest.raises(Exception):  # noqa: B017
-                        _ = run.run_group.certificate_pem
+                    assert run is not None and isinstance(run, Run)
+                    assert run.run_id == expected_run_id
+
+                    assert run.run_group is not None and isinstance(run.run_group, RunGroup)
+                    assert run.run_group_id == expected_run_group_id
+                    assert run.run_group.run_group_id == expected_run_group_id
+
+                    if with_artifact:
+                        if run.run_artifact_id is not None:
+                            assert isinstance(run.run_artifact, RunArtifact)
+                        else:
+                            assert run.run_artifact is None
+                    else:
+                        with pytest.raises(Exception):  # noqa: B017
+                            _ = run.run_artifact
+
+                    if with_cert:
+                        assert run.run_group.certificate_pem == expected_cert_bytes
+                    else:
+                        with pytest.raises(Exception):  # noqa: B017
+                            _ = run.run_group.certificate_pem
 
 
 @pytest.mark.parametrize("with_cert", [True, False])

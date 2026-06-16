@@ -11,6 +11,7 @@ from fastapi_pagination import Page, paginate
 from cactus_orchestrator.api.common import envoy_dcap_uri_for_host, select_user_or_raise, select_user_run_group_or_raise
 from cactus_orchestrator.auth import AuthPerm, UserContext, jwt_validator
 from cactus_orchestrator.crud import (
+    ACTIVE_RUN_STATUSES,
     delete_runs,
     insert_run_group,
     select_run_group_counts_for_user,
@@ -110,6 +111,7 @@ async def update_group(
 
     if group_request.name:
         run_group.name = group_request.name
+    run_group.is_static_uri = group_request.is_static_uri
 
     # get runs
     await db.session.commit()
@@ -132,8 +134,9 @@ async def delete_group(
     # Close out any existing pod resources for runs before deletion
     all_runs = await select_runs_for_group(db.session, run_group_id, finalised=None, created_at_gte=None)
     for run in all_runs:
-        pod_resources = PodResources.from_run(settings.podman_network, run)
-        await destroy_pod_resources(settings.podman_socket, pod_resources)
+        if run.run_status in ACTIVE_RUN_STATUSES:
+            pod_resources = PodResources.from_run(settings.podman_network, run)
+            await destroy_pod_resources(settings.podman_socket, pod_resources)
 
     # Delete the runs + groups
     await delete_runs(db.session, all_runs)

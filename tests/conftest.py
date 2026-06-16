@@ -2,7 +2,7 @@ import base64
 import os
 from collections.abc import Generator
 from datetime import UTC, datetime, timedelta
-from unittest.mock import AsyncMock, MagicMock, Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import jwt
 import pytest
@@ -39,6 +39,28 @@ def base_environment(preserved_environment, request):
     os.environ["IDLETEARDOWNTASK_ENABLE"] = "false"
     os.environ["JWTAUTH_ISSUER"] = "https://test-cactus-issuer.example.com"
     os.environ["TEST_EXECUTION_FQDN"] = "cactus-testing.test.fqdn"
+
+    # Install images
+    os.environ["CACTUS_IMAGE__V12__CSIP_AUS_VERSION"] = "v1.2"
+    os.environ["CACTUS_IMAGE__V12__POSTGRES"] = "postgres:12"
+    os.environ["CACTUS_IMAGE__V12__RABBITMQ"] = "rabbitmq:12"
+    os.environ["CACTUS_IMAGE__V12__INIT"] = "init:12"
+    os.environ["CACTUS_IMAGE__V12__ENVOY"] = "envoy:12"
+    os.environ["CACTUS_IMAGE__V12__RUNNER"] = "runner:12"
+
+    os.environ["CACTUS_IMAGE__V13__CSIP_AUS_VERSION"] = "v1.3"
+    os.environ["CACTUS_IMAGE__V13__POSTGRES"] = "postgres:13"
+    os.environ["CACTUS_IMAGE__V13__RABBITMQ"] = "rabbitmq:13"
+    os.environ["CACTUS_IMAGE__V13__INIT"] = "init:13"
+    os.environ["CACTUS_IMAGE__V13__ENVOY"] = "envoy:13"
+    os.environ["CACTUS_IMAGE__V13__RUNNER"] = "runner:13"
+
+    os.environ["CACTUS_IMAGE__V13BETA__CSIP_AUS_VERSION"] = "v1.3-beta/storage"
+    os.environ["CACTUS_IMAGE__V13BETA__POSTGRES"] = "postgres:13-beta"
+    os.environ["CACTUS_IMAGE__V13BETA__RABBITMQ"] = "rabbitmq:13-beta"
+    os.environ["CACTUS_IMAGE__V13BETA__INIT"] = "init:13-beta"
+    os.environ["CACTUS_IMAGE__V13BETA__ENVOY"] = "envoy:13-beta"
+    os.environ["CACTUS_IMAGE__V13BETA__RUNNER"] = "runner:13-beta"
 
     idleteardowntask_enable = request.node.get_closest_marker("idleteardowntask_enable")
     if idleteardowntask_enable:

@@ -1,5 +1,7 @@
+import os
 from datetime import UTC, datetime
 from http import HTTPStatus
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from assertical.asserts.time import assert_nowish
@@ -9,7 +11,6 @@ from cactus_test_definitions import CSIPAusVersion
 from sqlalchemy import func, select
 
 from cactus_orchestrator.model import Run, RunArtifact, RunGroup
-from tests.integration import MockedK8s
 
 
 @pytest.mark.asyncio
@@ -42,23 +43,32 @@ async def test_get_groups_paginated(client, pg_base_config, valid_jwt_user1):
 
 
 @pytest.mark.parametrize(
-    "run_group_id, name, expected_status, expected_name",
+    "run_group_id, name, is_static_uri, expected_status, expected_name, expected_is_static_uri",
     [
-        (1, "The updated name", HTTPStatus.OK, "The updated name"),
-        (1, None, HTTPStatus.OK, "name-1"),
-        (1, "", HTTPStatus.OK, "name-1"),
-        (2, "New-Name#?%$}{[]}", HTTPStatus.OK, "New-Name#?%$}{[]}"),
-        (3, "Wrong User", HTTPStatus.FORBIDDEN, "name-3"),
+        (1, "The updated name", True, HTTPStatus.OK, "The updated name", True),
+        (1, "The updated name", False, HTTPStatus.OK, "The updated name", False),
+        (1, None, False, HTTPStatus.OK, "name-1", False),
+        (1, "", True, HTTPStatus.OK, "name-1", True),
+        (2, "New-Name#?%$}{[]}", False, HTTPStatus.OK, "New-Name#?%$}{[]}", False),
+        (3, "Wrong User", True, HTTPStatus.FORBIDDEN, "name-3", False),
     ],
 )
 @pytest.mark.asyncio
 async def test_update_group(
-    client, pg_base_config, valid_jwt_user1, run_group_id, name, expected_status, expected_name
+    client,
+    pg_base_config,
+    valid_jwt_user1,
+    run_group_id,
+    name,
+    is_static_uri,
+    expected_status,
+    expected_name,
+    expected_is_static_uri,
 ):
     """Can groups be updated for a specific user"""
 
     # Act
-    body = RunGroupUpdateRequest(name=name)
+    body = RunGroupUpdateRequest(name=name, is_static_uri=is_static_uri)
     response = await client.put(
         f"/run_group/{run_group_id}",
         headers={"Authorization": f"Bearer {valid_jwt_user1}"},
@@ -70,29 +80,39 @@ async def test_update_group(
     async with generate_async_session(pg_base_config) as session:
         run_group = (await session.execute(select(RunGroup).where(RunGroup.run_group_id == run_group_id))).scalar_one()
         assert run_group.name == expected_name
+        assert run_group.is_static_uri is expected_is_static_uri
 
     if expected_status == HTTPStatus.OK:
-        response_data = RunGroupResponse.from_json(response.text)
+        response_data: RunGroupResponse = RunGroupResponse.from_json(response.text)
         assert not isinstance(response_data, list)
         assert response_data.run_group_id == run_group_id
         assert response_data.name == expected_name
+        assert response_data.is_static_uri is expected_is_static_uri
+        if expected_is_static_uri:
+            assert (
+                response_data.static_uri is not None and os.environ["TEST_EXECUTION_FQDN"] in response_data.static_uri
+            )
+        else:
+            assert response_data.static_uri is None
 
 
 @pytest.mark.parametrize(
-    "version, expected_status",
+    "version, is_static_uri, expected_status",
     [
-        (CSIPAusVersion.RELEASE_1_2.value, HTTPStatus.CREATED),
-        (CSIPAusVersion.BETA_1_3_STORAGE.value, HTTPStatus.CREATED),
-        ("v99.88", HTTPStatus.BAD_REQUEST),
+        (CSIPAusVersion.RELEASE_1_2.value, True, HTTPStatus.CREATED),
+        (CSIPAusVersion.RELEASE_1_2.value, False, HTTPStatus.CREATED),
+        (CSIPAusVersion.BETA_1_3_STORAGE.value, True, HTTPStatus.CREATED),
+        (CSIPAusVersion.BETA_1_3_STORAGE.value, False, HTTPStatus.CREATED),
+        ("v99.88", True, HTTPStatus.BAD_REQUEST),
     ],
 )
 @pytest.mark.asyncio
-async def test_create_group(client, pg_base_config, valid_jwt_user1, version, expected_status):
+async def test_create_group(client, pg_base_config, valid_jwt_user1, version, is_static_uri, expected_status):
     """Can run groups be created for a specific user"""
 
     # Act
 
-    body = RunGroupRequest(csip_aus_version=version)
+    body = RunGroupRequest(csip_aus_version=version, is_static_uri=is_static_uri)
 
     response = await client.post(
         "/run_group", headers={"Authorization": f"Bearer {valid_jwt_user1}"}, content=body.to_json()
@@ -101,10 +121,11 @@ async def test_create_group(client, pg_base_config, valid_jwt_user1, version, ex
     # Assert
     assert response.status_code == expected_status
     if expected_status == HTTPStatus.CREATED:
-        result = RunGroupResponse.from_json(response.text)
+        result: RunGroupResponse = RunGroupResponse.from_json(response.text)
         assert result.name, "Should be set to something"
         assert result.run_group_id > 0
         assert result.csip_aus_version == version
+        assert result.is_static_uri is is_static_uri
         assert_nowish(result.created_at)
 
         async with generate_async_session(pg_base_config) as session:
@@ -115,6 +136,7 @@ async def test_create_group(client, pg_base_config, valid_jwt_user1, version, ex
             assert run_group.name == result.name
             assert run_group.csip_aus_version == result.csip_aus_version
             assert run_group.created_at == result.created_at
+            assert run_group.is_static_uri == result.is_static_uri
     else:
         async with generate_async_session(pg_base_config) as session:
             run_group_count = (await session.execute(select(func.count()).select_from(RunGroup))).scalar_one()
@@ -130,12 +152,13 @@ async def test_create_group(client, pg_base_config, valid_jwt_user1, version, ex
         (99, HTTPStatus.FORBIDDEN, [], [], []),
     ],
 )
+@patch("cactus_orchestrator.api.run_group.destroy_pod_resources", new_callable=AsyncMock)
 @pytest.mark.asyncio
 async def test_delete_group(
+    mock_destroy_pod_resources: AsyncMock,
     client,
     pg_base_config,
     valid_jwt_user1,
-    k8s_mock: MockedK8s,
     run_group_id: int,
     expected_status: HTTPStatus,
     expected_run_ids: list[int],
@@ -181,7 +204,7 @@ async def test_delete_group(
         assert remaining_artifact_ids == []
 
         # Ensure any active runs are properly deallocated
-        assert k8s_mock.destroy.await_count == len(expected_teardown_run_ids)
+        assert mock_destroy_pod_resources.await_count == len(expected_teardown_run_ids)
 
     else:
         assert after_run_count == before_run_count
@@ -189,4 +212,4 @@ async def test_delete_group(
         assert remaining_run_ids == expected_run_ids
         assert remaining_artifact_ids == expected_run_artifact_ids
 
-        k8s_mock.destroy.assert_not_awaited()
+        mock_destroy_pod_resources.assert_not_awaited()

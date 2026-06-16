@@ -167,11 +167,15 @@ async def select_run_group_for_user(
 
 
 async def select_run_with_run_group_for_user(
-    session: AsyncSession, user_id: int, run_id: int, with_cert: bool = False
+    session: AsyncSession, user_id: int, run_id: int, with_cert: bool = False, with_artifact: bool = False
 ) -> Run | None:
     """Selects a Run underneath a specific user_id with the parent RunGroup relationship populated."""
 
     stmt = select(Run).join(RunGroup).where((Run.run_id == run_id) & (RunGroup.user_id == user_id))
+
+    if with_artifact:
+        stmt = stmt.options(joinedload(Run.run_artifact))
+
     if with_cert:
         stmt = stmt.options(selectinload(Run.run_group).undefer(RunGroup.certificate_pem))
     else:

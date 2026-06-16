@@ -143,7 +143,7 @@ async def select_user_run_group_or_raise(
 
 
 async def select_user_run_group_run_or_raise(
-    session: AsyncSession, user_context: UserContext, run_id: int, with_cert: bool = False
+    session: AsyncSession, user_context: UserContext, run_id: int, with_cert: bool = False, with_artifact: bool = False
 ) -> tuple[User, RunGroup, Run]:
     """Selects a user for the specific user context AND their associated run + parent RunGroup or raises a HTTPException
     if none can be found.
@@ -154,7 +154,7 @@ async def select_user_run_group_run_or_raise(
         user_context,
     )
 
-    run = await select_run_with_run_group_for_user(session, user.user_id, run_id, with_cert)
+    run = await select_run_with_run_group_for_user(session, user.user_id, run_id, with_cert, with_artifact)
     if run is None:
         logger.error(f"Cannot find run {run_id} for user {user.user_id}")
         raise HTTPException(

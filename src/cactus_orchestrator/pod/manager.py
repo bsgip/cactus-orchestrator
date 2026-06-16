@@ -425,8 +425,10 @@ def _fetch_running_pods(client: podman.PodmanClient) -> list[RunningPod]:
     for pod in client.pods.list(filters={"label": "cactus=true"}):
         created = datetime.fromisoformat(pod.attrs["Created"])
         is_running = cast(str, pod.attrs["Status"]).casefold() == "Running".casefold()
-        run_id = int(pod.attrs["Labels"]["cactus:run"])
-        run_group_id = int(pod.attrs["Labels"]["cactus:run_group"])
+
+        labels: dict[str, str] = pod.attrs.get("Labels", {})
+        run_id = int(labels.get("cactus:run", -1))
+        run_group_id = int(labels.get("cactus:run_group", -1))
         all_networks: list[str] = pod.attrs["Networks"]
         pod_name: str = pod.attrs["Name"]
         if not all_networks:

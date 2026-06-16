@@ -1,8 +1,13 @@
 import os
+import shutil
+import tempfile
+from collections.abc import Generator
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from http import HTTPMethod, HTTPStatus
 from itertools import product
-from unittest.mock import Mock, patch
+from pathlib import Path
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 from aiohttp import ClientConnectorDNSError
@@ -38,8 +43,96 @@ from sqlalchemy.orm import selectinload
 
 from cactus_orchestrator.api.run import finalise_run, is_all_criteria_met
 from cactus_orchestrator.model import Run, RunArtifact, RunGroup, RunStatus, User
-from cactus_orchestrator.teststack.ids import generate_static_test_stack_id
-from tests.integration import MockedK8s
+from cactus_orchestrator.pod.models import generate_dynamic_uri_external_host, generate_static_uri_external_host
+
+
+@dataclass
+class MockedPod:
+    # Podman lifecycle
+    create_pod_run: AsyncMock
+    destroy_pod_resources: AsyncMock
+    ensure_images: AsyncMock
+
+    # Runner client
+    init: Mock
+    start: Mock
+    finalize: Mock
+    status: Mock
+    health: Mock
+    last_interaction: Mock
+    list_requests: Mock
+    get_request: Mock
+    proceed: Mock
+
+
+@pytest.fixture
+def zip_file_data(reporting_data_json, reporting_data_version) -> bytes:
+    json_reporting_data = reporting_data_json
+
+    # Work in a temporary directory
+    with tempfile.TemporaryDirectory() as tempdirname:
+        base_path = Path(tempdirname)
+
+        # All the test procedure artifacts should be placed in `archive_dir` to be archived
+        archive_dir = base_path / "archive"
+        os.mkdir(archive_dir)
+
+        # Create reporting data json file
+        if json_reporting_data is not None:
+            file_path = archive_dir / f"ReportingData_v{reporting_data_version}.json"
+            with open(file_path, "w") as f:
+                f.write(json_reporting_data)
+
+        # Create the temporary zip file
+        ARCHIVE_BASEFILENAME = "finalize"
+        ARCHIVE_KIND = "zip"
+        shutil.make_archive(str(base_path / ARCHIVE_BASEFILENAME), ARCHIVE_KIND, archive_dir)
+
+        # Read the zip file contents as binary
+        archive_path = base_path / f"{ARCHIVE_BASEFILENAME}.{ARCHIVE_KIND}"
+        with open(archive_path, mode="rb") as f:
+            zip_contents = f.read()
+    return zip_contents
+
+
+@pytest.fixture
+def mocked_pod() -> Generator[MockedPod, None, None]:
+    with (
+        patch("cactus_orchestrator.api.run.create_pod_run", new_callable=AsyncMock) as mock_create_pod_run,
+        patch(
+            "cactus_orchestrator.api.run.destroy_pod_resources", new_callable=AsyncMock
+        ) as mock_destroy_pod_resources,
+        patch("cactus_orchestrator.api.run.ensure_images", new_callable=AsyncMock) as mock_ensure_images,
+        patch("cactus_orchestrator.api.run.RunnerClient.initialise") as init,
+        patch("cactus_orchestrator.api.run.RunnerClient.start") as start,
+        patch("cactus_orchestrator.api.run.RunnerClient.finalize") as finalize,
+        patch("cactus_orchestrator.api.run.RunnerClient.status") as status,
+        patch("cactus_orchestrator.api.run.RunnerClient.last_interaction") as last_interaction,
+        patch("cactus_orchestrator.api.run.RunnerClient.health") as health,
+        patch("cactus_orchestrator.api.run.RunnerClient.list_requests") as list_requests,
+        patch("cactus_orchestrator.api.run.RunnerClient.get_request") as get_request,
+        patch("cactus_orchestrator.api.run.RunnerClient.proceed") as proceed,
+    ):
+        # create_pod_run returns pod_name
+        async def create_pod_run_side_effect(podman_socket: str, images, resources, routes):
+            return resources.pod_name
+
+        mock_create_pod_run.side_effect = create_pod_run_side_effect
+
+        yield MockedPod(
+            create_pod_run=mock_create_pod_run,
+            destroy_pod_resources=mock_destroy_pod_resources,
+            ensure_images=mock_ensure_images,
+            init=init,
+            start=start,
+            finalize=finalize,
+            status=status,
+            last_interaction=last_interaction,
+            health=health,
+            list_requests=list_requests,
+            get_request=get_request,
+            proceed=proceed,
+        )
 
 
 @pytest.mark.parametrize(
@@ -54,7 +147,7 @@ from tests.integration import MockedK8s
 @pytest.mark.asyncio
 async def test_spawn_teststack_and_init_run_dynamic_uris(
     client,
-    k8s_mock: MockedK8s,
+    mocked_pod: MockedPod,
     pg_base_config,
     client_cert_pem_bytes,
     valid_jwt_user1,
@@ -66,20 +159,18 @@ async def test_spawn_teststack_and_init_run_dynamic_uris(
 
     subscription_domain = "abc.def"
 
-    k8s_mock.health.return_value = True
+    mocked_pod.health.return_value = True
 
-    k8s_mock.init.return_value = generate_class_instance(InitResponseBody, is_started=False)
+    mocked_pod.init.return_value = generate_class_instance(InitResponseBody, is_started=False)
 
     async with generate_async_session(pg_base_config) as session:
         user = (await session.execute(select(User).where(User.user_id == 1))).scalar_one()
         user.subscription_domain = subscription_domain
-        user.is_static_uri = False
 
         run_group = (await session.execute(select(RunGroup).where(RunGroup.run_group_id == run_group_id))).scalar_one()
         run_group.certificate_pem = client_cert_pem_bytes
         run_group.is_device_cert = is_device_cert
-
-        expected_static_uri = generate_static_test_stack_id(user)
+        run_group.is_static_uri = False
 
         await session.commit()
 
@@ -91,16 +182,24 @@ async def test_spawn_teststack_and_init_run_dynamic_uris(
 
     # Assert
     assert res.status_code == HTTPStatus.CREATED
-    response_model = InitRunResponse.from_json(res.text)
+    response_model: InitRunResponse = InitRunResponse.from_json(res.text)
     assert os.environ["TEST_EXECUTION_FQDN"] in response_model.test_url, "The returned URI should be public facing"
     assert res.headers["Location"] == f"/run/{response_model.run_id}"
 
+    expected_static_uri_host = generate_static_uri_external_host(os.environ["TEST_EXECUTION_FQDN"], run_group_id)
+    expected_dynamic_uri_host = generate_dynamic_uri_external_host(
+        os.environ["TEST_EXECUTION_FQDN"], run_group_id, response_model.run_id
+    )
+    assert expected_dynamic_uri_host in response_model.test_url
+    assert expected_static_uri_host not in response_model.test_url
+    assert response_model.test_url.endswith("/dcap")
+
     # Check the teststack was spawned
-    k8s_mock.spawn.assert_awaited_once()
+    mocked_pod.create_pod_run.assert_awaited_once()
 
     # Check init was called with a single RunRequest (not a list) for backwards compatibility
-    k8s_mock.init.assert_awaited_once()
-    run_request = k8s_mock.init.call_args_list[0].kwargs["run_request"]
+    mocked_pod.init.assert_awaited_once()
+    run_request = mocked_pod.init.call_args_list[0].kwargs["run_request"]
     assert isinstance(run_request, RunRequest)
     assert not isinstance(run_request, list)
     assert run_request.test_definition.test_procedure_id == TestProcedureId.ALL_01
@@ -120,16 +219,15 @@ async def test_spawn_teststack_and_init_run_dynamic_uris(
         assert new_run.run_group_id == run_group_id
         assert new_run.run_status == RunStatus.initialised
         assert new_run.finalised_at is None
-        assert new_run.teststack_id in response_model.test_url
+        assert new_run.pod_name is not None and str(response_model.run_id) in new_run.pod_name
         assert_nowish(new_run.created_at)
-        assert new_run.teststack_id != expected_static_uri
 
 
 @pytest.mark.parametrize("is_device_cert, is_started_response", product([True, False], [True, False]))
 @pytest.mark.asyncio
 async def test_spawn_teststack_and_init_run_static_uri(
     client,
-    k8s_mock: MockedK8s,
+    mocked_pod: MockedPod,
     pg_base_config,
     client_cert_pem_bytes,
     valid_jwt_user1,
@@ -144,9 +242,9 @@ async def test_spawn_teststack_and_init_run_static_uri(
     run_group_id = 1
     expected_version = "v1.2"
 
-    k8s_mock.health.return_value = True
+    mocked_pod.health.return_value = True
 
-    k8s_mock.init.return_value = generate_class_instance(InitResponseBody, is_started=is_started_response)
+    mocked_pod.init.return_value = generate_class_instance(InitResponseBody, is_started=is_started_response)
 
     async with generate_async_session(pg_base_config) as session:
         # Firstly ensure all user runs are expired before we start
@@ -154,10 +252,9 @@ async def test_spawn_teststack_and_init_run_static_uri(
 
         user = (await session.execute(select(User).where(User.user_id == 1))).scalar_one()
         user.subscription_domain = subscription_domain
-        user.is_static_uri = True
-        expected_static_uri = generate_static_test_stack_id(user)
 
         run_group = (await session.execute(select(RunGroup).where(RunGroup.run_group_id == run_group_id))).scalar_one()
+        run_group.is_static_uri = True
         run_group.certificate_pem = client_cert_pem_bytes
         run_group.is_device_cert = is_device_cert
 
@@ -171,16 +268,24 @@ async def test_spawn_teststack_and_init_run_static_uri(
 
     # Assert
     assert res.status_code == HTTPStatus.CREATED
-    response_model = InitRunResponse.from_json(res.text)
+    response_model: InitRunResponse = InitRunResponse.from_json(res.text)
     assert os.environ["TEST_EXECUTION_FQDN"] in response_model.test_url, "The returned URI should be public facing"
     assert res.headers["Location"] == f"/run/{response_model.run_id}"
 
+    expected_static_uri_host = generate_static_uri_external_host(os.environ["TEST_EXECUTION_FQDN"], run_group_id)
+    expected_dynamic_uri_host = generate_dynamic_uri_external_host(
+        os.environ["TEST_EXECUTION_FQDN"], run_group_id, response_model.run_id
+    )
+    assert expected_dynamic_uri_host not in response_model.test_url
+    assert expected_static_uri_host in response_model.test_url
+    assert response_model.test_url.endswith("/dcap")
+
     # Check the teststack was spawned
-    k8s_mock.spawn.assert_awaited_once()
+    mocked_pod.create_pod_run.assert_awaited_once()
 
     # Check init was called with a single RunRequest (not a list) for backwards compatibility
-    k8s_mock.init.assert_awaited_once()
-    run_request = k8s_mock.init.call_args_list[0].kwargs["run_request"]
+    mocked_pod.init.assert_awaited_once()
+    run_request = mocked_pod.init.call_args_list[0].kwargs["run_request"]
     assert isinstance(run_request, RunRequest)
     assert not isinstance(run_request, list)
     assert run_request.test_definition.test_procedure_id == TestProcedureId.ALL_01
@@ -204,92 +309,36 @@ async def test_spawn_teststack_and_init_run_static_uri(
         else:
             assert new_run.run_status == RunStatus.initialised
         assert new_run.finalised_at is None
-        assert new_run.teststack_id in response_model.test_url
-        assert_nowish(new_run.created_at)
-        assert new_run.teststack_id == expected_static_uri
-
-
-@pytest.mark.asyncio
-async def test_spawn_teststack_and_init_tolerant_to_status_errors(
-    client,
-    k8s_mock: MockedK8s,
-    pg_base_config,
-    client_cert_pem_bytes,
-    valid_jwt_user1,
-):
-    """The status will return failure a couple of times (as seen in real world testing) - the server should tolerate
-    a small number of failures if the status eventually becomes good"""
-
-    # The cert we WONT be using will be expired to ensure it doesn't block us
-    subscription_domain = "abc.def"
-    run_group_id = 1
-
-    k8s_mock.health.side_effect = [ClientConnectorDNSError("mock 1", Mock()), False, True]  # ty:ignore[invalid-argument-type]
-
-    k8s_mock.init.return_value = generate_class_instance(InitResponseBody, is_started=False)
-
-    async with generate_async_session(pg_base_config) as session:
-        user = (await session.execute(select(User).where(User.user_id == 1))).scalar_one()
-        user.subscription_domain = subscription_domain
-        user.is_static_uri = False
-
-        run_group = (await session.execute(select(RunGroup).where(RunGroup.run_group_id == run_group_id))).scalar_one()
-        run_group.certificate_pem = client_cert_pem_bytes
-
-        await session.commit()
-
-    # Act
-    req = InitRunRequest(test_procedure_id=TestProcedureId.ALL_01)
-    res = await client.post(
-        f"/run_group/{run_group_id}/run", content=req.to_json(), headers={"Authorization": f"Bearer {valid_jwt_user1}"}
-    )
-
-    # Assert
-    assert res.status_code == HTTPStatus.CREATED
-    response_model = InitRunResponse.from_json(res.text)
-    assert os.environ["TEST_EXECUTION_FQDN"] in response_model.test_url, "The returned URI should be public facing"
-    assert res.headers["Location"] == f"/run/{response_model.run_id}"
-
-    # Check the teststack was spawned
-    k8s_mock.spawn.assert_awaited_once()
-
-    # Check init/status were called
-    k8s_mock.init.assert_awaited_once()
-    assert k8s_mock.health.call_count == 3
-
-    # Check the DB
-    async with generate_async_session(pg_base_config) as session:
-        new_run = (await session.execute(select(Run).where(Run.run_id == response_model.run_id))).scalar_one()
-        assert new_run.run_group_id == run_group_id
-        assert new_run.run_status == RunStatus.initialised
+        assert new_run.pod_name is not None and str(response_model.run_id) in new_run.pod_name
         assert_nowish(new_run.created_at)
 
 
 @pytest.mark.asyncio
-async def test_spawn_teststack_and_init_too_many_status_errors(
+async def test_spawn_teststack_and_init_failure_from_create(
     client,
-    k8s_mock: MockedK8s,
+    mocked_pod: MockedPod,
     pg_base_config,
     client_cert_pem_bytes,
     valid_jwt_user1,
 ):
-    """If the status check during init is constantly failing - ensure that the init is aborted and the test stack
-    is torn down"""
+    """If the pod creation fails - ensure that the everything is destroyed"""
 
-    # The cert we WONT be using will be expired to ensure it doesn't block us
+    # Arrange
     subscription_domain = "abc.def"
     run_group_id = 1
 
-    k8s_mock.health.side_effect = False
-    k8s_mock.init.return_value = generate_class_instance(InitResponseBody, is_started=False)
+    # Ensure the init call fails
+    mocked_pod.create_pod_run.side_effect = Exception("mock error")
 
     async with generate_async_session(pg_base_config) as session:
         user = (await session.execute(select(User).where(User.user_id == 1))).scalar_one()
         user.subscription_domain = subscription_domain
-        user.is_static_uri = False
 
         run_group = (await session.execute(select(RunGroup).where(RunGroup.run_group_id == run_group_id))).scalar_one()
         run_group.certificate_pem = client_cert_pem_bytes
+        run_group.is_static_uri = False
+
+        initial_run_count = (await session.execute(select(func.count()).select_from(Run))).scalar_one()
 
         await session.commit()
 
@@ -305,13 +354,64 @@ async def test_spawn_teststack_and_init_too_many_status_errors(
     # Assert
     assert res.status_code == HTTPStatus.INTERNAL_SERVER_ERROR
 
-    # Check the teststack was spawned then torn down
-    k8s_mock.spawn.assert_awaited_once()
-    k8s_mock.destroy.assert_awaited_once()
+    # Check the teststack was spawned
+    mocked_pod.create_pod_run.assert_awaited_once()
+    mocked_pod.init.assert_not_called()
 
-    # Check init/status were called
-    assert k8s_mock.health.call_count > 0
-    k8s_mock.init.assert_not_called()
+    async with generate_async_session(pg_base_config) as session:
+        after_run_count = (await session.execute(select(func.count()).select_from(Run))).scalar_one()
+        assert initial_run_count == after_run_count
+
+
+@pytest.mark.asyncio
+async def test_spawn_teststack_and_init_failure_from_init(
+    client,
+    mocked_pod: MockedPod,
+    pg_base_config,
+    client_cert_pem_bytes,
+    valid_jwt_user1,
+):
+    """If the call to init runner is failing - ensure that the init is aborted and the test stack is torn down"""
+
+    # Arrange
+    subscription_domain = "abc.def"
+    run_group_id = 1
+
+    # Ensure the init call fails
+    mocked_pod.init.side_effect = RunnerClientError("Fake error")
+
+    async with generate_async_session(pg_base_config) as session:
+        user = (await session.execute(select(User).where(User.user_id == 1))).scalar_one()
+        user.subscription_domain = subscription_domain
+
+        run_group = (await session.execute(select(RunGroup).where(RunGroup.run_group_id == run_group_id))).scalar_one()
+        run_group.certificate_pem = client_cert_pem_bytes
+        run_group.is_static_uri = False
+
+        initial_run_count = (await session.execute(select(func.count()).select_from(Run))).scalar_one()
+
+        await session.commit()
+
+    # Act
+    req = InitRunRequest(test_procedure_id=TestProcedureId.ALL_01)
+    res = await client.post(
+        f"/run_group/{run_group_id}/run",
+        content=req.to_json(),
+        headers={"Authorization": f"Bearer {valid_jwt_user1}"},
+        timeout=timedelta(seconds=30),
+    )
+
+    # Assert
+    assert res.status_code == HTTPStatus.INTERNAL_SERVER_ERROR
+
+    # Check the teststack was spawned then torn down when the runner client init called failed
+    mocked_pod.create_pod_run.assert_awaited_once()
+    mocked_pod.init.assert_awaited_once()
+    mocked_pod.destroy_pod_resources.assert_awaited_once()
+
+    async with generate_async_session(pg_base_config) as session:
+        after_run_count = (await session.execute(select(func.count()).select_from(Run))).scalar_one()
+        assert initial_run_count == after_run_count
 
 
 @pytest.mark.parametrize(
@@ -321,28 +421,27 @@ async def test_spawn_teststack_and_init_too_many_status_errors(
 @pytest.mark.asyncio
 async def test_spawn_teststack_and_init_run_static_uri_collision(
     client,
-    k8s_mock: MockedK8s,
+    mocked_pod: MockedPod,
     pg_base_config,
     client_cert_pem_bytes,
     valid_jwt_user1,
     is_device_cert: bool,
 ):
-    """Starting a static URI run should fail if there is an existing run for the user"""
+    """Starting a static URI run should fail if there is an existing run for the run group"""
 
     subscription_domain = "abc.def"
-    run_group_id = 1
+    run_group_id = 1  # There are already running runs (in the db) under this run_group
 
-    k8s_mock.health.return_value = True
-    k8s_mock.init.return_value = generate_class_instance(InitResponseBody, is_started=False)
+    mocked_pod.init.return_value = generate_class_instance(InitResponseBody, is_started=False)
 
     async with generate_async_session(pg_base_config) as session:
         user = (await session.execute(select(User).where(User.user_id == 1))).scalar_one()
         user.subscription_domain = subscription_domain
-        user.is_static_uri = True
 
         run_group = (await session.execute(select(RunGroup).where(RunGroup.run_group_id == run_group_id))).scalar_one()
         run_group.certificate_pem = client_cert_pem_bytes
         run_group.is_device_cert = is_device_cert
+        run_group.is_static_uri = True
 
         await session.commit()
 
@@ -356,14 +455,14 @@ async def test_spawn_teststack_and_init_run_static_uri_collision(
     assert res.status_code == HTTPStatus.CONFLICT
 
     # Check the teststack was NOT spawned
-    k8s_mock.spawn.assert_not_awaited()
+    mocked_pod.create_pod_run.assert_not_awaited()
 
 
 @pytest.mark.parametrize("run_group_id", [3, 99])
 @pytest.mark.asyncio
 async def test_spawn_teststack_and_init_run_bad_run_group_id(
     client,
-    k8s_mock: MockedK8s,
+    mocked_pod: MockedPod,
     valid_jwt_user1,
     run_group_id: int,
 ):
@@ -379,7 +478,7 @@ async def test_spawn_teststack_and_init_run_bad_run_group_id(
     assert res.status_code == HTTPStatus.FORBIDDEN
 
     # Check the teststack was NOT spawned
-    k8s_mock.spawn.assert_not_awaited()
+    mocked_pod.create_pod_run.assert_not_awaited()
 
 
 @pytest.mark.parametrize(
@@ -389,7 +488,7 @@ async def test_spawn_teststack_and_init_run_bad_run_group_id(
 @pytest.mark.asyncio
 async def test_spawn_teststack_and_init_run_expired_certs(
     client,
-    k8s_mock: MockedK8s,
+    mocked_pod: MockedPod,
     pg_base_config,
     client_cert_expired_pem_bytes,
     valid_jwt_user1,
@@ -416,58 +515,13 @@ async def test_spawn_teststack_and_init_run_expired_certs(
     assert res.status_code == HTTPStatus.EXPECTATION_FAILED
 
     # Check the teststack was NOT spawned
-    k8s_mock.spawn.assert_not_awaited()
-
-
-@pytest.mark.parametrize(
-    "is_device_cert",
-    [True, False],
-)
-@pytest.mark.asyncio
-async def test_spawn_teststack_and_init_run_teardown_on_init_failure(
-    client,
-    k8s_mock: MockedK8s,
-    pg_base_config,
-    client_cert_pem_bytes,
-    valid_jwt_user1,
-    is_device_cert: bool,
-):
-    """k8s resources should be deallocated if a failure happens during init"""
-
-    # The cert we WONT be using will be expired to ensure it doesn't block us
-    run_group_id = 1
-
-    # Arrange
-    async with generate_async_session(pg_base_config) as session:
-        run_group = (await session.execute(select(RunGroup).where(RunGroup.run_group_id == run_group_id))).scalar_one()
-        run_group.certificate_pem = client_cert_pem_bytes
-        run_group.is_device_cert = is_device_cert
-
-        await session.commit()
-
-    k8s_mock.init.side_effect = RunnerClientError("My mock exception")
-
-    # Act
-    req = InitRunRequest(test_procedure_id=TestProcedureId.ALL_01)
-    res = await client.post(
-        f"/run_group/{run_group_id}/run", content=req.to_json(), headers={"Authorization": f"Bearer {valid_jwt_user1}"}
-    )
-
-    # Assert
-    assert res.status_code == HTTPStatus.INTERNAL_SERVER_ERROR
-
-    # Check the teststack was spawned AND torn down
-    k8s_mock.spawn.assert_awaited_once()
-    k8s_mock.destroy.assert_awaited_once()
-
-    # Check init was called the correct params
-    k8s_mock.init.assert_called_once()
+    mocked_pod.create_pod_run.assert_not_awaited()
 
 
 @pytest.mark.parametrize("run_id, expected_success", [(6, True), (1, False), (99, False)])
 @pytest.mark.asyncio
 async def test_start_run(
-    client, k8s_mock: MockedK8s, pg_base_config, valid_jwt_user2, run_id: int, expected_success: bool
+    client, mocked_pod: MockedPod, pg_base_config, valid_jwt_user2, run_id: int, expected_success: bool
 ):
     """Can a user start runs that are visible to them?"""
 
@@ -477,10 +531,10 @@ async def test_start_run(
     # Assert
     if expected_success:
         assert res.status_code == HTTPStatus.OK
-        response_model = StartRunResponse.from_json(res.text)
+        response_model: StartRunResponse = StartRunResponse.from_json(res.text)
         assert os.environ["TEST_EXECUTION_FQDN"] in response_model.test_url, "The returned URI should be public facing"
 
-        k8s_mock.start.assert_called_once()
+        mocked_pod.start.assert_called_once()
 
         async with generate_async_session(pg_base_config) as session:
             new_run = (await session.execute(select(Run).where(Run.run_id == run_id))).scalar_one()
@@ -488,7 +542,7 @@ async def test_start_run(
     else:
         assert res.status_code == HTTPStatus.NOT_FOUND
 
-        k8s_mock.start.assert_not_called()
+        mocked_pod.start.assert_not_called()
 
         async with generate_async_session(pg_base_config) as session:
             new_run = (await session.execute(select(Run).where(Run.run_id == run_id))).scalar_one_or_none()
@@ -497,12 +551,12 @@ async def test_start_run(
 
 
 @pytest.mark.asyncio
-async def test_start_run_precondition_failed(client, k8s_mock: MockedK8s, pg_base_config, valid_jwt_user1):
+async def test_start_run_precondition_failed(client, mocked_pod: MockedPod, pg_base_config, valid_jwt_user1):
     """Will a precondition failed error from the runner proxy the right info to the client"""
 
     # Arrange
     error_message = "my mock error message"
-    k8s_mock.start.side_effect = RunnerClientError(
+    mocked_pod.start.side_effect = RunnerClientError(
         "Some sort of error", http_status_code=HTTPStatus.PRECONDITION_FAILED, error_message=error_message
     )
     run_id = 1
@@ -571,7 +625,7 @@ async def test_get_individual_run(client, pg_base_config, valid_jwt_user1, run_i
 
 
 @pytest.mark.parametrize(
-    "run_id, expected_status, expected_k8s_teardown, expected_delete",
+    "run_id, expected_status, expected_pod_teardown, expected_delete",
     [
         (1, HTTPStatus.NO_CONTENT, True, True),
         (2, HTTPStatus.NO_CONTENT, False, True),
@@ -585,10 +639,10 @@ async def test_delete_individual_run(
     client,
     pg_base_config,
     valid_jwt_user1,
-    k8s_mock: MockedK8s,
+    mocked_pod: MockedPod,
     run_id: int,
     expected_status: HTTPStatus,
-    expected_k8s_teardown: bool,
+    expected_pod_teardown: bool,
     expected_delete: bool,
 ):
     """Can individual runs be deleted for a specific user"""
@@ -611,10 +665,10 @@ async def test_delete_individual_run(
         else:
             assert after_run_count == before_run_count
 
-    if expected_k8s_teardown:
-        k8s_mock.destroy.assert_awaited_once()
+    if expected_pod_teardown:
+        mocked_pod.destroy_pod_resources.assert_awaited_once()
     else:
-        k8s_mock.destroy.assert_not_awaited()
+        mocked_pod.destroy_pod_resources.assert_not_awaited()
 
 
 @pytest.mark.parametrize(
@@ -721,14 +775,14 @@ def test_is_all_criteria_met(runner_status: RunnerStatus | None, expected: bool 
 @pytest.mark.asyncio
 @patch("cactus_orchestrator.api.run.regenerate_pdf_report")
 async def test_finalise_run_creates_run_artifact_and_updates_run(
-    regenerate_mock, pg_base_config, k8s_mock: MockedK8s, zip_file_data: bytes, runner_status, all_criteria_met
+    regenerate_mock, pg_base_config, mocked_pod: MockedPod, zip_file_data: bytes, runner_status, all_criteria_met
 ):
     """Finalize correctly updates the DB with data requested from the runner"""
     # Arrange
     finalize_data = zip_file_data
 
-    k8s_mock.status.return_value = runner_status
-    k8s_mock.finalize.return_value = finalize_data
+    mocked_pod.status.return_value = runner_status
+    mocked_pod.finalize.return_value = finalize_data
     finalise_time = datetime(2023, 4, 5, tzinfo=UTC)
     timeout_seconds = 10
     regenerate_mock.return_value = finalize_data
@@ -742,8 +796,8 @@ async def test_finalise_run_creates_run_artifact_and_updates_run(
         assert isinstance(result, RunArtifact)
 
     # Assert
-    k8s_mock.status.assert_called_once()
-    k8s_mock.finalize.assert_called_once()
+    mocked_pod.status.assert_called_once()
+    mocked_pod.finalize.assert_called_once()
     regenerate_mock.assert_called_once()
 
     async with generate_async_session(pg_base_config) as session:
@@ -762,7 +816,7 @@ async def test_finalise_run_creates_run_artifact_and_updates_run(
 async def test_finalise_run_handles_runner_finalize_failure(
     regenerate_mock,
     pg_base_config,
-    k8s_mock: MockedK8s,
+    mocked_pod: MockedPod,
 ):
     """Finalize still updates the record as finalised even if runner misbehaves"""
     # Arrange
@@ -770,8 +824,8 @@ async def test_finalise_run_handles_runner_finalize_failure(
         RunnerStatus, step_status={"step1": StepStatus.RESOLVED}, request_history=[]
     )  # This is a success status
 
-    k8s_mock.status.return_value = runner_status
-    k8s_mock.finalize.side_effect = Exception("mock exception")
+    mocked_pod.status.return_value = runner_status
+    mocked_pod.finalize.side_effect = Exception("mock exception")
     finalise_time = datetime(2023, 4, 5, tzinfo=UTC)
     timeout_seconds = 10
     regenerate_mock.return_value = b""
@@ -785,8 +839,8 @@ async def test_finalise_run_handles_runner_finalize_failure(
         assert result is None
 
     # Assert
-    k8s_mock.status.assert_called_once()
-    k8s_mock.finalize.assert_called_once()
+    mocked_pod.status.assert_called_once()
+    mocked_pod.finalize.assert_called_once()
     async with generate_async_session(pg_base_config) as session:
         run = (
             await session.execute(select(Run).where(Run.run_id == 1).options(selectinload(Run.run_artifact)))
@@ -803,15 +857,15 @@ async def test_finalise_run_handles_runner_finalize_failure(
 async def test_finalise_run_handles_runner_status_failure(
     regenerate_mock,
     pg_base_config,
-    k8s_mock: MockedK8s,
+    mocked_pod: MockedPod,
     zip_file_data: bytes,
 ):
     """Finalize will still proceed even if the runner status cannot be determined"""
     # Arrange
     finalize_data = zip_file_data
 
-    k8s_mock.status.side_effect = Exception("my mock exception")
-    k8s_mock.finalize.return_value = finalize_data
+    mocked_pod.status.side_effect = Exception("my mock exception")
+    mocked_pod.finalize.return_value = finalize_data
     finalise_time = datetime(2023, 4, 5, tzinfo=UTC)
     timeout_seconds = 10
     regenerate_mock.return_value = finalize_data
@@ -825,8 +879,8 @@ async def test_finalise_run_handles_runner_status_failure(
         assert isinstance(result, RunArtifact)
 
     # Assert
-    k8s_mock.status.assert_called_once()
-    k8s_mock.finalize.assert_called_once()
+    mocked_pod.status.assert_called_once()
+    mocked_pod.finalize.assert_called_once()
     async with generate_async_session(pg_base_config) as session:
         run = (
             await session.execute(select(Run).where(Run.run_id == 1).options(selectinload(Run.run_artifact)))
@@ -841,12 +895,12 @@ async def test_finalise_run_handles_runner_status_failure(
 @pytest.mark.asyncio
 @patch("cactus_orchestrator.api.run.regenerate_pdf_report")
 async def test_finalise_run_and_teardown_teststack_success(
-    regenerate_mock, client, pg_base_config, k8s_mock, zip_file_data, valid_jwt_user1
+    regenerate_mock, client, pg_base_config, mocked_pod, zip_file_data, valid_jwt_user1
 ):
     # Arrange
     finalize_data = zip_file_data
-    k8s_mock.finalize.return_value = finalize_data
-    k8s_mock.status.return_value = generate_class_instance(RunnerStatus, step_status={})
+    mocked_pod.finalize.return_value = finalize_data
+    mocked_pod.status.return_value = generate_class_instance(RunnerStatus, step_status={})
     regenerate_mock.return_value = finalize_data
 
     # Act
@@ -856,8 +910,8 @@ async def test_finalise_run_and_teardown_teststack_success(
     assert response.status_code == 200
     assert response.content == finalize_data
 
-    k8s_mock.finalize.assert_called_once()
-    k8s_mock.status.assert_called_once()
+    mocked_pod.finalize.assert_called_once()
+    mocked_pod.status.assert_called_once()
 
     async with generate_async_session(pg_base_config) as session:
         run = (
@@ -874,14 +928,14 @@ async def test_finalise_run_and_teardown_teststack_success(
 @pytest.mark.asyncio
 @patch("cactus_orchestrator.api.run.regenerate_pdf_report")
 async def test_finalise_run_and_teardown_teststack_idempotent(
-    regenerate_mock, client, pg_base_config, k8s_mock, zip_file_data, valid_jwt_user1
+    regenerate_mock, client, pg_base_config, mocked_pod: MockedPod, zip_file_data, valid_jwt_user1
 ):
     """Tests that finalising the same run multiple times will not cause any weird side effects"""
 
     # Arrange
     finalize_data = zip_file_data
-    k8s_mock.finalize.side_effect = [finalize_data, Exception("Mock exception - shouldn't be raised")]
-    k8s_mock.status.side_effect = [
+    mocked_pod.finalize.side_effect = [finalize_data, Exception("Mock exception - shouldn't be raised")]
+    mocked_pod.status.side_effect = [
         generate_class_instance(RunnerStatus, step_status={}),
         Exception("Mock exception - shouldn't be raised"),
     ]
@@ -905,9 +959,9 @@ async def test_finalise_run_and_teardown_teststack_idempotent(
         assert run.run_artifact.file_data == finalize_data
 
     # We should've only cleaned up and finalised once (for the first request)
-    k8s_mock.destroy.assert_awaited_once()
-    k8s_mock.finalize.assert_called_once()
-    k8s_mock.status.assert_called_once()
+    mocked_pod.destroy_pod_resources.assert_awaited_once()
+    mocked_pod.finalize.assert_called_once()
+    mocked_pod.status.assert_called_once()
 
     # Fire off the same request again - it should return the exact same data and the DB should still be OK
     response2 = await client.post("/run/1/finalise", headers={"Authorization": f"Bearer {valid_jwt_user1}"})
@@ -924,9 +978,9 @@ async def test_finalise_run_and_teardown_teststack_idempotent(
         assert run.run_artifact.file_data == finalize_data
 
     # We should've only cleaned up and finalised once (for the first request)
-    k8s_mock.destroy.assert_awaited_once()
-    k8s_mock.finalize.assert_called_once()
-    k8s_mock.status.assert_called_once()
+    mocked_pod.destroy_pod_resources.assert_awaited_once()
+    mocked_pod.finalize.assert_called_once()
+    mocked_pod.status.assert_called_once()
 
 
 @pytest.mark.parametrize(
@@ -940,12 +994,12 @@ async def test_finalise_run_and_teardown_teststack_idempotent(
         (99, HTTPStatus.NOT_FOUND),
     ],
 )
-async def test_get_run_status(k8s_mock, client, pg_base_config, valid_jwt_user1, run_id, expected_status):
+async def test_get_run_status(mocked_pod, client, pg_base_config, valid_jwt_user1, run_id, expected_status):
     """Does fetching the run status work under success conditions"""
 
     # Act
     status_response_data = generate_class_instance(RunnerStatus, generate_relationships=True, step_status={})
-    k8s_mock.status.return_value = status_response_data
+    mocked_pod.status.return_value = status_response_data
 
     res = await client.get(f"run/{run_id}/status", headers={"Authorization": f"Bearer {valid_jwt_user1}"})
 
@@ -954,9 +1008,9 @@ async def test_get_run_status(k8s_mock, client, pg_base_config, valid_jwt_user1,
     if expected_status == HTTPStatus.OK:
         actual_status = RunnerStatus.from_dict(res.json())
         assert actual_status == status_response_data
-        k8s_mock.status.assert_called_once()
+        mocked_pod.status.assert_called_once()
     else:
-        k8s_mock.status.assert_not_called()
+        mocked_pod.status.assert_not_called()
 
 
 @pytest.mark.parametrize(
@@ -970,12 +1024,12 @@ async def test_get_run_status(k8s_mock, client, pg_base_config, valid_jwt_user1,
         (99, HTTPStatus.NOT_FOUND),
     ],
 )
-async def test_get_run_request_list(k8s_mock, client, pg_base_config, valid_jwt_user1, run_id, expected_status):
+async def test_get_run_request_list(mocked_pod, client, pg_base_config, valid_jwt_user1, run_id, expected_status):
     """Does fetching the run request list work under common conditions"""
 
     # Act
     expected_request_list = generate_class_instance(RequestList)
-    k8s_mock.list_requests.return_value = expected_request_list
+    mocked_pod.list_requests.return_value = expected_request_list
 
     res = await client.get(f"run/{run_id}/requests", headers={"Authorization": f"Bearer {valid_jwt_user1}"})
 
@@ -984,9 +1038,9 @@ async def test_get_run_request_list(k8s_mock, client, pg_base_config, valid_jwt_
     if expected_status == HTTPStatus.OK:
         actual_list = RequestList.from_dict(res.json())
         assert actual_list == expected_request_list
-        k8s_mock.list_requests.assert_called_once()
+        mocked_pod.list_requests.assert_called_once()
     else:
-        k8s_mock.list_requests.assert_not_called()
+        mocked_pod.list_requests.assert_not_called()
 
 
 @pytest.mark.parametrize(
@@ -1001,14 +1055,14 @@ async def test_get_run_request_list(k8s_mock, client, pg_base_config, valid_jwt_
     ],
 )
 async def test_get_run_request_data(
-    k8s_mock: MockedK8s, client, pg_base_config, valid_jwt_user1, run_id, expected_status
+    mocked_pod: MockedPod, client, pg_base_config, valid_jwt_user1, run_id, expected_status
 ):
     """Does fetching the run request list work under common conditions"""
 
     # Act
     request_id = 315163161
     expected_request_data = generate_class_instance(RequestData)
-    k8s_mock.get_request.return_value = expected_request_data
+    mocked_pod.get_request.return_value = expected_request_data
 
     res = await client.get(
         f"run/{run_id}/requests/{request_id}", headers={"Authorization": f"Bearer {valid_jwt_user1}"}
@@ -1019,12 +1073,12 @@ async def test_get_run_request_data(
     if expected_status == HTTPStatus.OK:
         actual_request = RequestData.from_dict(res.json())
         assert actual_request == expected_request_data
-        k8s_mock.get_request.assert_called_once()
+        mocked_pod.get_request.assert_called_once()
         assert (
-            k8s_mock.get_request.call_args_list[0].args[1] == request_id
+            mocked_pod.get_request.call_args_list[0].args[1] == request_id
         )  # Ensuring request_id is passed to runner client
     else:
-        k8s_mock.get_request.assert_not_called()
+        mocked_pod.get_request.assert_not_called()
 
 
 @pytest.mark.parametrize(
@@ -1039,7 +1093,7 @@ async def test_get_run_request_data(
     ],
 )
 async def test_get_run_artifact_data(
-    k8s_mock: MockedK8s,
+    mocked_pod: MockedPod,
     client,
     pg_base_config,
     valid_jwt_user1,
@@ -1079,22 +1133,22 @@ async def test_get_run_artifact_data(
 
 @pytest.mark.asyncio
 async def test_spawn_teststack_with_playlist(
-    client, k8s_mock: MockedK8s, pg_base_config, client_cert_pem_bytes, valid_jwt_user1
+    client, mocked_pod: MockedPod, pg_base_config, client_cert_pem_bytes, valid_jwt_user1
 ):
     subscription_domain = "playlist.test"
     run_group_id = 1
 
-    k8s_mock.health.return_value = True
-    k8s_mock.init.return_value = generate_class_instance(InitResponseBody, is_started=False)
+    mocked_pod.health.return_value = True
+    mocked_pod.init.return_value = generate_class_instance(InitResponseBody, is_started=False)
 
     async with generate_async_session(pg_base_config) as session:
         user = (await session.execute(select(User).where(User.user_id == 1))).scalar_one()
         user.subscription_domain = subscription_domain
-        user.is_static_uri = False
 
         run_group = (await session.execute(select(RunGroup).where(RunGroup.run_group_id == run_group_id))).scalar_one()
         run_group.certificate_pem = client_cert_pem_bytes
         run_group.is_device_cert = True
+        run_group.is_static_uri = False
 
         await session.commit()
 
@@ -1106,7 +1160,7 @@ async def test_spawn_teststack_with_playlist(
 
     # Assert
     assert res.status_code == HTTPStatus.CREATED
-    response_model = InitRunResponse.from_json(res.text)
+    response_model: InitRunResponse = InitRunResponse.from_json(res.text)
     assert os.environ["TEST_EXECUTION_FQDN"] in response_model.test_url
     assert response_model.playlist_execution_id is not None
     assert response_model.playlist_runs is not None
@@ -1117,11 +1171,11 @@ async def test_spawn_teststack_with_playlist(
     assert response_model.playlist_runs[1].test_procedure_id == TestProcedureId.ALL_02.value
 
     # Check teststack - only ONE teststack should be created
-    k8s_mock.spawn.assert_awaited_once()
-    k8s_mock.init.assert_awaited_once()
+    mocked_pod.create_pod_run.assert_awaited_once()
+    mocked_pod.init.assert_awaited_once()
 
     # Verify RunnerClient.initialise received a list of RunRequests for playlists
-    run_requests = k8s_mock.init.call_args_list[0].kwargs["run_request"]
+    run_requests = mocked_pod.init.call_args_list[0].kwargs["run_request"]
     assert isinstance(run_requests, list)
     assert len(run_requests) == 2
     assert all(isinstance(r, RunRequest) for r in run_requests)
@@ -1136,27 +1190,28 @@ async def test_spawn_teststack_with_playlist(
         assert len(playlist_runs) == 2
         assert playlist_runs[0].run_status == RunStatus.initialised  # First run
         assert playlist_runs[1].run_status == RunStatus.initialised  # Second run
-        assert all(r.teststack_id == playlist_runs[0].teststack_id for r in playlist_runs)  # Same teststack
+        assert playlist_runs[0].pod_name
+        assert all(r.pod_name == playlist_runs[0].pod_name for r in playlist_runs)  # Same pod
 
 
 @pytest.mark.asyncio
 async def test_backwards_compatibility_single_run(
-    client, k8s_mock: MockedK8s, pg_base_config, client_cert_pem_bytes, valid_jwt_user1
+    client, mocked_pod: MockedPod, pg_base_config, client_cert_pem_bytes, valid_jwt_user1
 ):
     subscription_domain = "single.test"
     run_group_id = 1
 
-    k8s_mock.health.return_value = True
-    k8s_mock.init.return_value = generate_class_instance(InitResponseBody, is_started=False)
+    mocked_pod.health.return_value = True
+    mocked_pod.init.return_value = generate_class_instance(InitResponseBody, is_started=False)
 
     async with generate_async_session(pg_base_config) as session:
         user = (await session.execute(select(User).where(User.user_id == 1))).scalar_one()
         user.subscription_domain = subscription_domain
-        user.is_static_uri = False
 
         run_group = (await session.execute(select(RunGroup).where(RunGroup.run_group_id == run_group_id))).scalar_one()
         run_group.certificate_pem = client_cert_pem_bytes
         run_group.is_device_cert = True
+        run_group.is_static_uri = False
 
         await session.commit()
 
@@ -1173,8 +1228,8 @@ async def test_backwards_compatibility_single_run(
     assert response_model.playlist_runs is None or len(response_model.playlist_runs) == 0
 
     # Verify RunnerClient.initialise received a single RunRequest (not a list) for backwards compatibility
-    k8s_mock.init.assert_awaited_once()
-    run_request = k8s_mock.init.call_args_list[0].kwargs["run_request"]
+    mocked_pod.init.assert_awaited_once()
+    run_request = mocked_pod.init.call_args_list[0].kwargs["run_request"]
     assert isinstance(run_request, RunRequest)
     assert not isinstance(run_request, list)
 
@@ -1188,25 +1243,25 @@ async def test_backwards_compatibility_single_run(
 
 async def create_playlist_for_test(
     client,
-    k8s_mock: MockedK8s,
+    mocked_pod: MockedPod,
     pg_base_config,
     client_cert_pem_bytes: bytes,
     valid_jwt: str,
     test_procedure_ids: list[TestProcedureId],
     run_group_id: int = 1,
 ) -> InitRunResponse:
-    """Helper to set up k8s mocks, configure user/run_group, and create a playlist."""
-    k8s_mock.health.return_value = True
-    k8s_mock.init.return_value = generate_class_instance(InitResponseBody, is_started=False)
+    """Helper to set up podman mocks, configure user/run_group, and create a playlist."""
+    mocked_pod.health.return_value = True
+    mocked_pod.init.return_value = generate_class_instance(InitResponseBody, is_started=False)
 
     async with generate_async_session(pg_base_config) as session:
         user = (await session.execute(select(User).where(User.user_id == 1))).scalar_one()
         user.subscription_domain = "playlist.test"
-        user.is_static_uri = False
 
         run_group = (await session.execute(select(RunGroup).where(RunGroup.run_group_id == run_group_id))).scalar_one()
         run_group.certificate_pem = client_cert_pem_bytes
         run_group.is_device_cert = True
+        run_group.is_static_uri = False
 
         await session.commit()
 
@@ -1220,11 +1275,11 @@ async def create_playlist_for_test(
 
 @pytest.mark.asyncio
 async def test_playlist_finalize_advances_to_next_test(
-    client, k8s_mock: MockedK8s, zip_file_data, pg_base_config, client_cert_pem_bytes, valid_jwt_user1
+    client, mocked_pod: MockedPod, zip_file_data, pg_base_config, client_cert_pem_bytes, valid_jwt_user1
 ):
     response_model = await create_playlist_for_test(
         client,
-        k8s_mock,
+        mocked_pod,
         pg_base_config,
         client_cert_pem_bytes,
         valid_jwt_user1,
@@ -1241,8 +1296,8 @@ async def test_playlist_finalize_advances_to_next_test(
 
     # Mock runner status to report second test is now active (simulating advancement)
     finalize_data = zip_file_data
-    k8s_mock.finalize.return_value = finalize_data
-    k8s_mock.status.return_value = generate_class_instance(
+    mocked_pod.finalize.return_value = finalize_data
+    mocked_pod.status.return_value = generate_class_instance(
         RunnerStatus,
         test_procedure_name=TestProcedureId.ALL_02.value,  # Runner reports next test is active
         step_status={},
@@ -1255,7 +1310,7 @@ async def test_playlist_finalize_advances_to_next_test(
     assert response.status_code == HTTPStatus.OK
 
     # Assert - teststack should NOT be torn down, second run should be started
-    k8s_mock.destroy.assert_not_awaited()
+    mocked_pod.destroy_pod_resources.assert_not_awaited()
 
     async with generate_async_session(pg_base_config) as session:
         first_run = (await session.execute(select(Run).where(Run.run_id == first_run_id))).scalar_one()
@@ -1267,11 +1322,11 @@ async def test_playlist_finalize_advances_to_next_test(
 
 @pytest.mark.asyncio
 async def test_playlist_finalize_teardown_on_last_test(
-    client, k8s_mock: MockedK8s, zip_file_data, pg_base_config, client_cert_pem_bytes, valid_jwt_user1
+    client, mocked_pod: MockedPod, zip_file_data, pg_base_config, client_cert_pem_bytes, valid_jwt_user1
 ):
     response_model = await create_playlist_for_test(
         client,
-        k8s_mock,
+        mocked_pod,
         pg_base_config,
         client_cert_pem_bytes,
         valid_jwt_user1,
@@ -1291,8 +1346,8 @@ async def test_playlist_finalize_teardown_on_last_test(
 
     # Mock runner status to report no active test (playlist complete)
     finalize_data = zip_file_data
-    k8s_mock.finalize.return_value = finalize_data
-    k8s_mock.status.return_value = generate_class_instance(
+    mocked_pod.finalize.return_value = finalize_data
+    mocked_pod.status.return_value = generate_class_instance(
         RunnerStatus,
         test_procedure_name="-",  # No active test - playlist complete
         step_status={},
@@ -1305,7 +1360,7 @@ async def test_playlist_finalize_teardown_on_last_test(
     assert response.status_code == HTTPStatus.OK
 
     # Assert - teststack should be torn down
-    k8s_mock.destroy.assert_awaited_once()
+    mocked_pod.create_pod_run.assert_awaited_once()
 
     async with generate_async_session(pg_base_config) as session:
         second_run = (await session.execute(select(Run).where(Run.run_id == second_run_id))).scalar_one()
@@ -1314,11 +1369,11 @@ async def test_playlist_finalize_teardown_on_last_test(
 
 @pytest.mark.asyncio
 async def test_delete_playlist_run_deletes_all_siblings(
-    client, k8s_mock: MockedK8s, pg_base_config, client_cert_pem_bytes, valid_jwt_user1
+    client, mocked_pod: MockedPod, pg_base_config, client_cert_pem_bytes, valid_jwt_user1
 ):
     response_model = await create_playlist_for_test(
         client,
-        k8s_mock,
+        mocked_pod,
         pg_base_config,
         client_cert_pem_bytes,
         valid_jwt_user1,
@@ -1337,7 +1392,7 @@ async def test_delete_playlist_run_deletes_all_siblings(
     assert response.status_code == HTTPStatus.NO_CONTENT
 
     # Assert - teststack should be torn down
-    k8s_mock.destroy.assert_awaited_once()
+    mocked_pod.create_pod_run.assert_awaited_once()
 
     # All runs should be deleted
     async with generate_async_session(pg_base_config) as session:
@@ -1347,11 +1402,11 @@ async def test_delete_playlist_run_deletes_all_siblings(
 
 @pytest.mark.asyncio
 async def test_get_individual_run_returns_playlist_runs(
-    client, k8s_mock: MockedK8s, pg_base_config, client_cert_pem_bytes, valid_jwt_user1
+    client, mocked_pod: MockedPod, pg_base_config, client_cert_pem_bytes, valid_jwt_user1
 ):
     response_model = await create_playlist_for_test(
         client,
-        k8s_mock,
+        mocked_pod,
         pg_base_config,
         client_cert_pem_bytes,
         valid_jwt_user1,
@@ -1373,11 +1428,11 @@ async def test_get_individual_run_returns_playlist_runs(
 
 @pytest.mark.asyncio
 async def test_start_run_rejects_out_of_order_playlist_run(
-    client, k8s_mock: MockedK8s, pg_base_config, client_cert_pem_bytes, valid_jwt_user1
+    client, mocked_pod: MockedPod, pg_base_config, client_cert_pem_bytes, valid_jwt_user1
 ):
     response_model = await create_playlist_for_test(
         client,
-        k8s_mock,
+        mocked_pod,
         pg_base_config,
         client_cert_pem_bytes,
         valid_jwt_user1,
@@ -1409,13 +1464,13 @@ async def test_start_run_rejects_out_of_order_playlist_run(
 )
 @pytest.mark.asyncio
 async def test_proceed_proxy(
-    client, k8s_mock: MockedK8s, pg_base_config, valid_jwt_user1, run_id, handled, expected_status
+    client, mocked_pod: MockedPod, pg_base_config, valid_jwt_user1, run_id, handled, expected_status
 ):
     """Does fetching the run request list work under common conditions"""
 
     # Act
     expected_proceed_data = ProceedResponse(handled=handled)
-    k8s_mock.proceed.return_value = expected_proceed_data
+    mocked_pod.proceed.return_value = expected_proceed_data
 
     res = await client.get(f"/run/{run_id}/proceed", headers={"Authorization": f"Bearer {valid_jwt_user1}"})
 
@@ -1424,9 +1479,9 @@ async def test_proceed_proxy(
     if expected_status == HTTPStatus.OK:
         actual_proceed_data = ProceedResponse.from_json(res.text)
         assert actual_proceed_data == expected_proceed_data
-        k8s_mock.proceed.assert_called_once()
+        mocked_pod.proceed.assert_called_once()
     else:
-        k8s_mock.proceed.assert_not_called()
+        mocked_pod.proceed.assert_not_called()
 
 
 @pytest.mark.asyncio
