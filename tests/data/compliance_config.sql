@@ -33,6 +33,8 @@ INSERT INTO compliance_record (run_group_id, requester_id, created_at)
 VALUES
 (1, 3, '2025-11-24T12:30Z');
 
+
+
 -- Compliance Requests
 INSERT INTO compliance_request (created_at, created_by, updated_at, updated_by, status, csip_aus_version, witnessed_at, der_brand, der_oem, der_series, der_representative_models, software_client_type, software_client_providers, software_client_versions, onsite_hardware_details)
 VALUES
@@ -109,3 +111,9 @@ VALUES
 (2, 3),
 (2, 5), -- end of compliance request 2
 (3, 9); -- end of compliance request 3
+
+-- Compliance Finalisation Records
+INSERT INTO compliance_finalisation_record(compliance_request_id, requester_id, created_at)
+VALUES
+(3, 3, '2025-11-24T12:30Z');
+

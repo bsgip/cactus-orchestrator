@@ -13,6 +13,7 @@ from sqlalchemy.orm import joinedload, selectinload, undefer
 
 from cactus_orchestrator.auth import UserContext
 from cactus_orchestrator.model import (
+    ComplianceFinalisationRecord,
     ComplianceRecord,
     ComplianceRequest,
     ComplianceRequestClass,
@@ -430,13 +431,53 @@ async def update_compliance_generation_record_with_file_data(
     await session.flush()
 
 
+async def select_compliance_finalisation_record(
+    session: AsyncSession,
+    compliance_request_id: int,
+) -> ComplianceFinalisationRecord | None:
+    stmt = (
+        select(ComplianceFinalisationRecord)
+        .where(ComplianceFinalisationRecord.compliance_request_id == compliance_request_id)
+        .options(
+            undefer(ComplianceFinalisationRecord.file_data),
+        )
+    )
+    result = await session.execute(stmt)
+
+    return result.scalar_one_or_none()
+
+
+async def insert_compliance_finalisation_record(
+    session: AsyncSession, compliance_request_id: int, requester_id: int
+) -> ComplianceFinalisationRecord:
+    compliance_record = ComplianceFinalisationRecord(
+        compliance_request_id=compliance_request_id, requester_id=requester_id
+    )
+
+    session.add(compliance_record)
+    await session.flush()
+
+    return compliance_record
+
+
+async def update_compliance_finalisation_record_with_file_data(
+    session: AsyncSession, compliance_record: ComplianceFinalisationRecord, file_data: bytes
+) -> None:
+    compliance_record.file_data = file_data
+    await session.flush()
+
+
 async def select_compliance_request(
     session: AsyncSession,
     compliance_request_id: int,
+    include_users: bool = False,
 ) -> ComplianceRequest:
     stmt = select(ComplianceRequest).where(ComplianceRequest.compliance_request_id == compliance_request_id)
     stmt = stmt.options(selectinload(ComplianceRequest.classes))
     stmt = stmt.options(selectinload(ComplianceRequest.runs))
+    if include_users:
+        stmt = stmt.options(joinedload(ComplianceRequest.created_by_user))
+        stmt = stmt.options(joinedload(ComplianceRequest.updated_by_user))
 
     result = await session.execute(stmt)
     return result.scalar_one()
