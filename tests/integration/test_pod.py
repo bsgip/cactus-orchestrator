@@ -10,25 +10,26 @@ To run it locally against the rootful socket:
     sudo .venv/bin/python -m pytest tests/integration/test_teststack_lifecycle.py -v
 """
 
+import cactus_schema.runner.uri as runner_uri
 import podman
 import pytest
-from aiohttp import ClientSession
 from assertical.asserts.time import assert_nowish
 from assertical.asserts.type import assert_list_type
-from cactus_runner.client import RunnerClient
+from podman.errors import ImageNotFound
 
 from cactus_orchestrator.pod.manager import create_pod_run, destroy_pod_resources, ensure_images, fetch_running_pods
 from cactus_orchestrator.pod.models import PodImages, PodResources, PodRoutes, RunningPod
 
 PODMAN_SOCKET = "/run/podman/podman.sock"
-PODMAN_NETWORK = "cactus-net"
+PODMAN_NETWORK = "pytest-cactus"
 CSIP_AUS_VERSION = "1.2"
+CURL_IMAGE = "docker.io/curlimages/curl"  # Simple image that has curl installed
 
 
 def _podman_available() -> bool:
     try:
         with podman.PodmanClient(base_url=f"unix://{PODMAN_SOCKET}") as client:
-            if not client.ping() or not client.networks.exists(PODMAN_NETWORK):
+            if not client.ping():
                 return False
         return True
     except Exception:
@@ -43,7 +44,15 @@ pytestmark = pytest.mark.skipif(
 
 
 @pytest.fixture
+def ensure_network():
+    with podman.PodmanClient(base_url=f"unix://{PODMAN_SOCKET}") as client:
+        if not client.networks.exists(PODMAN_NETWORK):
+            client.networks.create(PODMAN_NETWORK, dns_enabled=True)
+
+
+@pytest.fixture
 async def empty_pods():
+    """Cleans up the pytest pods both BEFORE and AFTER running the test"""
     for pod in await fetch_running_pods(PODMAN_SOCKET):
         await destroy_pod_resources(PODMAN_SOCKET, pod.resources)
 
@@ -53,8 +62,38 @@ async def empty_pods():
         await destroy_pod_resources(PODMAN_SOCKET, pod.resources)
 
 
+@pytest.fixture
+def in_network_curl():
+    with podman.PodmanClient(base_url=f"unix://{PODMAN_SOCKET}") as client:
+        try:
+            client.images.get(CURL_IMAGE)
+        except ImageNotFound:
+            client.images.pull(CURL_IMAGE)
+
+        def do_curl(uri: str) -> tuple[int, str]:
+            container = client.containers.create(
+                image=CURL_IMAGE,
+                command=["curl", "-fiSs", uri],
+                networks={PODMAN_NETWORK: {}},
+            )
+            try:
+                container.start()
+                exit_code = container.wait(timeout=10)
+                stdout_bytes = container.logs(stdout=True, stderr=True)
+                container.remove()
+                if isinstance(stdout_bytes, bytes):
+                    return (exit_code, stdout_bytes.decode())
+                else:
+                    return (exit_code, b"".join(stdout_bytes).decode())
+            except Exception as exc:
+                container.remove()
+                return (-1, str(exc))
+
+        yield do_curl
+
+
 @pytest.mark.asyncio
-async def test_spawn_brings_up_healthy_pod_then_destroy_cleans_up(empty_pods):
+async def test_spawn_brings_up_healthy_pod_then_destroy_cleans_up(ensure_network, empty_pods, in_network_curl):
     images = PodImages(
         csip_aus_version=CSIP_AUS_VERSION,
         postgres="docker.io/library/postgres:15",
@@ -85,15 +124,20 @@ async def test_spawn_brings_up_healthy_pod_then_destroy_cleans_up(empty_pods):
         external_host="https://not.used/",
     )
 
+    with podman.PodmanClient(base_url=f"unix://{PODMAN_SOCKET}") as client:
+        if client.volumes.exists(resources.volume_name):
+            client.volumes.remove(resources.volume_name, force=True)
+
     await ensure_images(PODMAN_SOCKET, images)
 
     pod_name = await create_pod_run(PODMAN_SOCKET, images, resources, routes)
     assert pod_name
 
-    # check we can connect
-    async with ClientSession(routes.internal_base_url) as session:
-        health = await RunnerClient.health(session)
-        assert health is True
+    # check we can connect - we have to do this from WITHIN the podman-network (as if this test was operating
+    # alongside the test pod)
+    health_uri = routes.internal_base_url + runner_uri.Health.strip("/")
+    status_code, stdout_text = in_network_curl(health_uri)
+    assert status_code == 0, f"ExitCode {status_code} from {health_uri}\n{stdout_text}"
 
     # check we can see it in the running pod listing
     running_pods = await fetch_running_pods(PODMAN_SOCKET)
