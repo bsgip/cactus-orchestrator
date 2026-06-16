@@ -172,12 +172,35 @@ class RunArtifact(Base):
 
 
 class ComplianceRecord(Base):
-    """Records each instance a compliance report is generated for a run group."""
+    """Records each instance a compliance report is generated for a run group.
+
+    Deprecated.
+    This table recorded compliance on a per-run group basis and considered all
+    runs in the run group to determine compliance.
+
+    This was superceded by the ComplianceFinalisationRecord table when
+    Compliance Requests were introduced in mid-2026.
+    """
 
     __tablename__ = "compliance_record"
 
     compliance_record_id: Mapped[int] = mapped_column(name="id", primary_key=True, autoincrement=True)
     run_group_id: Mapped[int] = mapped_column(ForeignKey("run_group.id"))
+    requester_id: Mapped[int] = mapped_column(
+        ForeignKey("user_.id")
+    )  # User who requested generation of the compliance report
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    file_data: Mapped[bytes] = mapped_column(LargeBinary, nullable=True, unique=False, deferred=True)
+
+
+class ComplianceFinalisationRecord(Base):
+    """Records the details of all finalised Compliance Requests."""
+
+    __tablename__ = "compliance_finalisation_record"
+
+    compliance_request_id: Mapped[int] = mapped_column(
+        ForeignKey("compliance_request.id"), unique=True, primary_key=True
+    )
     requester_id: Mapped[int] = mapped_column(
         ForeignKey("user_.id")
     )  # User who requested generation of the compliance report
