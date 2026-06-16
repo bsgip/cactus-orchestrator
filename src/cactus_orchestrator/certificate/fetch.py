@@ -1,4 +1,5 @@
 """File-based certificate loading — replaces k8s Secret reads."""
+
 from typing import get_args
 
 from cryptography import x509
@@ -9,7 +10,9 @@ from cryptography.hazmat.primitives.asymmetric.types import CertificateIssuerPri
 from cactus_orchestrator.settings import CactusOrchestratorError
 
 
-def fetch_certificate_key_pair(cert_path: str, key_path: str) -> tuple[x509.Certificate, CertificateIssuerPrivateKeyTypes]:
+def fetch_certificate_key_pair(
+    cert_path: str, key_path: str
+) -> tuple[x509.Certificate, CertificateIssuerPrivateKeyTypes]:
     with open(cert_path, "rb") as f:
         cert_bytes = f.read()
     with open(key_path, "rb") as f:

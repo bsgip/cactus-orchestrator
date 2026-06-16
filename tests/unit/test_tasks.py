@@ -16,7 +16,7 @@ from sqlalchemy import select
 from cactus_orchestrator.crud import insert_run_for_run_group, select_active_runs_for_user
 from cactus_orchestrator.model import Run, RunGroup, RunStatus
 from cactus_orchestrator.pod.models import PodResources, RunningPod
-from cactus_orchestrator.tasks import destroy_idle_pods, destroy_orphaned_pods, generate_idleteardowntask
+from cactus_orchestrator.tasks import destroy_idle_pods, generate_idleteardowntask
 
 
 @dataclass
