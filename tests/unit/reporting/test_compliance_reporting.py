@@ -32,9 +32,13 @@ async def test_pdf_report_as_bytes(pg_compliance_config):
     report = pdf_report_as_bytes(
         requester=requester,
         user=user,
-        run_group=run_group,
+        name=run_group.name,
+        name_id=f"{run_group.run_group_id}",
+        name_type="Run Group",
+        csip_aus_version=run_group.csip_aus_version,
+        finalisation_datetime=compliance_record.created_at,
+        compliance_id=compliance_record.compliance_record_id,
         compliance_by_class=compliance_by_class,
-        compliance_record=compliance_record,
     )
 
     # Assert

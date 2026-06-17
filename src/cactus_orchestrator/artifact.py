@@ -12,7 +12,12 @@ from cactus_orchestrator.crud import (
     select_user_from_run_group,
     update_runartifact_with_file_data,
 )
-from cactus_orchestrator.model import ComplianceRecord, RunArtifact, User
+from cactus_orchestrator.model import (
+    ComplianceRecord,
+    ComplianceRequest,
+    RunArtifact,
+    User,
+)
 from cactus_orchestrator.reporting.compliance import get_compliance_for_run_group, get_procedure_mapping
 from cactus_orchestrator.reporting.compliance_reporting import pdf_report_as_bytes
 from cactus_orchestrator.reporting.generate import generate_pdf_report_v1
@@ -26,6 +31,28 @@ PDF_GENERATION_ERRORS_FILE_NAME = "pdf-generation-errors.txt"
 class Artifact:
     file_data: bytes
     mime_type: str
+
+
+async def generate_compliance_artifact(
+    session: AsyncSession,
+    requester: User,
+    compliance_request: ComplianceRequest,
+) -> Artifact | None:
+    user = compliance_request.created_by_user
+
+    file_data = pdf_report_as_bytes(
+        requester=requester,
+        user=user,
+        name="",
+        name_id=f"{compliance_request.compliance_request_id}",
+        name_type="Compliance Request",
+        csip_aus_version=compliance_request.csip_aus_version,
+        finalisation_datetime="",
+        compliance_id=compliance_request.compliance_request_id,
+        compliance_by_class={},
+    )
+
+    return Artifact(file_data=file_data, mime_type="application/pdf")
 
 
 async def generate_run_group_artifact(
@@ -48,9 +75,13 @@ async def generate_run_group_artifact(
     file_data = pdf_report_as_bytes(
         requester=requester,
         user=user,
-        run_group=run_group,
+        name=run_group.name,
+        name_id=f"{run_group.run_group_id}",
+        name_type="Run Group",
+        csip_aus_version=run_group.csip_aus_version,
+        finalisation_datetime=compliance_record.created_at,
+        compliance_id=compliance_record.compliance_record_id,
         compliance_by_class=compliance_by_class,
-        compliance_record=compliance_record,
     )
 
     if file_data is None:
