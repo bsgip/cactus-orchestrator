@@ -111,7 +111,8 @@ async def update_group(
 
     if group_request.name:
         run_group.name = group_request.name
-    run_group.is_static_uri = group_request.is_static_uri
+    if group_request.is_static_uri is not None:
+        run_group.is_static_uri = group_request.is_static_uri
 
     # get runs
     await db.session.commit()
