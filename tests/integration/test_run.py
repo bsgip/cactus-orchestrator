@@ -1,6 +1,8 @@
+import io
 import os
 import shutil
 import tempfile
+import zipfile
 from collections.abc import Generator
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -1091,7 +1093,7 @@ async def test_get_run_request_data(
         (99, HTTPStatus.NOT_FOUND, None, None, None, None, None),  # DNE
     ],
 )
-async def test_get_run_artifact_data(
+async def test_get_run_artifact_access_control(
     mocked_pod: MockedPod,
     client,
     pg_base_config,
@@ -1104,7 +1106,11 @@ async def test_get_run_artifact_data(
     expected_group_name,
     expected_group_id,
 ):
-    """Does fetching the run artifact data work under common conditions"""
+    """Access control and response headers for artifact download.
+
+    Fixture file_data is not a valid zip, so BadZipFile is caught and the original bytes are served as-is.
+    PDF regeneration is not triggered because reporting_data is absent on all fixture artifacts.
+    """
 
     # Arrange
     expected_artifact_data = None
@@ -1128,6 +1134,135 @@ async def test_get_run_artifact_data(
         assert res.headers[HEADER_RUN_ID] == str(run_id)
         assert res.headers[HEADER_GROUP_ID] == expected_group_id
         assert res.headers[HEADER_GROUP_NAME] == expected_group_name
+
+
+def _make_zip(include_pdf: bool = False, include_error_file: bool = False) -> bytes:
+    """Helper to build a minimal valid zip for artifact tests."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("CactusTestProcedureSummary.json", '{"result": "pass"}')
+        if include_pdf:
+            zf.writestr("CactusTestProcedureReport.pdf", b"%PDF-1.4 placeholder")
+        if include_error_file:
+            zf.writestr("pdf-generation-errors.txt", "Previous generation failed")
+    return buf.getvalue()
+
+
+@pytest.mark.asyncio
+async def test_get_run_artifact_pdf_already_present__no_regeneration(
+    k8s_mock: MockedK8s, client, pg_base_config, valid_jwt_user1
+):
+    """When the artifact zip already contains a PDF, no regeneration is attempted."""
+    run_id = 2  # artifact_id=1, fixture already has a PDF
+    async with generate_async_session(pg_base_config) as session:
+        artifact = (await session.execute(select(RunArtifact).where(RunArtifact.run_artifact_id == 1))).scalar_one()
+        artifact.file_data = _make_zip(include_pdf=True)
+        artifact.reporting_data = '{"version": 1}'
+        artifact.version = 1
+        await session.commit()
+
+    with patch("cactus_orchestrator.api.run.regenerate_pdf_report") as mock_regen:
+        res = await client.get(f"run/{run_id}/artifact", headers={"Authorization": f"Bearer {valid_jwt_user1}"})
+
+    assert res.status_code == HTTPStatus.OK
+    mock_regen.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_run_artifact_pdf_missing_with_reporting_data__regenerates(
+    k8s_mock: MockedK8s, client, pg_base_config, valid_jwt_user1
+):
+    """When the PDF is absent and reporting data is present, the PDF is generated and saved."""
+    run_id = 2  # artifact_id=1
+    zip_without_pdf = _make_zip(include_pdf=False)
+    zip_with_pdf = _make_zip(include_pdf=True)
+
+    async with generate_async_session(pg_base_config) as session:
+        artifact = (await session.execute(select(RunArtifact).where(RunArtifact.run_artifact_id == 1))).scalar_one()
+        artifact.file_data = zip_without_pdf
+        artifact.reporting_data = '{"version": 1}'
+        artifact.version = 1
+        await session.commit()
+
+    with patch("cactus_orchestrator.api.run.regenerate_pdf_report", return_value=zip_with_pdf) as mock_regen:
+        res = await client.get(f"run/{run_id}/artifact", headers={"Authorization": f"Bearer {valid_jwt_user1}"})
+
+    assert res.status_code == HTTPStatus.OK
+    mock_regen.assert_called_once()
+    # Verify the regenerated zip (with PDF) was saved back and served
+    assert res.read() == zip_with_pdf
+    async with generate_async_session(pg_base_config) as session:
+        artifact = (await session.execute(select(RunArtifact).where(RunArtifact.run_artifact_id == 1))).scalar_one()
+        assert artifact.file_data == zip_with_pdf
+
+
+@pytest.mark.asyncio
+async def test_get_run_artifact_pdf_missing_no_reporting_data__warns_and_serves_original(
+    k8s_mock: MockedK8s, client, pg_base_config, valid_jwt_user1
+):
+    """When the PDF is absent and there is no reporting data, a warning is logged and the original artifact provided."""
+    run_id = 2  # artifact_id=1
+    zip_without_pdf = _make_zip(include_pdf=False)
+
+    async with generate_async_session(pg_base_config) as session:
+        artifact = (await session.execute(select(RunArtifact).where(RunArtifact.run_artifact_id == 1))).scalar_one()
+        artifact.file_data = zip_without_pdf
+        artifact.reporting_data = None
+        artifact.version = None
+        await session.commit()
+
+    with patch("cactus_orchestrator.api.run.regenerate_pdf_report") as mock_regen:
+        res = await client.get(f"run/{run_id}/artifact", headers={"Authorization": f"Bearer {valid_jwt_user1}"})
+
+    assert res.status_code == HTTPStatus.OK
+    mock_regen.assert_not_called()
+    assert res.read() == zip_without_pdf
+
+
+@pytest.mark.asyncio
+async def test_get_run_artifact_pdf_missing_regeneration_fails__serves_original(
+    k8s_mock: MockedK8s, client, pg_base_config, valid_jwt_user1
+):
+    """When PDF regeneration raises, the original artifact is still served."""
+    run_id = 2  # artifact_id=1
+    zip_without_pdf = _make_zip(include_pdf=False)
+
+    async with generate_async_session(pg_base_config) as session:
+        artifact = (await session.execute(select(RunArtifact).where(RunArtifact.run_artifact_id == 1))).scalar_one()
+        artifact.file_data = zip_without_pdf
+        artifact.reporting_data = '{"version": 1}'
+        artifact.version = 1
+        await session.commit()
+
+    with patch("cactus_orchestrator.api.run.regenerate_pdf_report", side_effect=ValueError("generation failed")):
+        res = await client.get(f"run/{run_id}/artifact", headers={"Authorization": f"Bearer {valid_jwt_user1}"})
+
+    assert res.status_code == HTTPStatus.OK
+    assert res.read() == zip_without_pdf
+
+
+@pytest.mark.asyncio
+async def test_get_run_artifact_error_file_present__regenerates(
+    k8s_mock: MockedK8s, client, pg_base_config, valid_jwt_user1
+):
+    """When the artifact has a pdf-generation-errors.txt, regeneration is attempted even if no PDF is missing."""
+    run_id = 2  # artifact_id=1
+    zip_with_error = _make_zip(include_pdf=False, include_error_file=True)
+    zip_with_pdf = _make_zip(include_pdf=True)
+
+    async with generate_async_session(pg_base_config) as session:
+        artifact = (await session.execute(select(RunArtifact).where(RunArtifact.run_artifact_id == 1))).scalar_one()
+        artifact.file_data = zip_with_error
+        artifact.reporting_data = '{"version": 1}'
+        artifact.version = 1
+        await session.commit()
+
+    with patch("cactus_orchestrator.api.run.regenerate_pdf_report", return_value=zip_with_pdf) as mock_regen:
+        res = await client.get(f"run/{run_id}/artifact", headers={"Authorization": f"Bearer {valid_jwt_user1}"})
+
+    assert res.status_code == HTTPStatus.OK
+    mock_regen.assert_called_once()
+    assert res.read() == zip_with_pdf
 
 
 @pytest.mark.asyncio

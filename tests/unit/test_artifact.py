@@ -120,7 +120,9 @@ async def test_regenerate_pdf_report(run_artifact: RunArtifact):
 
     # Act
     updated_zip_file_data = await regenerate_pdf_report(
-        file_data=run_artifact.file_data, raw_reporting_data=run_artifact.reporting_data, version=run_artifact.version
+        file_data=run_artifact.file_data,
+        raw_reporting_data=run_artifact.reporting_data,  # ty: ignore[invalid-argument-type]
+        version=run_artifact.version,  # ty: ignore[invalid-argument-type]
     )
 
     # Assert
@@ -140,8 +142,8 @@ async def test_regenerate_pdf_report_raises_exception(run_artifact: RunArtifact)
         run_artifact.reporting_data = "{}"  # not valid reporting data json
         await regenerate_pdf_report(
             file_data=run_artifact.file_data,
-            raw_reporting_data=run_artifact.reporting_data,
-            version=run_artifact.version,
+            raw_reporting_data=run_artifact.reporting_data,  # ty: ignore[invalid-argument-type]
+            version=run_artifact.version,  # ty: ignore[invalid-argument-type]
         )
     assert "Failed to convert json" in str(excinfo.value)
 
@@ -150,8 +152,8 @@ async def test_regenerate_pdf_report_raises_exception(run_artifact: RunArtifact)
         run_artifact.file_data = b""  # not valid zip file
         await regenerate_pdf_report(
             file_data=run_artifact.file_data,
-            raw_reporting_data=run_artifact.reporting_data,
-            version=run_artifact.version,
+            raw_reporting_data=run_artifact.reporting_data,  # ty: ignore[invalid-argument-type]
+            version=run_artifact.version,  # ty: ignore[invalid-argument-type]
         )
     assert "Failed to replace pdf in archive" in str(excinfo.value)
 

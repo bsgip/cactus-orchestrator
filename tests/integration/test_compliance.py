@@ -98,3 +98,35 @@ async def test_update_compliance_request(client, pg_compliance_config, valid_jwt
 
     # Assert
     assert res.status_code == HTTPStatus.OK
+
+
+@pytest.mark.parametrize(
+    "compliance_request_id, expected_status_code", [(1, HTTPStatus.OK), (99, HTTPStatus.NOT_FOUND)]
+)
+@pytest.mark.asyncio
+async def test_delete_compliance_request(
+    compliance_request_id: int, expected_status_code: HTTPStatus, client, pg_compliance_config, valid_jwt_user1
+):
+    # Act
+    res = await client.delete(
+        uri.ComplianceRequest.format(compliance_request_id=compliance_request_id),
+        headers={"Authorization": f"Bearer {valid_jwt_user1}"},
+    )
+
+    # Assert
+    assert res.status_code == expected_status_code
+
+
+@pytest.mark.asyncio
+async def test_delete_compliance_request_for_wrong_user(client, pg_compliance_config, valid_jwt_user2):
+    # Arrange
+    compliance_request_id = 1
+
+    # Act
+    res = await client.delete(
+        uri.ComplianceRequest.format(compliance_request_id=compliance_request_id),
+        headers={"Authorization": f"Bearer {valid_jwt_user2}"},
+    )
+
+    # Assert
+    assert res.status_code == HTTPStatus.NOT_FOUND
