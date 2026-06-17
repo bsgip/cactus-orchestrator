@@ -1150,7 +1150,7 @@ def _make_zip(include_pdf: bool = False, include_error_file: bool = False) -> by
 
 @pytest.mark.asyncio
 async def test_get_run_artifact_pdf_already_present__no_regeneration(
-    k8s_mock: MockedK8s, client, pg_base_config, valid_jwt_user1
+    mocked_pod: MockedPod, client, pg_base_config, valid_jwt_user1
 ):
     """When the artifact zip already contains a PDF, no regeneration is attempted."""
     run_id = 2  # artifact_id=1, fixture already has a PDF
@@ -1170,7 +1170,7 @@ async def test_get_run_artifact_pdf_already_present__no_regeneration(
 
 @pytest.mark.asyncio
 async def test_get_run_artifact_pdf_missing_with_reporting_data__regenerates(
-    k8s_mock: MockedK8s, client, pg_base_config, valid_jwt_user1
+    mocked_pod: MockedPod, client, pg_base_config, valid_jwt_user1
 ):
     """When the PDF is absent and reporting data is present, the PDF is generated and saved."""
     run_id = 2  # artifact_id=1
@@ -1198,7 +1198,7 @@ async def test_get_run_artifact_pdf_missing_with_reporting_data__regenerates(
 
 @pytest.mark.asyncio
 async def test_get_run_artifact_pdf_missing_no_reporting_data__warns_and_serves_original(
-    k8s_mock: MockedK8s, client, pg_base_config, valid_jwt_user1
+    mocked_pod: MockedPod, client, pg_base_config, valid_jwt_user1
 ):
     """When the PDF is absent and there is no reporting data, a warning is logged and the original artifact provided."""
     run_id = 2  # artifact_id=1
@@ -1221,7 +1221,7 @@ async def test_get_run_artifact_pdf_missing_no_reporting_data__warns_and_serves_
 
 @pytest.mark.asyncio
 async def test_get_run_artifact_pdf_missing_regeneration_fails__serves_original(
-    k8s_mock: MockedK8s, client, pg_base_config, valid_jwt_user1
+    mocked_pod: MockedPod, client, pg_base_config, valid_jwt_user1
 ):
     """When PDF regeneration raises, the original artifact is still served."""
     run_id = 2  # artifact_id=1
@@ -1243,7 +1243,7 @@ async def test_get_run_artifact_pdf_missing_regeneration_fails__serves_original(
 
 @pytest.mark.asyncio
 async def test_get_run_artifact_error_file_present__regenerates(
-    k8s_mock: MockedK8s, client, pg_base_config, valid_jwt_user1
+    mocked_pod: MockedPod, client, pg_base_config, valid_jwt_user1
 ):
     """When the artifact has a pdf-generation-errors.txt, regeneration is attempted even if no PDF is missing."""
     run_id = 2  # artifact_id=1

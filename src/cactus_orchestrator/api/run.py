@@ -70,6 +70,7 @@ from cactus_orchestrator.crud import (
     select_user_runs_with_artifacts,
     update_run_run_status,
     update_run_with_runartifact_and_finalise,
+    update_runartifact_with_file_data,
 )
 from cactus_orchestrator.model import Run, RunArtifact, RunStatus, User
 from cactus_orchestrator.pod.manager import create_pod_run, destroy_pod_resources, ensure_images
