@@ -260,7 +260,7 @@ class ComplianceRequest(Base):
     onsite_hardware_details: Mapped[str] = mapped_column(String, nullable=False, unique=False)
 
     # Finalisation Report PDF file data
-    # file_data: Mapped[bytes] = mapped_column(LargeBinary, nullable=True, unique=False, deferred=True)
+    file_data: Mapped[bytes] = mapped_column(LargeBinary, nullable=True, unique=False, deferred=True)
 
 
 class ComplianceRequestClass(Base):
