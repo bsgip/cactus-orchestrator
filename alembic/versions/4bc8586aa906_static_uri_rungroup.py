@@ -1,7 +1,7 @@
 """static_uri_rungroup
 
 Revision ID: 4bc8586aa906
-Revises: 97983bab48cb
+Revises: 63667f661ad5
 Create Date: 2026-06-11 16:34:49.524098
 
 """
@@ -14,7 +14,7 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "4bc8586aa906"
-down_revision: str | None = "97983bab48cb"
+down_revision: str | None = "63667f661ad5"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
