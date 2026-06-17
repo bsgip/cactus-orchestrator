@@ -174,7 +174,16 @@ class RunArtifact(Base):
 
 
 class ComplianceRecord(Base):
-    """Records each instance a compliance report is generated for a run group."""
+    """Records each instance a compliance report is generated for a run group.
+
+    Deprecated.
+    This table recorded compliance on a per-run group basis and considered all
+    runs in the run group to determine compliance.
+
+    It was superceded by the ComplianceRequest table which holds
+    - finalisation status in the 'status' column
+    - compliance report in the 'file_data' column
+    """
 
     __tablename__ = "compliance_record"
 
@@ -251,6 +260,9 @@ class ComplianceRequest(Base):
     software_client_providers: Mapped[str] = mapped_column(String, nullable=False, unique=False)
     software_client_versions: Mapped[str] = mapped_column(String, nullable=False, unique=False)
     onsite_hardware_details: Mapped[str] = mapped_column(String, nullable=False, unique=False)
+
+    # Finalisation Report PDF file data
+    file_data: Mapped[bytes] = mapped_column(LargeBinary, nullable=True, unique=False, deferred=True)
 
 
 class ComplianceRequestClass(Base):

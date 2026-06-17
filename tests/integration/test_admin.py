@@ -633,3 +633,58 @@ async def test_update_compliance_request(client, pg_compliance_config, valid_jwt
 
     # Assert
     assert res.status_code == HTTPStatus.OK
+
+
+@pytest.mark.parametrize(
+    "compliance_request_id, expected_status_code",
+    [(4, HTTPStatus.NOT_FOUND), (1, HTTPStatus.OK)],
+)
+@pytest.mark.asyncio
+async def test_delete_compliance_request(
+    compliance_request_id: int, expected_status_code: HTTPStatus, client, pg_compliance_config, valid_jwt_admin1
+):
+    # Act
+    res = await client.delete(
+        f"/admin/compliance_request/{compliance_request_id}",
+        headers={"Authorization": f"Bearer {valid_jwt_admin1}"},
+    )
+
+    # Assert
+    assert res.status_code == expected_status_code
+
+
+@pytest.mark.asyncio
+async def test_fetch_compliance_request_artifact(client, pg_compliance_config, valid_jwt_admin1):
+    # Arrange
+    compliance_request_id = 1
+
+    # Act
+    res = await client.get(
+        f"/admin/compliance_request/{compliance_request_id}/artifact",
+        headers={"Authorization": f"Bearer {valid_jwt_admin1}"},
+    )
+
+    # Assert
+    assert res.status_code == HTTPStatus.OK
+    assert res.content == b"\\x0001"
+    assert res.headers["content-type"] == "application/pdf"
+    assert res.headers["content-disposition"] and "attachment; filename=" in res.headers["content-disposition"]
+
+
+@pytest.mark.asyncio
+async def test_finalise_compliance_request(client, pg_compliance_config, valid_jwt_admin1):
+    # Arrange
+    compliance_request_id = 1  # it's possible to finalise an already finalised compliance request
+
+    # Act
+    res = await client.post(
+        f"/admin/compliance_request/{compliance_request_id}/artifact",
+        headers={"Authorization": f"Bearer {valid_jwt_admin1}"},
+    )
+
+    # Assert
+    assert res.status_code == HTTPStatus.OK
+    assert isinstance(res.content, bytes)
+    assert res.content.startswith(b"%PDF")
+    assert res.headers["content-type"] == "application/pdf"
+    assert res.headers["content-disposition"] and "attachment; filename=" in res.headers["content-disposition"]
