@@ -350,7 +350,7 @@ def generate_compliance_table(
 def generate_compliance_summary(
     name: str,
     csip_aus_version: str,
-    finalisation_datetime: str,
+    finalisation_datetime: datetime,
     compliance_by_class: dict,
     stylesheet: StyleSheet,
 ) -> list[Flowable]:
