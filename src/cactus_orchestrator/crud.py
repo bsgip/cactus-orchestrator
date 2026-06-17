@@ -463,12 +463,15 @@ async def select_user_compliance_request(
     session: AsyncSession,
     user_id: int,
     compliance_request_id: int,
+    include_file_data: bool = False,
 ) -> ComplianceRequest:
     stmt = select(ComplianceRequest).where(
         ComplianceRequest.compliance_request_id == compliance_request_id, ComplianceRequest.created_by == user_id
     )
     stmt = stmt.options(selectinload(ComplianceRequest.classes))
     stmt = stmt.options(selectinload(ComplianceRequest.runs))
+    if include_file_data:
+        stmt = stmt.options(undefer(ComplianceRequest.file_data))
 
     result = await session.execute(stmt)
     return result.scalar_one()

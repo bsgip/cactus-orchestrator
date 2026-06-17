@@ -664,9 +664,12 @@ async def test_select_user_compliance_request(pg_compliance_config):
         "software_client_versions",
         "onsite_hardware_details",
     ]
+    FILE_DATA = b"\\x0001"
 
     async with generate_async_session(pg_compliance_config) as session:
-        request = await select_user_compliance_request(session=session, user_id=USER_ID, compliance_request_id=1)
+        request = await select_user_compliance_request(
+            session=session, user_id=USER_ID, compliance_request_id=1, include_file_data=True
+        )
 
         assert request is not None
         assert request.created_by == USER_ID
@@ -681,6 +684,7 @@ async def test_select_user_compliance_request(pg_compliance_config):
         assert request.witnessed_at == WITNESSED_AT
         for attribute in ATTRIBUTES:
             assert getattr(request, attribute) == attribute
+        assert request.file_data == FILE_DATA
 
 
 @pytest.mark.parametrize("user_id,expected_compliance_requests_count", [(1, 2), (2, 1)])
