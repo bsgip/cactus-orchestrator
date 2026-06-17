@@ -1,4 +1,3 @@
-from attr.filters import include
 from datetime import UTC, datetime
 from uuid import uuid4
 
@@ -16,7 +15,7 @@ from cactus_orchestrator.crud import (
     ProcedureRunAggregated,
     count_playlist_runs,
     delete_compliance_request,
-    insert_compliance_finalisation_record,
+    finalise_compliance_request,
     insert_compliance_generation_record,
     insert_compliance_request,
     insert_playlist_runs,
@@ -25,7 +24,6 @@ from cactus_orchestrator.crud import (
     insert_user,
     select_active_runs_for_user,
     select_admin_stats,
-    select_compliance_finalisation_record,
     select_compliance_request,
     select_compliance_requests,
     select_group_runs_aggregated_by_procedure,
@@ -50,7 +48,6 @@ from cactus_orchestrator.crud import (
     update_run_run_status,
     update_run_with_runartifact_and_finalise,
     update_user_name,
-    update_compliance_finalisation_record_with_file_data,
 )
 from cactus_orchestrator.model import (
     ComplianceRecord,
@@ -649,108 +646,6 @@ async def test_insert_compliance_generation_record(pg_base_config):
 
 
 @pytest.mark.asyncio
-async def test_select_compliance_finalisation_record(pg_compliance_config):
-    compliance_request_id = 3
-
-    # Act
-    async with generate_async_session(pg_compliance_config) as s:
-        record = await select_compliance_finalisation_record(session=s, compliance_request_id=compliance_request_id)
-
-        assert record is not None
-        assert record.compliance_request_id == compliance_request_id
-        assert record.requester_id == 3
-
-
-@pytest.mark.asyncio
-async def test_select_compliance_finalisation_record_not_found(pg_compliance_config):
-    compliance_request_id = 1
-
-    # Act
-    async with generate_async_session(pg_compliance_config) as s:
-        record = await select_compliance_finalisation_record(session=s, compliance_request_id=compliance_request_id)
-
-        assert record is None
-
-
-@pytest.mark.asyncio
-async def test_insert_compliance_finalisation_record(pg_compliance_config):
-    """Tests that a new compliance generation record can be inserted"""
-
-    compliance_request_id = 1
-    requester_id = 1  # user1
-
-    # Act
-    async with generate_async_session(pg_compliance_config) as s:
-        record1 = await insert_compliance_finalisation_record(
-            s, compliance_request_id=compliance_request_id, requester_id=requester_id
-        )
-
-        assert record1.compliance_request_id == compliance_request_id
-        assert record1.requester_id == requester_id
-        assert_nowish(record1.created_at)
-
-        await s.commit()
-
-    async with generate_async_session(pg_compliance_config) as s:
-        record2 = await insert_compliance_finalisation_record(
-            s, compliance_request_id=compliance_request_id + 1, requester_id=requester_id
-        )
-
-        assert record2.compliance_request_id == compliance_request_id + 1
-        assert record2.requester_id == requester_id
-        assert_nowish(record2.created_at)
-
-        await s.rollback()
-
-    # Quick check of the database
-    async with generate_async_session(pg_compliance_config) as s:
-        compliance_record_count = (await s.execute(select(func.count()).select_from(ComplianceRecord))).scalar_one()
-        assert compliance_record_count == 1
-
-
-@pytest.mark.asyncio
-async def test_insert_compliance_finalisation_record_compliance_request_uniqueness(pg_compliance_config):
-    """Tests that compliance finalisation record refers to a unique compliance request"""
-
-    compliance_request_id = 1
-    requester_id = 1  # user1
-
-    # Act
-    async with generate_async_session(pg_compliance_config) as s:
-        await insert_compliance_finalisation_record(
-            s, compliance_request_id=compliance_request_id, requester_id=requester_id
-        )
-
-        await s.commit()
-
-        with pytest.raises(IntegrityError):
-            await insert_compliance_finalisation_record(
-                s, compliance_request_id=compliance_request_id, requester_id=requester_id
-            )
-
-
-@pytest.mark.asyncio
-async def test_update_compliance_finalisation_record_with_file_data(pg_compliance_config):
-    compliance_request_id = 3
-    file_data = b"PLACEHOLDER-FILE-DATA"
-
-    # Act
-    async with generate_async_session(pg_compliance_config) as s:
-        record = await select_compliance_finalisation_record(session=s, compliance_request_id=compliance_request_id)
-        assert record is not None
-
-        await update_compliance_finalisation_record_with_file_data(
-            session=s, compliance_record=record, file_data=file_data
-        )
-        await s.commit()
-
-    async with generate_async_session(pg_compliance_config) as s:
-        record = await select_compliance_finalisation_record(session=s, compliance_request_id=compliance_request_id)
-        assert record is not None
-        assert record.file_data == file_data
-
-
-@pytest.mark.asyncio
 async def test_select_user_compliance_request(pg_compliance_config):
     # These match the db fixture values in "tests/data/compliance_config.sql"
     CREATED_AT = datetime.fromisoformat("2026-05-04T13:15Z")
@@ -778,7 +673,7 @@ async def test_select_user_compliance_request(pg_compliance_config):
         assert request.created_at == CREATED_AT
         assert request.updated_by == USER_ID
         assert request.updated_at == UPDATED_AT
-        assert request.status == ComplianceRequestStatus.SUBMITTED
+        assert request.status == ComplianceRequestStatus.FINALISED
         assert CLASSES == {c.compliance_class for c in request.classes}
         assert RUNS == {r.compliance_run_id for r in request.runs}
         assert RUNS == {r.compliance_run.run_id for r in request.runs}
@@ -799,12 +694,17 @@ async def test_select_user_compliance_requests(
         assert len(requests) == expected_compliance_requests_count
 
 
-@pytest.mark.parametrize("compliance_request_id,include_users", [(3, False), (3, True)])
+@pytest.mark.parametrize("compliance_request_id,include_users,include_file_data", [(1, False, False), (1, True, True)])
 @pytest.mark.asyncio
-async def test_select_compliance_request(compliance_request_id: int, include_users: bool, pg_compliance_config):
+async def test_select_compliance_request(
+    compliance_request_id: int, include_users: bool, include_file_data: bool, pg_compliance_config
+):
     async with generate_async_session(pg_compliance_config) as session:
         request = await select_compliance_request(
-            session=session, compliance_request_id=compliance_request_id, include_users=include_users
+            session=session,
+            compliance_request_id=compliance_request_id,
+            include_users=include_users,
+            include_file_data=include_file_data,
         )
 
         assert request is not None
@@ -812,6 +712,8 @@ async def test_select_compliance_request(compliance_request_id: int, include_use
         if include_users:
             assert isinstance(request.created_by_user, User)
             assert isinstance(request.updated_by_user, User)
+        if include_file_data:
+            assert isinstance(request.file_data, bytes)
 
 
 @pytest.mark.asyncio
@@ -912,6 +814,7 @@ async def test_delete_compliance_request(pg_compliance_config):
     # Arrange
     compliance_request_id = 1
 
+    # Act
     async with generate_async_session(pg_compliance_config) as session:
         request = await select_compliance_request(session=session, compliance_request_id=compliance_request_id)
         assert request is not None
@@ -922,6 +825,36 @@ async def test_delete_compliance_request(pg_compliance_config):
     async with generate_async_session(pg_compliance_config) as session:
         with pytest.raises(NoResultFound):
             await select_compliance_request(session=session, compliance_request_id=compliance_request_id)
+
+
+async def test_finalise_compliance_request(pg_compliance_config):
+    # Arrange
+    compliance_request_id = 2
+    updated_by = 1
+    expected_file_data = b"Placeholder-PDF-Data"
+
+    # Act
+    async with generate_async_session(pg_compliance_config) as session:
+        request = await select_compliance_request(session=session, compliance_request_id=compliance_request_id)
+        assert request is not None
+
+        await finalise_compliance_request(
+            session=session, update_by=updated_by, compliance_request=request, file_data=expected_file_data
+        )
+
+        await session.commit()
+
+    # Assert
+    async with generate_async_session(pg_compliance_config) as session:
+        request = await select_compliance_request(
+            session=session, compliance_request_id=compliance_request_id, include_file_data=True
+        )
+        assert request is not None
+
+        assert request.file_data == expected_file_data
+        assert request.status == ComplianceRequestStatus.FINALISED
+        assert request.updated_by == updated_by
+        assert_nowish(request.updated_at)
 
 
 @pytest.mark.asyncio

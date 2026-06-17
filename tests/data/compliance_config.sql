@@ -36,14 +36,14 @@ VALUES
 
 
 -- Compliance Requests
-INSERT INTO compliance_request (created_at, created_by, updated_at, updated_by, status, csip_aus_version, witnessed_at, der_brand, der_oem, der_series, der_representative_models, software_client_type, software_client_providers, software_client_versions, onsite_hardware_details)
+INSERT INTO compliance_request (created_at, created_by, updated_at, updated_by, status, csip_aus_version, witnessed_at, der_brand, der_oem, der_series, der_representative_models, software_client_type, software_client_providers, software_client_versions, onsite_hardware_details, file_data)
 VALUES
 (
 	'2026-05-04T13:15Z',
 	1,
 	'2026-05-04T13:15Z',
 	1,
-	1,
+	4,
 	'v1.2',
 	'2026-05-01T15:30Z',
 	'der_brand',
@@ -53,7 +53,8 @@ VALUES
 	'software_client_type',
 	'software_client_providers',
 	'software_client_versions',
-	'onsite_hardware_details'
+	'onsite_hardware_details',
+	'\\x0001'
 ),  -- compliance_request_id 1
 (
 	'2026-05-07T09:09Z',
@@ -70,7 +71,8 @@ VALUES
 	'software_client_type',
 	'software_client_providers',
 	'software_client_versions',
-	'onsite_hardware_details'
+	'onsite_hardware_details',
+	NULL
 ),  -- compliance_request_id 2
 (
 	'2026-05-07T07:09Z',
@@ -87,7 +89,8 @@ VALUES
 	'software_client_type',
 	'software_client_providers',
 	'software_client_versions',
-	'onsite_hardware_details'
+	'onsite_hardware_details',
+	NULL
 );  -- compliance_request_id 3
 
 -- Compliance Request Classes
@@ -111,9 +114,4 @@ VALUES
 (2, 3),
 (2, 5), -- end of compliance request 2
 (3, 9); -- end of compliance request 3
-
--- Compliance Finalisation Records
-INSERT INTO compliance_finalisation_record(compliance_request_id, requester_id, created_at)
-VALUES
-(3, 3, '2025-11-24T12:30Z');
 
