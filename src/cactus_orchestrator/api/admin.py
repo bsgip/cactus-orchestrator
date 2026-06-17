@@ -758,7 +758,6 @@ async def admin_finalise_compliance_request(
     # Generate compliance report
     try:
         compliance_artifact = await artifact.generate_compliance_artifact(
-            session=db.session,
             requester=requester,
             compliance_request=compliance_request,
         )

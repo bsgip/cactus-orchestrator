@@ -2,6 +2,7 @@ import io
 import logging
 import zipfile
 from dataclasses import dataclass
+from datetime import UTC, datetime
 
 from cactus_runner.models import ReportingData
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -34,20 +35,18 @@ class Artifact:
 
 
 async def generate_compliance_artifact(
-    session: AsyncSession,
     requester: User,
     compliance_request: ComplianceRequest,
-) -> Artifact | None:
-    user = compliance_request.created_by_user
+) -> Artifact:
 
     file_data = pdf_report_as_bytes(
         requester=requester,
-        user=user,
+        user=compliance_request.created_by_user,
         name="",
         name_id=f"{compliance_request.compliance_request_id}",
         name_type="Compliance Request",
         csip_aus_version=compliance_request.csip_aus_version,
-        finalisation_datetime="",
+        finalisation_datetime=datetime.now(UTC),
         compliance_id=compliance_request.compliance_request_id,
         compliance_by_class={},
     )

@@ -16,8 +16,15 @@ from cactus_test_definitions.client import TestProcedureId, get_test_procedure
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from cactus_orchestrator.artifact import regenerate_pdf_report, regenerate_run_artifact, replace_pdf_in_zip_data
-from cactus_orchestrator.crud import select_user_run_with_artifact
+from cactus_orchestrator.api.common import select_user_or_raise
+from cactus_orchestrator.artifact import (
+    generate_compliance_artifact,
+    regenerate_pdf_report,
+    regenerate_run_artifact,
+    replace_pdf_in_zip_data,
+)
+from cactus_orchestrator.auth import AuthPerm, UserContext
+from cactus_orchestrator.crud import select_compliance_request, select_user_run_with_artifact
 from cactus_orchestrator.model import RunArtifact, RunReportGeneration
 
 
@@ -189,3 +196,25 @@ async def test_regenerate_run_artifact(pg_base_config, run_artifact: RunArtifact
         )
         assert len(records) == 1
         assert_nowish(records[0].created_at)
+
+
+@pytest.mark.asyncio
+async def test_generate_compliance_artifact(pg_compliance_config):
+    # Arrange
+    compliance_request_id = 2
+    user_context = UserContext(
+        subject_id="admin-user",
+        issuer_id="https://test-cactus-issuer.example.com",
+        permissions=[AuthPerm.admin_all],
+    )
+
+    async with generate_async_session(pg_compliance_config) as s:
+        requester = await select_user_or_raise(session=s, user_context=user_context)
+        request = await select_compliance_request(
+            session=s, compliance_request_id=compliance_request_id, include_users=True
+        )
+        artifact = await generate_compliance_artifact(requester=requester, compliance_request=request)
+
+        assert artifact.file_data is not None
+        assert len(artifact.file_data) > 0
+        assert artifact.mime_type == "application/pdf"
