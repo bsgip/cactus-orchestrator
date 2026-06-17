@@ -13,6 +13,24 @@ from cactus_schema.orchestrator import (
 
 
 @pytest.mark.asyncio
+async def test_get_compliance_request_artifact(client, pg_compliance_config, valid_jwt_user1):
+    # Arrange
+    compliance_request_id = 1
+
+    # Act
+    res = await client.get(
+        uri.ComplianceRequestArtifact.format(compliance_request_id=compliance_request_id),
+        headers={"Authorization": f"Bearer {valid_jwt_user1}"},
+    )
+
+    # Assert
+    assert res.status_code == HTTPStatus.OK
+    assert res.content == b"\\x0001"
+    assert res.headers["content-type"] == "application/pdf"
+    assert res.headers["content-disposition"] and "attachment; filename=" in res.headers["content-disposition"]
+
+
+@pytest.mark.asyncio
 async def test_get_compliance_requests_paginated(client, pg_compliance_config, valid_jwt_user1):
     # Act
     res = await client.get(uri.ComplianceRequestList, headers={"Authorization": f"Bearer {valid_jwt_user1}"})

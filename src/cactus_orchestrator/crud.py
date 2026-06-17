@@ -430,13 +430,30 @@ async def update_compliance_generation_record_with_file_data(
     await session.flush()
 
 
+async def finalise_compliance_request(
+    session: AsyncSession, update_by: int, compliance_request: ComplianceRequest, file_data: bytes
+) -> None:
+    compliance_request.updated_by = update_by
+    compliance_request.updated_at = datetime.now(UTC)
+    compliance_request.status = ComplianceRequestStatus.FINALISED
+    compliance_request.file_data = file_data
+    await session.flush()
+
+
 async def select_compliance_request(
     session: AsyncSession,
     compliance_request_id: int,
+    include_users: bool = False,
+    include_file_data: bool = False,
 ) -> ComplianceRequest:
     stmt = select(ComplianceRequest).where(ComplianceRequest.compliance_request_id == compliance_request_id)
     stmt = stmt.options(selectinload(ComplianceRequest.classes))
     stmt = stmt.options(selectinload(ComplianceRequest.runs))
+    if include_users:
+        stmt = stmt.options(joinedload(ComplianceRequest.created_by_user))
+        stmt = stmt.options(joinedload(ComplianceRequest.updated_by_user))
+    if include_file_data:
+        stmt = stmt.options(undefer(ComplianceRequest.file_data))
 
     result = await session.execute(stmt)
     return result.scalar_one()
@@ -446,12 +463,15 @@ async def select_user_compliance_request(
     session: AsyncSession,
     user_id: int,
     compliance_request_id: int,
+    include_file_data: bool = False,
 ) -> ComplianceRequest:
     stmt = select(ComplianceRequest).where(
         ComplianceRequest.compliance_request_id == compliance_request_id, ComplianceRequest.created_by == user_id
     )
     stmt = stmt.options(selectinload(ComplianceRequest.classes))
     stmt = stmt.options(selectinload(ComplianceRequest.runs))
+    if include_file_data:
+        stmt = stmt.options(undefer(ComplianceRequest.file_data))
 
     result = await session.execute(stmt)
     return result.scalar_one()

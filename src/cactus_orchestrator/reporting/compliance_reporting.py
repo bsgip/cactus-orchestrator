@@ -1,6 +1,7 @@
 import io
 import logging
 from dataclasses import dataclass
+from datetime import datetime
 from functools import partial
 from typing import cast
 
@@ -26,7 +27,7 @@ from reportlab.platypus import (
 )
 
 from cactus_orchestrator import __version__ as cactus_orchestrator_version
-from cactus_orchestrator.model import ComplianceRecord, RunGroup, User
+from cactus_orchestrator.model import User
 
 logger = logging.getLogger(__name__)
 
@@ -254,12 +255,15 @@ def fig_to_image(fig: go.Figure, content_width: float) -> Image:
 def generate_overview_section(
     requester: User,
     user: User,
-    run_group: RunGroup,
-    compliance_record: ComplianceRecord,
+    csip_aus_version: str,
+    name: str,
+    name_id: str,
+    name_type: str,
+    finalisation_datetime: datetime,
     stylesheet: StyleSheet,
 ) -> list[Flowable]:
 
-    csip_aus_version = f"CSIP-Aus {run_group.csip_aus_version}"
+    csip_aus_version = f"CSIP-Aus {csip_aus_version}"
 
     elements: list[Flowable] = []
     elements.append(Paragraph("Compliance Report", style=stylesheet.title))
@@ -275,12 +279,12 @@ def generate_overview_section(
             ),
             "",
             "Generated on",
-            f"{compliance_record.created_at}",
+            f"{finalisation_datetime}",
         ],
         [
-            "Run group",
+            name_type,
             Paragraph(
-                f"{run_group.name} <i>(ID {run_group.run_group_id})</i>",
+                f"{name} <i>(ID {name_id})</i>",
                 style=stylesheet.overview_table,
             ),
             "",
@@ -344,8 +348,9 @@ def generate_compliance_table(
 
 
 def generate_compliance_summary(
-    run_group: RunGroup,
-    compliance_record: ComplianceRecord,
+    name: str,
+    csip_aus_version: str,
+    finalisation_datetime: datetime,
     compliance_by_class: dict,
     stylesheet: StyleSheet,
 ) -> list[Flowable]:
@@ -354,8 +359,8 @@ def generate_compliance_summary(
     elements.append(
         Paragraph(
             "The following compliance classes defined under"
-            f" <b>CSIP-Aus {run_group.csip_aus_version}</b> have been attained by"
-            f" <b>{run_group.name}</b> on <i>{compliance_record.created_at}</i>."
+            f" <b>CSIP-Aus {csip_aus_version}</b> have been attained by"
+            f" <b>{name}</b> on <i>{finalisation_datetime}</i>."
         )
     )
     elements.append(stylesheet.spacer)
@@ -418,9 +423,12 @@ def generate_runs_section(
 def generate_page_elements(
     requester: User,
     user: User,
-    run_group: RunGroup,
+    name: str,
+    name_id: str,
+    name_type: str,
+    csip_aus_version: str,
     compliance_by_class: dict,
-    compliance_record: ComplianceRecord,
+    finalisation_datetime: datetime,
     stylesheet: StyleSheet,
 ) -> list[Flowable]:
     # raise ValueError("'active_test_procedure' attribute of 'runner_state' cannot be None")
@@ -435,8 +443,11 @@ def generate_page_elements(
     try:
         page_elements.extend(
             generate_overview_section(
-                compliance_record=compliance_record,
-                run_group=run_group,
+                name=name,
+                name_id=name_id,
+                name_type=name_type,
+                csip_aus_version=csip_aus_version,
+                finalisation_datetime=finalisation_datetime,
                 requester=requester,
                 user=user,
                 stylesheet=stylesheet,
@@ -452,8 +463,9 @@ def generate_page_elements(
     try:
         page_elements.extend(
             generate_compliance_summary(
-                compliance_record=compliance_record,
-                run_group=run_group,
+                name=name,
+                csip_aus_version=csip_aus_version,
+                finalisation_datetime=finalisation_datetime,
                 compliance_by_class=compliance_by_class,
                 stylesheet=stylesheet,
             )
@@ -479,37 +491,43 @@ def generate_page_elements(
 def pdf_report_as_bytes(
     requester: User,
     user: User,
-    run_group: RunGroup,
+    name: str,
+    name_id: str,
+    name_type: str,
+    csip_aus_version: str,
+    finalisation_datetime: datetime,
+    compliance_id: int,
     compliance_by_class: dict,
-    compliance_record: ComplianceRecord,
     no_spacers: bool = False,
 ) -> bytes:
+    """Generates a compliance report as PDF bytes"""
+
     stylesheet = get_stylesheet()
     if no_spacers:
         stylesheet.spacer = NullDraw()
 
-    # raise ValueError("Unable to compliance generate report - no data supplied")
-
     page_elements = generate_page_elements(
         requester=requester,
         user=user,
-        run_group=run_group,
+        name=name,
+        name_id=name_id,
+        name_type=name_type,
+        csip_aus_version=csip_aus_version,
         compliance_by_class=compliance_by_class,
-        compliance_record=compliance_record,
+        finalisation_datetime=finalisation_datetime,
         stylesheet=stylesheet,
     )
 
-    csip_aus_version = run_group.csip_aus_version
-    compliance_id = str(compliance_record.compliance_record_id).zfill(COMPLIANCE_ID_LENGTH)
+    formatted_compliance_id = str(compliance_id).zfill(COMPLIANCE_ID_LENGTH)
 
     first_page = partial(
         first_page_template,
-        compliance_id=compliance_id,
+        compliance_id=formatted_compliance_id,
         csip_aus_version=csip_aus_version,
     )
     later_pages = partial(
         later_pages_template,
-        compliance_id=compliance_id,
+        compliance_id=formatted_compliance_id,
         csip_aus_version=csip_aus_version,
     )
 

@@ -29,6 +29,31 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+@router.get(uri.ComplianceRequestArtifact, status_code=HTTPStatus.OK)
+async def get_compliance_request_artifact(
+    compliance_request_id: int,
+    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.user_all}))],
+) -> Response:
+    user = await select_user_or_raise(
+        db.session,
+        user_context,
+    )
+
+    compliance_request = await select_user_compliance_request(
+        session=db.session, user_id=user.user_id, compliance_request_id=compliance_request_id, include_file_data=True
+    )
+
+    if compliance_request is None or compliance_request.file_data is None:
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Not Found")
+
+    return Response(
+        status_code=HTTPStatus.OK,
+        content=compliance_request.file_data,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename=ComplianceReport-{compliance_request_id}.pdf"},
+    )
+
+
 @router.get(uri.ComplianceRequestList, status_code=HTTPStatus.OK)
 async def get_compliance_requests_paginated(
     user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.user_all}))],
