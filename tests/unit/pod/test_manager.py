@@ -399,7 +399,7 @@ async def test_fetch_running_pods(mock_client: MockedPodmanClient):
     assert running_pods[0].run_group_id == 22
     assert running_pods[0].run_id == 11
     assert running_pods[0].name == "my-run-11"
-    assert running_pods[0].resources.volume_name == "run-11-volume"
+    assert running_pods[0].resources.volume_name == "my-run-11-volume"
 
     assert running_pods[1].id == "d9631e0019f949f1b31c04fdf2ae630d814215f45b0e45d88c9d231fad5811af"
     assert running_pods[1].created_time == datetime(2026, 5, 10, 1, 2, 3, 0, timezone(timedelta(hours=0)))
@@ -407,4 +407,4 @@ async def test_fetch_running_pods(mock_client: MockedPodmanClient):
     assert running_pods[1].run_group_id == 33
     assert running_pods[1].run_id == 22
     assert running_pods[1].name == "my-run-22"
-    assert running_pods[1].resources.volume_name == "run-22-volume"
+    assert running_pods[1].resources.volume_name == "my-run-22-volume"

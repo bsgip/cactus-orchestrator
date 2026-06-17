@@ -243,7 +243,7 @@ async def test_get_groups_paginated(
         (1, TestProcedureId.ALL_02, [3]),
         (1, TestProcedureId.ALL_20, []),
         (3, TestProcedureId.GEN_02, [6]),
-        (99, TestProcedureId.ALL_01, []),
+        (99, TestProcedureId.ALL_01, None),
     ],
 )
 @pytest.mark.asyncio
@@ -253,7 +253,7 @@ async def test_admin_get_runs_for_procedure_in_group(
     valid_jwt_admin1,
     run_group_id: int,
     procedure: TestProcedureId,
-    expected_run_ids: list[int],
+    expected_run_ids: list[int] | None,
 ):
     """Test retrieving paginated user runs (underneath a procedure)"""
 
@@ -264,12 +264,15 @@ async def test_admin_get_runs_for_procedure_in_group(
     )
 
     # Assert
-    assert res.status_code == HTTPStatus.OK
-    data = res.json()
-    assert isinstance(data, dict)
-    assert "items" in data
-    assert len(data["items"]) == len(expected_run_ids)
-    assert expected_run_ids == [d["run_id"] for d in data["items"]]
+    if expected_run_ids is None:
+        assert res.status_code == HTTPStatus.NOT_FOUND
+    else:
+        assert res.status_code == HTTPStatus.OK
+        data = res.json()
+        assert isinstance(data, dict)
+        assert "items" in data
+        assert len(data["items"]) == len(expected_run_ids)
+        assert expected_run_ids == [d["run_id"] for d in data["items"]]
 
 
 @pytest.mark.parametrize(

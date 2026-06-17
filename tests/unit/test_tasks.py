@@ -101,23 +101,25 @@ async def test_generate_idleteardowntask(
 async def test_destroy_idle_pods_and_orphans(podman_mock: MockedPodman, pg_base_config, client):
     """Ensure background task triggers actions, with DB unmocked."""
 
+    RUN_GROUP_ID = 1
+
     # Insert some active runs
     async with generate_async_session(pg_base_config) as session:
         # Create some single runs
         provisioning_run_id = (
-            await insert_run_for_run_group(session, 1, "ALL-01", RunStatus.provisioning, False)
+            await insert_run_for_run_group(session, RUN_GROUP_ID, "ALL-01", RunStatus.provisioning, False)
         ).run_id
         started_run_id = (await insert_run_for_run_group(session, 1, "ALL-02", RunStatus.started, False)).run_id
         terminated_run_id = (await insert_run_for_run_group(session, 1, "ALL-02", RunStatus.terminated, False)).run_id
         finalised_run_id = (
-            await insert_run_for_run_group(session, 1, "ALL-02", RunStatus.finalised_by_timeout, False)
+            await insert_run_for_run_group(session, RUN_GROUP_ID, "ALL-02", RunStatus.finalised_by_timeout, False)
         ).run_id
 
         # Create an active playlist
-        p1_r1 = await insert_run_for_run_group(session, 1, "ALL-01", RunStatus.skipped, False)
-        p1_r2 = await insert_run_for_run_group(session, 1, "ALL-01", RunStatus.finalised_by_client, False)
-        p1_r3 = await insert_run_for_run_group(session, 1, "ALL-01", RunStatus.started, False)
-        p1_r4 = await insert_run_for_run_group(session, 1, "ALL-01", RunStatus.initialised, False)
+        p1_r1 = await insert_run_for_run_group(session, RUN_GROUP_ID, "ALL-01", RunStatus.skipped, False)
+        p1_r2 = await insert_run_for_run_group(session, RUN_GROUP_ID, "ALL-01", RunStatus.finalised_by_client, False)
+        p1_r3 = await insert_run_for_run_group(session, RUN_GROUP_ID, "ALL-01", RunStatus.started, False)
+        p1_r4 = await insert_run_for_run_group(session, RUN_GROUP_ID, "ALL-01", RunStatus.initialised, False)
         p1_r1.playlist_execution_id = "abc123"
         p1_r2.playlist_execution_id = "abc123"
         p1_r3.playlist_execution_id = "abc123"
@@ -125,9 +127,9 @@ async def test_destroy_idle_pods_and_orphans(podman_mock: MockedPodman, pg_base_
         p1_run_id = p1_r1.run_id
 
         # Create an inactive playlist
-        p2_r1 = await insert_run_for_run_group(session, 1, "ALL-01", RunStatus.skipped, False)
-        p2_r2 = await insert_run_for_run_group(session, 1, "ALL-01", RunStatus.finalised_by_client, False)
-        p2_r3 = await insert_run_for_run_group(session, 1, "ALL-01", RunStatus.finalised_by_timeout, False)
+        p2_r1 = await insert_run_for_run_group(session, RUN_GROUP_ID, "ALL-01", RunStatus.skipped, False)
+        p2_r2 = await insert_run_for_run_group(session, RUN_GROUP_ID, "ALL-01", RunStatus.finalised_by_client, False)
+        p2_r3 = await insert_run_for_run_group(session, RUN_GROUP_ID, "ALL-01", RunStatus.finalised_by_timeout, False)
         p2_r1.playlist_execution_id = "def456"
         p2_r2.playlist_execution_id = "def456"
         p2_r3.playlist_execution_id = "def456"
@@ -139,37 +141,46 @@ async def test_destroy_idle_pods_and_orphans(podman_mock: MockedPodman, pg_base_
     podman_mock.last_interaction.return_value = ClientInteraction(ClientInteractionType.PROXIED_REQUEST, datetime.now())
 
     # Create some pods - some will act as orphans and some will not
-    podman_mock.fetch_running_pods.side_effect = [
+    podman_mock.fetch_running_pods.return_value = [
         generate_class_instance(
-            RunningPod, run_id=99, resources=generate_class_instance(PodResources, pod_name="run-99")
+            RunningPod,
+            run_group_id=RUN_GROUP_ID,
+            run_id=99,
+            resources=generate_class_instance(PodResources, pod_name="run-99"),
         ),  # ORPHAN - There is no run-99
         generate_class_instance(
             RunningPod,
+            run_group_id=RUN_GROUP_ID,
             run_id=provisioning_run_id,
             resources=generate_class_instance(PodResources, pod_name=f"run-{provisioning_run_id}"),
         ),  # This is active
         generate_class_instance(
             RunningPod,
+            run_group_id=RUN_GROUP_ID,
             run_id=started_run_id,
             resources=generate_class_instance(PodResources, pod_name=f"run-{started_run_id}"),
         ),  # This is active
         generate_class_instance(
             RunningPod,
+            run_group_id=RUN_GROUP_ID,
             run_id=terminated_run_id,
             resources=generate_class_instance(PodResources, pod_name=f"run-{terminated_run_id}"),
         ),  # ORPHAN - This is terminated
         generate_class_instance(
             RunningPod,
+            run_group_id=RUN_GROUP_ID,
             run_id=finalised_run_id,
             resources=generate_class_instance(PodResources, pod_name=f"run-{finalised_run_id}"),
         ),  # ORPHAN - This is finalised
         generate_class_instance(
             RunningPod,
+            run_group_id=RUN_GROUP_ID,
             run_id=p1_run_id,
             resources=generate_class_instance(PodResources, pod_name=f"run-{p1_run_id}"),
         ),  # This playlist is still active
         generate_class_instance(
             RunningPod,
+            run_group_id=RUN_GROUP_ID,
             run_id=p2_run_id,
             resources=generate_class_instance(PodResources, pod_name=f"run-{p2_run_id}"),
         ),  # ORPHAN - This playlist is finalised
@@ -207,9 +218,11 @@ async def test_destroy_idle_pods_and_orphans(podman_mock: MockedPodman, pg_base_
 
     # Check we tore down each teststack
     assert podman_mock.last_interaction.call_count > 0, "We should be checking IDLE status on runs"
-    assert set(expected_pod_name_destroys) == set(
-        [c.args[1].pod_name for c in podman_mock.destroy_pod_resources.call_args_list]
-    ), "We should only be destroying certain pods"
+
+    all_destroyed_resource_names = [c.args[1].pod_name for c in podman_mock.destroy_pod_resources.call_args_list]
+    assert set(expected_pod_name_destroys) == set(all_destroyed_resource_names), (
+        "We should only be destroying certain pods"
+    )
 
 
 @pytest.mark.asyncio
