@@ -27,7 +27,6 @@ async def test_pdf_report_as_bytes(pg_compliance_config):
             procedure_map=await get_procedure_mapping(session, run_group)
         )
 
-    print(f"{compliance_by_class['C']}")
     # Act
     report = pdf_report_as_bytes(
         requester=requester,
