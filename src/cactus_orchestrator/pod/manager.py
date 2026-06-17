@@ -174,7 +174,7 @@ def _create_pod_and_containers(
         userns_mode="auto",
         name=resources.container_postgres_name,
         command=["-c", "listen_addresses=localhost"],
-        environment={"POSTGRES_PASSWORD": "envoy", "POSTGRES_USER": "envoy", "POSTGRES_DB": "envoy"},
+        environment={"POSTGRES_PASSWORD": "envoy", "POSTGRES_USER": "envoy", "POSTGRES_DB": "envoy"},  # nosec # This is for internal use only - not exposed
     )
     timings.append(("postgres", time.monotonic() - t0))
 
@@ -203,7 +203,7 @@ def _create_pod_and_containers(
         name=resources.container_rabbitmq_name,
         environment={
             "RABBITMQ_DEFAULT_USER": "guest",
-            "RABBITMQ_DEFAULT_PASS": "guest",
+            "RABBITMQ_DEFAULT_PASS": "guest",  # nosec # This is for internal use only - not exposed
             "RABBITMQ_ERLANG_COOKIE": "teststack_cookie",
             "RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS": "-setcookie teststack_cookie",
         },
@@ -252,7 +252,7 @@ def _create_pod_and_containers(
             "RABBIT_MQ_BROKER_URL": RABBIT_MQ_BROKER_URL,
             "ALLOW_DEVICE_REGISTRATION": "True",
             "ADMIN_USERNAME": "admin",
-            "ADMIN_PASSWORD": "password",
+            "ADMIN_PASSWORD": "password",  # nosec # This is for internal use only - not exposed
             "LOG_CONFIG": "logconf.admin.json",
             "MIGRATION_SENTINEL": "/shared/migrations.ready",
         },
@@ -322,7 +322,7 @@ def _create_pod_and_containers(
                 "ENVOY_ADMIN_URL": "http://localhost:8001",
                 "DATABASE_URL": ENVOY_DATABASE_URL_PSYCOPG,
                 "ENVOY_ADMIN_BASICAUTH_USERNAME": "admin",
-                "ENVOY_ADMIN_BASICAUTH_PASSWORD": "password",
+                "ENVOY_ADMIN_BASICAUTH_PASSWORD": "password",  # nosec # This is for internal use only - not exposed
                 "HEADER_MEDIA_PARAM_VALUE": images.csip_aus_version,
             },
             "volumes": shared_volumes,

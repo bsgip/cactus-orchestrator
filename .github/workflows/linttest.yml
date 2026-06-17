@@ -64,10 +64,8 @@ jobs:
 
       - name: Grant current user access to the root socket
         run: |
-          sudo chgrp "$(id -gn)" /run/podman/
-          sudo chmod 660 /run/podman/
-          sudo chgrp "$(id -gn)" /run/podman/podman.sock
-          sudo chmod 660 /run/podman/podman.sock
+          sudo chmod 777 /run/podman/
+          sudo chmod 777 /run/podman/podman.sock
           ls -l /run/podman/podman.sock
 
       - name: Install Dependencies
