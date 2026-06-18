@@ -32,12 +32,7 @@ target_metadata = model.Base.metadata
 # ... etc.
 
 
-def _strip_async(dsn: str) -> str:
-    # Get the async URL and convert it to sync
-    return re.sub(r"postgresql\+asyncpg", "postgresql+psycopg2", dsn)
-
-
-config.set_main_option("sqlalchemy.url", _strip_async(str(main_settings.orchestrator_database_url)))
+config.set_main_option("sqlalchemy.url", str(main_settings.orchestrator_database_url))
 
 
 def run_migrations_offline() -> None:

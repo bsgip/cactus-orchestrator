@@ -93,16 +93,19 @@ sudo systemctl restart podman.socket
 ```
 
 
-## Database-related
-- Only tested with **PostgreSQL 16**.
-- Uses **SQLAlchemy with asyncpg**.
-- **Alembic** manages schema migrations, with scripts located under [`./alembic`](./alembic).
-- Database connection is configured via the `ORCHESTRATOR_DATABASE_URL` environment variable.
-- Migrations are not run automatically; apply manually as part of deployment.
+## DB Setup
 
-## TODO / Notes
+Create DB and DB user
+```
+sudo -u postgres psql
+postgres=# create database cactusorchestrator;
+postgres=# create user cactususer with encrypted password 'mypass';
+postgres=# grant all privileges on database cactusorchestrator to cactususer;
+postgres=# alter database cactusorchestrator owner to cactususer;
+```
 
-- Consider dynamically generating all resources instead of relying on pre-defined templates.
-- Evaluate adoption of a modern, typed Kubernetes client library.
-- Investigate replacing StatefulSets with regular Pods if persistent identity is no longer needed.
-
+Apply alembic migrations
+```
+export ORCHESTRATOR_DATABASE_URL="postgresql+asyncpg://cactususer:mypass@localhost:5432/cactusorchestrator"
+uv run alembic upgrade head
+```

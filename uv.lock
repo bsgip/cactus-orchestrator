@@ -324,6 +324,7 @@ dependencies = [
 
 [package.optional-dependencies]
 dev = [
+    { name = "alembic" },
     { name = "bandit" },
     { name = "coverage" },
     { name = "pandas-stubs" },
@@ -349,6 +350,7 @@ test = [
 
 [package.metadata]
 requires-dist = [
+    { name = "alembic", marker = "extra == 'dev'" },
     { name = "asgi-lifespan", marker = "extra == 'test'" },
     { name = "assertical", marker = "extra == 'test'", specifier = ">=0.4.0" },
     { name = "asyncpg" },

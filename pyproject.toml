@@ -47,6 +47,7 @@ dev = [
     "coverage",
     "pandas-stubs",
     "types-reportlab",
+    "alembic",
 ]
 test = [
     "pytest",
