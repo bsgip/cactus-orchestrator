@@ -76,7 +76,6 @@ def map_run_to_run_response(
 
 async def map_to_compliance_request_response(request: ComplianceRequest) -> ComplianceRequestResponse:
     return ComplianceRequestResponse(
-        
         compliance_request_id=request.compliance_request_id,
         created_at=request.created_at,
         created_by=request.created_by,
