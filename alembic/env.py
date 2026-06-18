@@ -1,5 +1,4 @@
 import asyncio
-import re
 from logging.config import fileConfig
 
 from sqlalchemy import Connection, pool
