@@ -184,7 +184,10 @@ async def admin_get_users(
             run_groups=(
                 [
                     map_group_to_group_response(
-                        group=rg, test_execution_fqdn=settings.test_execution_fqdn, total_runs=0
+                        group=rg,
+                        cactus_fqdn=settings.cactus_fqdn,
+                        envoy_href=settings.envoy_prefix,
+                        total_runs=0,
                     )
                     for rg in run_groups_by_user[user.user_id]
                 ]
@@ -275,7 +278,7 @@ async def admin_get_groups_paginated(
     if run_groups:
         resp = [
             map_group_to_group_response(
-                group, settings.test_execution_fqdn, run_group_counts.get(group.run_group_id, 0)
+                group, settings.cactus_fqdn, settings.envoy_prefix, run_group_counts.get(group.run_group_id, 0)
             )
             for group in run_groups
             if group
@@ -404,7 +407,12 @@ async def admin_get_runs_for_procedure_in_group(
     for run in runs:
         pod_resources = PodResources.from_run(settings.podman_network, run)
         pod_routes = PodRoutes.from_run(
-            settings.test_execution_fqdn, settings.podman_runner_port, pod_resources, run_group, run
+            settings.cactus_fqdn,
+            settings.envoy_prefix,
+            settings.podman_runner_port,
+            pod_resources,
+            run_group,
+            run,
         )
         run_responses.append(map_run_to_run_response(run, pod_routes))
 
@@ -431,7 +439,12 @@ async def admin_get_group_runs_paginated(
     for run in runs:
         pod_resources = PodResources.from_run(settings.podman_network, run)
         pod_routes = PodRoutes.from_run(
-            settings.test_execution_fqdn, settings.podman_runner_port, pod_resources, run_group, run
+            settings.cactus_fqdn,
+            settings.envoy_prefix,
+            settings.podman_runner_port,
+            pod_resources,
+            run_group,
+            run,
         )
         run_responses.append(map_run_to_run_response(run, pod_routes))
     return paginate(run_responses)
@@ -468,11 +481,11 @@ async def admin_get_run_status(
     settings = get_current_settings()
     pod_resources = PodResources.from_run(settings.podman_network, run)
     pod_routes = PodRoutes.from_run(
-        settings.test_execution_fqdn, settings.podman_runner_port, pod_resources, run_group, run
+        settings.cactus_fqdn, settings.envoy_prefix, settings.podman_runner_port, pod_resources, run_group, run
     )
     async with ClientSession(
         base_url=pod_routes.internal_base_url,
-        timeout=ClientTimeout(settings.test_execution_comms_timeout_seconds),
+        timeout=ClientTimeout(settings.comms_timeout_seconds),
     ) as s:
         try:
             return await RunnerClient.status(s)
@@ -510,11 +523,11 @@ async def admin_proceed_proxy(
     settings = get_current_settings()
     pod_resources = PodResources.from_run(settings.podman_network, run)
     pod_routes = PodRoutes.from_run(
-        settings.test_execution_fqdn, settings.podman_runner_port, pod_resources, run_group, run
+        settings.cactus_fqdn, settings.envoy_prefix, settings.podman_runner_port, pod_resources, run_group, run
     )
     async with ClientSession(
         base_url=pod_routes.internal_base_url,
-        timeout=ClientTimeout(settings.test_execution_comms_timeout_seconds),
+        timeout=ClientTimeout(settings.comms_timeout_seconds),
     ) as s:
         try:
             return await RunnerClient.proceed(s)
@@ -543,7 +556,7 @@ async def admin_get_individual_run(
     settings = get_current_settings()
     pod_resources = PodResources.from_run(settings.podman_network, run)
     pod_routes = PodRoutes.from_run(
-        settings.test_execution_fqdn, settings.podman_runner_port, pod_resources, run_group, run
+        settings.cactus_fqdn, settings.envoy_prefix, settings.podman_runner_port, pod_resources, run_group, run
     )
 
     return map_run_to_run_response(run, pod_routes)

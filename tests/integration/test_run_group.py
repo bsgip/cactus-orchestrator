@@ -89,9 +89,7 @@ async def test_update_group(
         assert response_data.name == expected_name
         assert response_data.is_static_uri is expected_is_static_uri
         if expected_is_static_uri:
-            assert (
-                response_data.static_uri is not None and os.environ["TEST_EXECUTION_FQDN"] in response_data.static_uri
-            )
+            assert response_data.static_uri is not None and os.environ["CACTUS_FQDN"] in response_data.static_uri
         else:
             assert response_data.static_uri is None
 

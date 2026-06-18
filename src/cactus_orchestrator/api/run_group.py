@@ -20,7 +20,7 @@ from cactus_orchestrator.crud import (
 )
 from cactus_orchestrator.model import RunGroup
 from cactus_orchestrator.pod.manager import destroy_pod_resources
-from cactus_orchestrator.pod.models import ENVOY_HREF_PREFIX, PodResources, generate_static_uri_external_host
+from cactus_orchestrator.pod.models import PodResources, generate_static_uri_external_host
 from cactus_orchestrator.settings import get_current_settings
 
 logger = logging.getLogger(__name__)
@@ -29,10 +29,12 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-def map_group_to_group_response(group: RunGroup, test_execution_fqdn: str, total_runs: int) -> RunGroupResponse:
+def map_group_to_group_response(
+    group: RunGroup, cactus_fqdn: str, envoy_href: str, total_runs: int
+) -> RunGroupResponse:
     if group.is_static_uri:
         static_uri = envoy_dcap_uri_for_host(
-            generate_static_uri_external_host(test_execution_fqdn, group.run_group_id), ENVOY_HREF_PREFIX
+            generate_static_uri_external_host(cactus_fqdn, group.run_group_id), envoy_href
         )
     else:
         static_uri = None
@@ -65,7 +67,7 @@ async def get_groups_paginated(
     if run_groups:
         resp = [
             map_group_to_group_response(
-                group, settings.test_execution_fqdn, run_group_counts.get(group.run_group_id, 0)
+                group, settings.cactus_fqdn, settings.envoy_prefix, run_group_counts.get(group.run_group_id, 0)
             )
             for group in run_groups
             if group
@@ -96,7 +98,7 @@ async def create_group(
     await db.session.commit()
 
     settings = get_current_settings()
-    return map_group_to_group_response(run_group, settings.test_execution_fqdn, 0)
+    return map_group_to_group_response(run_group, settings.cactus_fqdn, settings.envoy_prefix, 0)
 
 
 @router.put(uri.RunGroup, status_code=HTTPStatus.OK)
@@ -118,7 +120,7 @@ async def update_group(
     await db.session.commit()
 
     settings = get_current_settings()
-    return map_group_to_group_response(run_group, settings.test_execution_fqdn, 0)
+    return map_group_to_group_response(run_group, settings.cactus_fqdn, settings.envoy_prefix, 0)
 
 
 @router.delete(uri.RunGroup, status_code=HTTPStatus.NO_CONTENT)

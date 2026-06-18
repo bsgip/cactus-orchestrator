@@ -155,7 +155,12 @@ async def get_runs_for_procedure_in_group(
     for run in runs:
         pod_resources = PodResources.from_run(settings.podman_network, run)
         pod_routes = PodRoutes.from_run(
-            settings.test_execution_fqdn, settings.podman_runner_port, pod_resources, run_group, run
+            settings.cactus_fqdn,
+            settings.envoy_prefix,
+            settings.podman_runner_port,
+            pod_resources,
+            run_group,
+            run,
         )
         run_responses.append(map_run_to_run_response(run, pod_routes))
 

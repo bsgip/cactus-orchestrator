@@ -3,15 +3,13 @@ from datetime import datetime
 
 from cactus_orchestrator.model import Run, RunGroup
 
-ENVOY_HREF_PREFIX = "/envoy"
+
+def generate_static_uri_external_host(cactus_fqdn: str, run_group_id: int) -> str:
+    return f"rg-{run_group_id}.{cactus_fqdn}"
 
 
-def generate_static_uri_external_host(test_execution_fqdn: str, run_group_id: int) -> str:
-    return f"rg-{run_group_id}.{test_execution_fqdn}"
-
-
-def generate_dynamic_uri_external_host(test_execution_fqdn: str, run_group_id: int, run_id: int) -> str:
-    return f"rg-{run_group_id}-r-{run_id}.{test_execution_fqdn}"
+def generate_dynamic_uri_external_host(cactus_fqdn: str, run_group_id: int, run_id: int) -> str:
+    return f"rg-{run_group_id}-r-{run_id}.{cactus_fqdn}"
 
 
 @dataclass(frozen=True)
@@ -39,15 +37,15 @@ class PodRoutes:
 
     @staticmethod
     def from_run(
-        test_execution_fqdn: str, exposed_port: int, resources: "PodResources", run_group: RunGroup, run: Run
+        cactus_fqdn: str, envoy_href: str, exposed_port: int, resources: "PodResources", run_group: RunGroup, run: Run
     ) -> "PodRoutes":
         if run_group.is_static_uri:
-            external_host = generate_static_uri_external_host(test_execution_fqdn, run.run_group_id)
+            external_host = generate_static_uri_external_host(cactus_fqdn, run.run_group_id)
         else:
-            external_host = generate_dynamic_uri_external_host(test_execution_fqdn, run.run_group_id, run.run_id)
+            external_host = generate_dynamic_uri_external_host(cactus_fqdn, run.run_group_id, run.run_id)
 
         return PodRoutes(
-            href_prefix=ENVOY_HREF_PREFIX,
+            href_prefix=envoy_href,
             exposed_port=exposed_port,
             internal_base_url=f"http://{resources.pod_name}:{exposed_port}",
             external_host=external_host,

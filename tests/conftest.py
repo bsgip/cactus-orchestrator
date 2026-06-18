@@ -38,7 +38,7 @@ def base_environment(preserved_environment, request):
 
     os.environ["IDLETEARDOWNTASK_ENABLE"] = "false"
     os.environ["JWTAUTH_ISSUER"] = "https://test-cactus-issuer.example.com"
-    os.environ["TEST_EXECUTION_FQDN"] = "cactus-testing.test.fqdn"
+    os.environ["CACTUS_FQDN"] = "cactus-testing.test.fqdn"
 
     # Install images
     os.environ["CACTUS_IMAGE__V12__CSIP_AUS_VERSION"] = "v1.2"

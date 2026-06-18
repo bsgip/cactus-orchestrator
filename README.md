@@ -8,8 +8,9 @@ Web API for management of the podman platform and orchestration of test executio
 | Environment Variable | Default Value | Description |
 |----------------------|----------------|-------------|
 | `ORCHESTRATOR_DATABASE_URL` | – | SQLAlchemy-style database connection string using `postgresql+asyncpg` scheme. |
-| `TEST_EXECUTION_FQDN` | – | Fully qualified domain name for accessing test execution instances. |
-| `TEST_EXECUTION_COMMS_TIMEOUT_SECONDS` | 120 | Backend timeout when proxying requests to test pods |
+| `CACTUS_FQDN` | – | Fully qualified domain name that the service is hosted under. Test pods will run as a subdomain of this. |
+| `ENVOY_PREFIX` | `/envoy` | href prefix that envoy will be hosted under (allows for upstream routing to be filtered to just this prefix). |
+| `COMMS_TIMEOUT_SECONDS` | 120 | Backend timeout when proxying requests to test pods |
 | `PODMAN_SOCKET` | `/run/podman/podman.sock` | Path to rootful podman socket - will be used to create test pods |
 | `PODMAN_NETWORK` | `cactus-net` | Name of a pre-existing podman bridge network that test pods will operate under |
 | `PODMAN_RUNNER_PORT` | `8080` | The exposed port in each test pod that will route to the cactus-runner test harness |

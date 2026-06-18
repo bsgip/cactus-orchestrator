@@ -53,9 +53,10 @@ class CactusOrchestratorSettings(BaseSettings):
     # database
     orchestrator_database_url: PostgresDsn
 
-    # test execution URLs
-    test_execution_fqdn: str
-    test_execution_comms_timeout_seconds: int = 120
+    # domain
+    cactus_fqdn: str  # The Fully Qualified Domain Name under which this service is hosted. eg 'cactus.example.com'
+    comms_timeout_seconds: int = 120
+    envoy_prefix: str = "/envoy"  # The href prefix that envoy (in test pods) will be deployed under
 
     # podman
     podman_socket: str = "/run/podman/podman.sock"

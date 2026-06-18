@@ -153,7 +153,8 @@ async def get_group_runs_paginated(
             map_run_to_run_response(
                 run,
                 PodRoutes.from_run(
-                    settings.test_execution_fqdn,
+                    settings.cactus_fqdn,
+                    settings.envoy_prefix,
                     settings.podman_runner_port,
                     PodResources.from_run(settings.podman_network, run),
                     run_group,
@@ -266,7 +267,12 @@ async def spawn_teststack_and_init_run(  # noqa: C901
 
     pod_resources = PodResources.from_run(settings.podman_network, first_run)
     pod_routes = PodRoutes.from_run(
-        settings.test_execution_fqdn, settings.podman_runner_port, pod_resources, run_group, first_run
+        settings.cactus_fqdn,
+        settings.envoy_prefix,
+        settings.podman_runner_port,
+        pod_resources,
+        run_group,
+        first_run,
     )
 
     # create a new pod
@@ -282,7 +288,7 @@ async def spawn_teststack_and_init_run(  # noqa: C901
         # inject initial state with either the device or aggregator cert data
         async with ClientSession(
             base_url=pod_routes.internal_base_url,
-            timeout=ClientTimeout(settings.test_execution_comms_timeout_seconds),
+            timeout=ClientTimeout(settings.comms_timeout_seconds),
         ) as session:
             # Build RunRequest objects for all tests
             run_requests: list[RunRequest] = []
@@ -413,13 +419,13 @@ async def start_run(
     settings = get_current_settings()
     pod_resources = PodResources.from_run(settings.podman_network, run)
     pod_routes = PodRoutes.from_run(
-        settings.test_execution_fqdn, settings.podman_runner_port, pod_resources, run_group, run
+        settings.cactus_fqdn, settings.envoy_prefix, settings.podman_runner_port, pod_resources, run_group, run
     )
 
     # request runner starts run
     async with ClientSession(
         base_url=pod_routes.internal_base_url,
-        timeout=ClientTimeout(settings.test_execution_comms_timeout_seconds),
+        timeout=ClientTimeout(settings.comms_timeout_seconds),
     ) as s:
         try:
             await RunnerClient.start(s)
@@ -540,7 +546,7 @@ async def get_individual_run(
     settings = get_current_settings()
     pod_resources = PodResources.from_run(settings.podman_network, run)
     pod_routes = PodRoutes.from_run(
-        settings.test_execution_fqdn, settings.podman_runner_port, pod_resources, run_group, run
+        settings.cactus_fqdn, settings.envoy_prefix, settings.podman_runner_port, pod_resources, run_group, run
     )
 
     # Fetch playlist_runs if this is a playlist run
@@ -609,7 +615,7 @@ async def finalise_run_and_teardown_teststack(  # noqa: C901
     settings = get_current_settings()
     pod_resources = PodResources.from_run(settings.podman_network, run)
     pod_routes = PodRoutes.from_run(
-        settings.test_execution_fqdn, settings.podman_runner_port, pod_resources, run_group, run
+        settings.cactus_fqdn, settings.envoy_prefix, settings.podman_runner_port, pod_resources, run_group, run
     )
 
     # Don't attempt to cleanup / teardown if this has already been finalised
@@ -623,7 +629,7 @@ async def finalise_run_and_teardown_teststack(  # noqa: C901
             db.session,
             RunStatus.finalised_by_client,
             datetime.now(UTC),
-            settings.test_execution_comms_timeout_seconds,
+            settings.comms_timeout_seconds,
         )
         await db.session.commit()
 
@@ -635,7 +641,7 @@ async def finalise_run_and_teardown_teststack(  # noqa: C901
             if next_run:
                 async with ClientSession(
                     base_url=pod_routes.internal_base_url,
-                    timeout=ClientTimeout(settings.test_execution_comms_timeout_seconds),
+                    timeout=ClientTimeout(settings.comms_timeout_seconds),
                 ) as session:
                     try:
                         runner_status = await RunnerClient.status(session)
@@ -705,7 +711,7 @@ async def finalise_playlist(
     settings = get_current_settings()
     pod_resources = PodResources.from_run(settings.podman_network, run)
     pod_routes = PodRoutes.from_run(
-        settings.test_execution_fqdn, settings.podman_runner_port, pod_resources, run_group, run
+        settings.cactus_fqdn, settings.envoy_prefix, settings.podman_runner_port, pod_resources, run_group, run
     )
 
     # Finalize current test if it's active
@@ -716,7 +722,7 @@ async def finalise_playlist(
             db.session,
             RunStatus.finalised_by_client,
             datetime.now(UTC),
-            settings.test_execution_comms_timeout_seconds,
+            settings.comms_timeout_seconds,
         )
     else:
         artifact = run.run_artifact
@@ -842,11 +848,11 @@ async def get_run_status(
     settings = get_current_settings()
     pod_resources = PodResources.from_run(settings.podman_network, run)
     pod_routes = PodRoutes.from_run(
-        settings.test_execution_fqdn, settings.podman_runner_port, pod_resources, run_group, run
+        settings.cactus_fqdn, settings.envoy_prefix, settings.podman_runner_port, pod_resources, run_group, run
     )
     async with ClientSession(
         base_url=pod_routes.internal_base_url,
-        timeout=ClientTimeout(settings.test_execution_comms_timeout_seconds),
+        timeout=ClientTimeout(settings.comms_timeout_seconds),
     ) as s:
         try:
             return await RunnerClient.status(s)
@@ -881,11 +887,11 @@ async def get_run_request_list(
     settings = get_current_settings()
     pod_resources = PodResources.from_run(settings.podman_network, run)
     pod_routes = PodRoutes.from_run(
-        settings.test_execution_fqdn, settings.podman_runner_port, pod_resources, run_group, run
+        settings.cactus_fqdn, settings.envoy_prefix, settings.podman_runner_port, pod_resources, run_group, run
     )
     async with ClientSession(
         base_url=pod_routes.internal_base_url,
-        timeout=ClientTimeout(settings.test_execution_comms_timeout_seconds),
+        timeout=ClientTimeout(settings.comms_timeout_seconds),
     ) as s:
         try:
             return await RunnerClient.list_requests(s)
@@ -922,11 +928,11 @@ async def get_run_request_data(
     settings = get_current_settings()
     pod_resources = PodResources.from_run(settings.podman_network, run)
     pod_routes = PodRoutes.from_run(
-        settings.test_execution_fqdn, settings.podman_runner_port, pod_resources, run_group, run
+        settings.cactus_fqdn, settings.envoy_prefix, settings.podman_runner_port, pod_resources, run_group, run
     )
     async with ClientSession(
         base_url=pod_routes.internal_base_url,
-        timeout=ClientTimeout(settings.test_execution_comms_timeout_seconds),
+        timeout=ClientTimeout(settings.comms_timeout_seconds),
     ) as s:
         try:
             return await RunnerClient.get_request(s, request_id)
@@ -959,11 +965,11 @@ async def proceed_proxy(
     settings = get_current_settings()
     pod_resources = PodResources.from_run(settings.podman_network, run)
     pod_routes = PodRoutes.from_run(
-        settings.test_execution_fqdn, settings.podman_runner_port, pod_resources, run_group, run
+        settings.cactus_fqdn, settings.envoy_prefix, settings.podman_runner_port, pod_resources, run_group, run
     )
     async with ClientSession(
         base_url=pod_routes.internal_base_url,
-        timeout=ClientTimeout(settings.test_execution_comms_timeout_seconds),
+        timeout=ClientTimeout(settings.comms_timeout_seconds),
     ) as s:
         try:
             return await RunnerClient.proceed(s)
@@ -1001,7 +1007,12 @@ async def get_run_list(
     for run in runs:
         pod_resources = PodResources.from_run(settings.podman_network, run)
         pod_routes = PodRoutes.from_run(
-            settings.test_execution_fqdn, settings.podman_runner_port, pod_resources, run.run_group, run
+            settings.cactus_fqdn,
+            settings.envoy_prefix,
+            settings.podman_runner_port,
+            pod_resources,
+            run.run_group,
+            run,
         )
         run_responses.append(map_run_to_run_response(run, pod_routes))
 

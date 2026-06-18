@@ -88,7 +88,12 @@ async def destroy_idle_pods(
         now = datetime.now(UTC)
         pod_resources = PodResources.from_run(settings.podman_network, run)
         pod_routes = PodRoutes.from_run(
-            settings.test_execution_fqdn, settings.podman_runner_port, pod_resources, run.run_group, run
+            settings.cactus_fqdn,
+            settings.envoy_prefix,
+            settings.podman_runner_port,
+            pod_resources,
+            run.run_group,
+            run,
         )
 
         idle = False
@@ -202,7 +207,7 @@ async def lifespan(app: FastAPI, settings: CactusOrchestratorSettings) -> AsyncI
             settings.idleteardowntask_repeat_every_seconds,
             settings.idleteardowntask_max_lifetime_seconds,
             settings.idleteardowntask_idle_timeout_seconds,
-            settings.test_execution_comms_timeout_seconds,
+            settings.comms_timeout_seconds,
         )
         _task_references.add(asyncio.create_task(idleteardowntask()))
 

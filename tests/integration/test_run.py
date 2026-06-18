@@ -184,12 +184,12 @@ async def test_spawn_teststack_and_init_run_dynamic_uris(
     # Assert
     assert res.status_code == HTTPStatus.CREATED
     response_model: InitRunResponse = InitRunResponse.from_json(res.text)
-    assert os.environ["TEST_EXECUTION_FQDN"] in response_model.test_url, "The returned URI should be public facing"
+    assert os.environ["CACTUS_FQDN"] in response_model.test_url, "The returned URI should be public facing"
     assert res.headers["Location"] == f"/run/{response_model.run_id}"
 
-    expected_static_uri_host = generate_static_uri_external_host(os.environ["TEST_EXECUTION_FQDN"], run_group_id)
+    expected_static_uri_host = generate_static_uri_external_host(os.environ["CACTUS_FQDN"], run_group_id)
     expected_dynamic_uri_host = generate_dynamic_uri_external_host(
-        os.environ["TEST_EXECUTION_FQDN"], run_group_id, response_model.run_id
+        os.environ["CACTUS_FQDN"], run_group_id, response_model.run_id
     )
     assert expected_dynamic_uri_host in response_model.test_url
     assert expected_static_uri_host not in response_model.test_url
@@ -270,12 +270,12 @@ async def test_spawn_teststack_and_init_run_static_uri(
     # Assert
     assert res.status_code == HTTPStatus.CREATED
     response_model: InitRunResponse = InitRunResponse.from_json(res.text)
-    assert os.environ["TEST_EXECUTION_FQDN"] in response_model.test_url, "The returned URI should be public facing"
+    assert os.environ["CACTUS_FQDN"] in response_model.test_url, "The returned URI should be public facing"
     assert res.headers["Location"] == f"/run/{response_model.run_id}"
 
-    expected_static_uri_host = generate_static_uri_external_host(os.environ["TEST_EXECUTION_FQDN"], run_group_id)
+    expected_static_uri_host = generate_static_uri_external_host(os.environ["CACTUS_FQDN"], run_group_id)
     expected_dynamic_uri_host = generate_dynamic_uri_external_host(
-        os.environ["TEST_EXECUTION_FQDN"], run_group_id, response_model.run_id
+        os.environ["CACTUS_FQDN"], run_group_id, response_model.run_id
     )
     assert expected_dynamic_uri_host not in response_model.test_url
     assert expected_static_uri_host in response_model.test_url
@@ -533,7 +533,7 @@ async def test_start_run(
     if expected_success:
         assert res.status_code == HTTPStatus.OK
         response_model: StartRunResponse = StartRunResponse.from_json(res.text)
-        assert os.environ["TEST_EXECUTION_FQDN"] in response_model.test_url, "The returned URI should be public facing"
+        assert os.environ["CACTUS_FQDN"] in response_model.test_url, "The returned URI should be public facing"
 
         mocked_pod.start.assert_called_once()
 
@@ -1295,7 +1295,7 @@ async def test_spawn_teststack_with_playlist(
     # Assert
     assert res.status_code == HTTPStatus.CREATED
     response_model: InitRunResponse = InitRunResponse.from_json(res.text)
-    assert os.environ["TEST_EXECUTION_FQDN"] in response_model.test_url
+    assert os.environ["CACTUS_FQDN"] in response_model.test_url
     assert response_model.playlist_execution_id is not None
     assert response_model.playlist_runs is not None
     assert len(response_model.playlist_runs) == 2
