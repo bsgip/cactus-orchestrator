@@ -21,6 +21,9 @@ from cactus_orchestrator.model import (
 )
 from cactus_orchestrator.reporting.compliance import get_compliance_for_run_group, get_procedure_mapping
 from cactus_orchestrator.reporting.compliance_reporting import pdf_report_as_bytes
+from cactus_orchestrator.reporting.deprecated_compliance_reporting import (
+    pdf_report_as_bytes as deprecated_pdf_report_as_bytes,
+)
 from cactus_orchestrator.reporting.generate import generate_pdf_report_v1
 
 logger = logging.getLogger(__name__)
@@ -71,7 +74,7 @@ async def generate_run_group_artifact(
     )
 
     # Generate the report
-    file_data = pdf_report_as_bytes(
+    file_data = deprecated_pdf_report_as_bytes(
         requester=requester,
         user=user,
         name=run_group.name,
