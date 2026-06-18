@@ -70,11 +70,13 @@ def map_run_to_run_response(
         playlist_order=run.playlist_order,
         playlist_runs=playlist_runs,
         classes=definition.classes if definition else None,
+        immediate_start=bool(definition and definition.preconditions and definition.preconditions.immediate_start),
     )
 
 
 async def map_to_compliance_request_response(request: ComplianceRequest) -> ComplianceRequestResponse:
     return ComplianceRequestResponse(
+        
         compliance_request_id=request.compliance_request_id,
         created_at=request.created_at,
         created_by=request.created_by,
