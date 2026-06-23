@@ -252,7 +252,9 @@ def fig_to_image(fig: go.Figure, content_width: float) -> Image:
     )
 
 
-def format_utcdatetime(d: datetime) -> str:
+def format_utcdatetime(d: datetime | None) -> str:
+    if d is None:
+        return "-"
     format_code = "%Y-%m-%d %H:%M:%S"
     return d.strftime(format_code) + " (UTC)"
 
@@ -396,13 +398,13 @@ def generate_runs_table(compliance_runs: dict[str, Run], stylesheet: StyleSheet)
     # Generate table data
     runs_data = []
     for k, v in compliance_runs.items():
-        runs_data.append([k, v.run_id, v.finalised_at])
+        runs_data.append([k, v.run_id, v.run_group_id, format_utcdatetime(v.finalised_at)])
 
     # Add table header
-    runs_data.insert(0, ["Test Procedure", "Run ID", "Timestamp"])
+    runs_data.insert(0, ["Test Procedure", "Run ID", "Run Group ID", "Timestamp"])
 
     # Create the table
-    column_widths = [int(fraction * stylesheet.table_width) for fraction in [0.45, 0.15, 0.4]]
+    column_widths = [int(fraction * stylesheet.table_width) for fraction in [0.35, 0.15, 0.2, 0.3]]
     table = Table(runs_data, colWidths=column_widths)
     table.setStyle(stylesheet.table)
 
