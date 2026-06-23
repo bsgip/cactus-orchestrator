@@ -53,9 +53,7 @@ async def generate_compliance_artifact(
     file_data = pdf_report_as_bytes(
         requester=requester,
         user=compliance_request.created_by_user,
-        name="",
-        name_id=f"{compliance_request.compliance_request_id}",
-        name_type="Compliance Request",
+        request_id=f"{compliance_request.compliance_request_id}",
         csip_aus_version=compliance_request.csip_aus_version,
         finalisation_datetime=datetime.now(UTC),
         compliance_id=compliance_request.compliance_request_id,

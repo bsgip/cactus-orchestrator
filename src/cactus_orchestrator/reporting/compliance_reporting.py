@@ -252,13 +252,16 @@ def fig_to_image(fig: go.Figure, content_width: float) -> Image:
     )
 
 
+def format_utcdatetime(d: datetime) -> str:
+    format_code = "%Y-%m-%d %H:%M:%S"
+    return d.strftime(format_code) + " (UTC)"
+
+
 def generate_overview_section(
     requester: User,
     user: User,
     csip_aus_version: str,
-    name: str,
-    name_id: str,
-    name_type: str,
+    request_id: str,
     finalisation_datetime: datetime,
     stylesheet: StyleSheet,
 ) -> list[Flowable]:
@@ -279,12 +282,12 @@ def generate_overview_section(
             ),
             "",
             "Generated on",
-            f"{finalisation_datetime}",
+            f"{format_utcdatetime(finalisation_datetime)}",
         ],
         [
-            name_type,
+            "Request",
             Paragraph(
-                f"{name} <i>(ID {name_id})</i>",
+                f"#{request_id}",
                 style=stylesheet.overview_table,
             ),
             "",
@@ -333,8 +336,11 @@ def generate_compliance_table(
 ) -> Table:
     # Generate table data
     compliance_data = []
-    for c in compliance_classes:
-        compliance_data.append([c, to_comma_separated_list(class_to_test_procedures[c])])
+    if len(compliance_classes) > 0:
+        for c in compliance_classes:
+            compliance_data.append([c, to_comma_separated_list(class_to_test_procedures[c])])
+    else:
+        compliance_data.append(["-", ""])
 
     # Add table header
     compliance_data.insert(0, ["Class", "Test Procedures"])
@@ -348,7 +354,6 @@ def generate_compliance_table(
 
 
 def generate_compliance_summary(
-    name: str,
     csip_aus_version: str,
     finalisation_datetime: datetime,
     compliance_classes: list[str],
@@ -362,11 +367,12 @@ def generate_compliance_summary(
     elements.append(
         Paragraph(
             "The following compliance classes defined under"
-            f" <b>CSIP-Aus {csip_aus_version}</b> have been attained by"
-            f" <b>{name}</b> on <i>{finalisation_datetime}</i>."
+            f" <b>CSIP-Aus {csip_aus_version}</b> have been attained"
+            f" on <i>{format_utcdatetime(finalisation_datetime)}</i>."
         )
     )
     elements.append(stylesheet.spacer)
+
     table = generate_compliance_table(
         compliance_classes=compliance_classes,
         compliance_runs=compliance_runs,
@@ -420,9 +426,7 @@ def generate_runs_section(
 def generate_page_elements(
     requester: User,
     user: User,
-    name: str,
-    name_id: str,
-    name_type: str,
+    request_id: str,
     csip_aus_version: str,
     compliance_classes: list[str],
     compliance_runs: dict[str, Run],
@@ -443,9 +447,7 @@ def generate_page_elements(
     try:
         page_elements.extend(
             generate_overview_section(
-                name=name,
-                name_id=name_id,
-                name_type=name_type,
+                request_id=request_id,
                 csip_aus_version=csip_aus_version,
                 finalisation_datetime=finalisation_datetime,
                 requester=requester,
@@ -463,7 +465,6 @@ def generate_page_elements(
     try:
         page_elements.extend(
             generate_compliance_summary(
-                name=name,
                 csip_aus_version=csip_aus_version,
                 finalisation_datetime=finalisation_datetime,
                 compliance_classes=compliance_classes,
@@ -480,13 +481,14 @@ def generate_page_elements(
         logger.error(f"Unable to add compliance summary to PDF report. Reason={repr(e)}")
 
     # Contributing Runs Section
-    try:
-        page_elements.extend(generate_runs_section(compliance_runs=compliance_runs, stylesheet=stylesheet))
-    except ValueError as e:
-        # ValueError is raised by 'first_client_interaction_of_type' if it can find the required
-        # client interations. This is a guard-rail. If we have an active test procedure then
-        # the appropriate client interactions SHOULD be defined in the runner state.
-        logger.error(f"Unable to add runs section to PDF report. Reason={repr(e)}")
+    if len(compliance_classes) > 0:
+        try:
+            page_elements.extend(generate_runs_section(compliance_runs=compliance_runs, stylesheet=stylesheet))
+        except ValueError as e:
+            # ValueError is raised by 'first_client_interaction_of_type' if it can find the required
+            # client interations. This is a guard-rail. If we have an active test procedure then
+            # the appropriate client interactions SHOULD be defined in the runner state.
+            logger.error(f"Unable to add runs section to PDF report. Reason={repr(e)}")
 
     return page_elements
 
@@ -494,9 +496,7 @@ def generate_page_elements(
 def pdf_report_as_bytes(
     requester: User,
     user: User,
-    name: str,
-    name_id: str,
-    name_type: str,
+    request_id: str,
     csip_aus_version: str,
     finalisation_datetime: datetime,
     compliance_id: int,
@@ -515,9 +515,7 @@ def pdf_report_as_bytes(
     page_elements = generate_page_elements(
         requester=requester,
         user=user,
-        name=name,
-        name_id=name_id,
-        name_type=name_type,
+        request_id=request_id,
         csip_aus_version=csip_aus_version,
         compliance_classes=compliance_classes,
         compliance_runs=compliance_runs,

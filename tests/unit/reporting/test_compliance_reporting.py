@@ -30,9 +30,7 @@ async def test_pdf_report_as_bytes(pg_compliance_config):
     report = pdf_report_as_bytes(
         requester=requester,
         user=compliance_request.created_by_user,
-        name="",
-        name_id=f"{compliance_request.compliance_request_id}",
-        name_type="Compliance Request",
+        request_id=f"{compliance_request.compliance_request_id}",
         csip_aus_version=compliance_request.csip_aus_version,
         finalisation_datetime=datetime.now(UTC),
         compliance_id=compliance_request.compliance_request_id,
@@ -46,13 +44,13 @@ async def test_pdf_report_as_bytes(pg_compliance_config):
     assert len(report) > 0
 
     # Optional: Save and open the PDF
-    # import os
-    # import subprocess
-    # import tempfile
-    # import uuid
-    #
-    # with tempfile.NamedTemporaryFile(suffix=".pdf", prefix=f"report_{uuid.uuid4().hex[:8]}_", delete=False) as f:
-    #     f.write(report)
-    #     f.flush()
-    #     print(f"Saved comprehensive PDF report: {os.path.basename(f.name)}")
-    #     subprocess.run(["xdg-open", f.name])
+    import os
+    import subprocess
+    import tempfile
+    import uuid
+
+    with tempfile.NamedTemporaryFile(suffix=".pdf", prefix=f"report_{uuid.uuid4().hex[:8]}_", delete=False) as f:
+        f.write(report)
+        f.flush()
+        print(f"Saved comprehensive PDF report: {os.path.basename(f.name)}")
+        subprocess.run(["xdg-open", f.name])
