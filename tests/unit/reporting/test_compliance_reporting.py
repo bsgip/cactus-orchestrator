@@ -1,43 +1,45 @@
+from datetime import UTC, datetime
+
 import pytest
 from assertical.fixtures.postgres import generate_async_session
 from sqlalchemy import select
+from sqlalchemy.orm import joinedload, selectinload
 
-from cactus_orchestrator.model import ComplianceRecord, RunGroup, User
-from cactus_orchestrator.reporting.compliance import get_compliance_for_run_group, get_procedure_mapping
+from cactus_orchestrator.artifact import determine_compliance
+from cactus_orchestrator.model import ComplianceRequest, User
 from cactus_orchestrator.reporting.compliance_reporting import pdf_report_as_bytes
 
 
 @pytest.mark.asyncio
 async def test_pdf_report_as_bytes(pg_compliance_config):
     # Arrange
-    run_group_id = 1
-    compliance_record_id = 1
-    requester_id = 1  # admin user
-    user_id = 2  # user performing runs
+    compliance_request_id = 1
+    requester_id = 3  # admin user
     async with generate_async_session(pg_compliance_config) as session:
         requester = (await session.execute(select(User).where(User.user_id == requester_id))).scalar_one()
-        user = (await session.execute(select(User).where(User.user_id == user_id))).scalar_one()
-        run_group = (await session.execute(select(RunGroup).where(RunGroup.run_group_id == run_group_id))).scalar_one()
-        compliance_record = (
-            await session.execute(
-                select(ComplianceRecord).where(ComplianceRecord.compliance_record_id == compliance_record_id)
-            )
-        ).scalar_one()
-        compliance_by_class = await get_compliance_for_run_group(
-            procedure_map=await get_procedure_mapping(session, run_group)
+        stmt = select(ComplianceRequest).where(ComplianceRequest.compliance_request_id == compliance_request_id)
+        stmt = stmt.options(selectinload(ComplianceRequest.classes))
+        stmt = stmt.options(selectinload(ComplianceRequest.runs))
+        stmt = stmt.options(joinedload(ComplianceRequest.created_by_user))
+        compliance_request = (await session.execute(stmt)).scalar_one()
+        compliance_classes, excluded_classes, class_to_test_procedures, compliance_runs = determine_compliance(
+            compliance_request=compliance_request
         )
 
     # Act
     report = pdf_report_as_bytes(
         requester=requester,
-        user=user,
-        name=run_group.name,
-        name_id=f"{run_group.run_group_id}",
-        name_type="Run Group",
-        csip_aus_version=run_group.csip_aus_version,
-        finalisation_datetime=compliance_record.created_at,
-        compliance_id=compliance_record.compliance_record_id,
-        compliance_by_class=compliance_by_class,
+        user=compliance_request.created_by_user,
+        name="",
+        name_id=f"{compliance_request.compliance_request_id}",
+        name_type="Compliance Request",
+        csip_aus_version=compliance_request.csip_aus_version,
+        finalisation_datetime=datetime.now(UTC),
+        compliance_id=compliance_request.compliance_request_id,
+        compliance_classes=compliance_classes,
+        excluded_compliance_classes=excluded_classes,
+        class_to_test_procedures=class_to_test_procedures,
+        compliance_runs=compliance_runs,
     )
 
     # Assert

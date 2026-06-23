@@ -19,7 +19,11 @@ from cactus_orchestrator.model import (
     RunArtifact,
     User,
 )
-from cactus_orchestrator.reporting.compliance import get_compliance_for_run_group, get_procedure_mapping
+from cactus_orchestrator.reporting.compliance import (
+    determine_compliance,
+    get_compliance_for_run_group,
+    get_procedure_mapping,
+)
 from cactus_orchestrator.reporting.compliance_reporting import pdf_report_as_bytes
 from cactus_orchestrator.reporting.deprecated_compliance_reporting import (
     pdf_report_as_bytes as deprecated_pdf_report_as_bytes,
@@ -42,6 +46,10 @@ async def generate_compliance_artifact(
     compliance_request: ComplianceRequest,
 ) -> Artifact:
 
+    compliance_classes, excluded_classes, class_to_test_procedures, compliance_runs = determine_compliance(
+        compliance_request=compliance_request
+    )
+
     file_data = pdf_report_as_bytes(
         requester=requester,
         user=compliance_request.created_by_user,
@@ -51,7 +59,10 @@ async def generate_compliance_artifact(
         csip_aus_version=compliance_request.csip_aus_version,
         finalisation_datetime=datetime.now(UTC),
         compliance_id=compliance_request.compliance_request_id,
-        compliance_by_class={},
+        compliance_classes=compliance_classes,
+        excluded_compliance_classes=excluded_classes,
+        class_to_test_procedures=class_to_test_procedures,
+        compliance_runs=compliance_runs,
     )
 
     return Artifact(file_data=file_data, mime_type="application/pdf")
