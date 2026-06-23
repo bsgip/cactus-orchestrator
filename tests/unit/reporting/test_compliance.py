@@ -1,7 +1,7 @@
 import pytest
 from assertical.fake.generator import generate_class_instance
 
-from cactus_orchestrator.model import ComplianceRequest, Run, ComplianceRequestClass, ComplianceRequestRun
+from cactus_orchestrator.model import ComplianceRequest, ComplianceRequestClass, ComplianceRequestRun, Run
 from cactus_orchestrator.reporting.compliance import determine_compliance, is_compliant
 
 
