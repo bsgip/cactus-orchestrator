@@ -891,29 +891,33 @@ def generate_site_section(site: Site, stylesheet: StyleSheet) -> list[Flowable]:
         generate_device_overview_table(site=site, generation_method=generation_method, stylesheet=stylesheet)
     )
     elements.append(stylesheet.spacer)
-    if site.site_ders:
-        site_der = site.site_ders[0]
-        if site_der.site_der_rating is not None:
+    if (
+        site.site_der_rating is not None
+        or site.site_der_setting is not None
+        or site.site_der_availability is not None
+        or site.site_der_status is not None
+    ):
+        if site.site_der_rating is not None:
             elements.extend(
-                generate_site_der_rating_table(site_der_rating=site_der.site_der_rating, stylesheet=stylesheet)
+                generate_site_der_rating_table(site_der_rating=site.site_der_rating, stylesheet=stylesheet)
             )
             elements.append(stylesheet.spacer)
-        if site_der.site_der_setting is not None:
+        if site.site_der_setting is not None:
             elements.extend(
-                generate_site_der_setting_table(site_der_setting=site_der.site_der_setting, stylesheet=stylesheet)
+                generate_site_der_setting_table(site_der_setting=site.site_der_setting, stylesheet=stylesheet)
             )
             elements.append(stylesheet.spacer)
-        if site_der.site_der_availability is not None:
+        if site.site_der_availability is not None:
             elements.extend(
                 generate_site_der_availability_table(
-                    site_der_availability=site_der.site_der_availability,
+                    site_der_availability=site.site_der_availability,
                     stylesheet=stylesheet,
                 )
             )
             elements.append(stylesheet.spacer)
-        if site_der.site_der_status is not None:
+        if site.site_der_status is not None:
             elements.extend(
-                generate_site_der_status_table(site_der_status=site_der.site_der_status, stylesheet=stylesheet)
+                generate_site_der_status_table(site_der_status=site.site_der_status, stylesheet=stylesheet)
             )
     else:
         elements.append(Paragraph("No Site DER registered for this site."))
@@ -958,7 +962,7 @@ def generate_timeline_chart(timeline: Timeline, sites: list[Site]) -> Image:
     set_max_w: int | None = None
     for site in sites:
         try:
-            der_setting = site.site_ders[0].site_der_setting
+            der_setting = site.site_der_setting
             if der_setting:
                 set_max_w = int(der_setting.max_w_value * pow(10, der_setting.max_w_multiplier))
                 break
