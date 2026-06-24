@@ -327,8 +327,8 @@ requires-dist = [
     { name = "assertical", marker = "extra == 'test'", specifier = ">=0.4.0" },
     { name = "asyncpg" },
     { name = "bandit", marker = "extra == 'dev'" },
-    { name = "cactus-runner", git = "https://github.com/bsgip/cactus-runner.git?rev=v1.12.0" },
-    { name = "cactus-schema", specifier = "==1.1.0" },
+    { name = "cactus-runner", git = "https://github.com/bsgip/cactus-runner.git?rev=v2.4.1" },
+    { name = "cactus-schema", specifier = "==0.0.24" },
     { name = "cactus-test-definitions", specifier = "==1.14.7" },
     { name = "coverage", marker = "extra == 'dev'" },
     { name = "cryptography" },
@@ -368,8 +368,8 @@ provides-extras = ["dev", "test"]
 
 [[package]]
 name = "cactus-runner"
-version = "1.12.0"
-source = { git = "https://github.com/bsgip/cactus-runner.git?rev=v1.12.0#28207078d2cf603f2182102e399c25dc34d2331e" }
+version = "2.4.1"
+source = { git = "https://github.com/bsgip/cactus-runner.git?rev=v2.4.1#3b537549ea44712231d595c064a72394f0068348" }
 dependencies = [
     { name = "aiohttp" },
     { name = "asyncpg" },
@@ -385,15 +385,15 @@ dependencies = [
 
 [[package]]
 name = "cactus-schema"
-version = "1.1.0"
+version = "0.0.24"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "cactus-test-definitions" },
     { name = "dataclass-wizard" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/ce/ed/6995c1b04a6a84b65249fe3ba47ad5d0ad71a248d5987074ac7f9dc96d63/cactus_schema-1.1.0.tar.gz", hash = "sha256:36a23715155370e54a5078b3b28aa8ccfbf6794ab12faa1157d9e337a495726a", size = 11056, upload-time = "2026-06-24T00:56:25.138Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/7e/29/f8a02d984a90c1634e7902a89367b5f8f6d73f857facfc8034cbd509181d/cactus_schema-0.0.24.tar.gz", hash = "sha256:f278c81fc2d6fe36675d7c1ea3572b47fdfb108054aa50bb1ddb120d97bf44f7", size = 11084, upload-time = "2026-06-17T04:19:16.992Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/68/25/1f68f0851e76e018e24aba2778eb27e53b9f65a8f9cc18e1a5eac86e6d38/cactus_schema-1.1.0-py3-none-any.whl", hash = "sha256:428e893f58feb3cd11cf0fc45aa12322406a6fb03f351ba0cf70c1d90000f7a3", size = 12677, upload-time = "2026-06-24T00:56:23.835Z" },
+    { url = "https://files.pythonhosted.org/packages/39/7c/201c5231838a3e266bd7c9b68bcda46649782333837a6a91deb1c71550f4/cactus_schema-0.0.24-py3-none-any.whl", hash = "sha256:e71cd23a920f19c8ba5e88ecb2264b488ac934b903629c16af17ddf4c5df1e47", size = 12742, upload-time = "2026-06-17T04:19:15.688Z" },
 ]
 
 [[package]]
@@ -727,8 +727,8 @@ wheels = [
 
 [[package]]
 name = "envoy"
-version = "1.5.0"
-source = { git = "https://github.com/bsgip/envoy.git?rev=v1.5.0#4e9b4e47c27b542653f9254dffa21f6a3841b38d" }
+version = "2.2.0"
+source = { git = "https://github.com/bsgip/envoy.git?rev=v2.2.0#bf51dc4f516e74404e04f1fee863cf89b4503da8" }
 dependencies = [
     { name = "alembic" },
     { name = "asyncpg" },
@@ -752,15 +752,15 @@ dependencies = [
 
 [[package]]
 name = "envoy-schema"
-version = "1.1.1"
+version = "2.2.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pydantic" },
     { name = "pydantic-xml", extra = ["lxml"] },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/5a/ca/6f20bf843d5f43f357a28cce7194f2fefaa11f87a5d6163c4fffb97504c0/envoy_schema-1.1.1.tar.gz", hash = "sha256:18432431dba590326c43c9b4edb9fa3de5f0eb76d854bce00a394a30e409dcd1", size = 41684, upload-time = "2026-06-22T07:08:30.157Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/dc/5d/6bcce76c96525453153a5a819f9a4bf42d35dbd62c8a9a5d0494d96b9917/envoy_schema-2.2.0.tar.gz", hash = "sha256:d6fe1836ab991d8d4afc8630ce55740a6bed644770f3df515edf90d65c9e656b", size = 42152, upload-time = "2026-06-23T02:12:56.279Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/30/c4/4cf78ee71039308e7ca1b3b9d8f968e5d10630a81153dcf5fc4fa8219cb3/envoy_schema-1.1.1-py3-none-any.whl", hash = "sha256:1b8b04491325f335a11a634dbf2b60aa0096d905a22ede745435090ea7347529", size = 54294, upload-time = "2026-06-22T07:08:28.69Z" },
+    { url = "https://files.pythonhosted.org/packages/5e/9b/7ac2b433d7d38dce669014631fca96ec4a2fd8e3b7331282aaf21b7b784b/envoy_schema-2.2.0-py3-none-any.whl", hash = "sha256:eac3603387e0a6bd4a23aa75b47eedbd675204e6a574945ce7677e929dd626b3", size = 53975, upload-time = "2026-06-23T02:12:54.792Z" },
 ]
 
 [[package]]
