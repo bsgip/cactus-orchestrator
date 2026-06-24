@@ -8,11 +8,21 @@ import pytest
 from assertical.fake.generator import generate_class_instance
 from cactus_runner.app.envoy_common import ReadingLocation
 from cactus_runner.app.timeline import Timeline, TimelineDataStream
-from cactus_runner.models import ActiveTestProcedure, CheckResult, ReadingType, RunnerState, StepInfo
+from cactus_runner.models import (
+    ActiveTestProcedure,
+    CheckResult,
+    ReadingType,
+    RunnerState,
+    SiteDER,
+    SiteDERAvailability,
+    SiteDERRating,
+    SiteDERSetting,
+    SiteDERStatus,
+    StepInfo,
+)
 from cactus_runner.models import Site as CactusRunnerSite
 from cactus_schema.runner import ClientInteraction, ClientInteractionType, RequestEntry
 from cactus_test_definitions.client import TestProcedureId, get_test_procedure
-from envoy.server.model import Site, SiteDER, SiteDERAvailability, SiteDERRating, SiteDERSetting, SiteDERStatus
 from envoy.server.model.site_reading import SiteReading
 from envoy_schema.server.schema.sep2.types import (
     DataQualifierType,
@@ -103,7 +113,7 @@ def sites(num=2, with_ders=True, optional_is_none=False):
                     site_der_status=generate_class_instance(SiteDERStatus, optional_is_none=optional_is_none),
                 )
             ]
-        site_list.append(generate_class_instance(Site, site_ders=site_ders))
+        site_list.append(generate_class_instance(CactusRunnerSite, site_ders=site_ders))
     return site_list
 
 

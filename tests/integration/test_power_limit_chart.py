@@ -28,7 +28,7 @@ from envoy.server.model.doe import (
     SiteControlGroup,
     SiteControlGroupDefault,
 )
-from envoy.server.model.site import Site, SiteDER, SiteDERSetting
+from envoy.server.model.site import Site, SiteDERSetting
 from envoy.server.model.subscription import Subscription, SubscriptionResource
 from sqlalchemy import text
 
@@ -116,19 +116,19 @@ def _make_doe(
 
 
 def _make_site_with_setting(aggregator_id: int, max_w: int = 10000, grad_w: int = 28, seed: int = 1) -> Site:
-    """Build a Site with one SiteDER and SiteDERSetting."""
+    """Build a Site with one SiteDERSetting."""
     der_setting = generate_class_instance(
         SiteDERSetting,
+        seed=seed,
         site_der_setting_id=None,
-        site_der_id=None,
+        site_id=None,
         max_w_value=max_w,
         max_w_multiplier=0,
         grad_w=grad_w,
         soft_grad_w=None,
     )
-    der = generate_class_instance(SiteDER, seed=seed, site_id=None, site_der_setting=der_setting)
     site = generate_class_instance(Site, seed=seed, aggregator_id=aggregator_id)
-    site.site_ders = [der]
+    site.site_der_setting = der_setting
     return site
 
 
@@ -204,10 +204,10 @@ async def test_get_der_setting_no_site(pg_envoy_base_config):
 
 
 async def test_get_der_setting_no_der_setting(pg_envoy_base_config):
-    """Returns None when a site exists but has no SiteDER/SiteDERSetting attached."""
+    """Returns None when a site exists but has no SiteDERSetting attached."""
     async with generate_async_session(pg_envoy_base_config) as session:
         site = generate_class_instance(Site, seed=1, aggregator_id=1)
-        site.site_ders = []
+        site.site_der_setting = None
         session.add(site)
         await session.commit()
 

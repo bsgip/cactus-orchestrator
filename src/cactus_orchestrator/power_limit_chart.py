@@ -199,8 +199,7 @@ async def _get_der_setting(session: AsyncSession) -> _RawDERSetting | None:
             """
 SELECT sds.max_w_value, sds.max_w_multiplier
 FROM site_der_setting sds
-JOIN site_der sd ON sd.site_der_id = sds.site_der_id
-WHERE sd.site_id = (SELECT site_id FROM site ORDER BY changed_time DESC LIMIT 1)
+WHERE sds.site_id = (SELECT site_id FROM site ORDER BY changed_time DESC LIMIT 1)
 LIMIT 1
             """
         )
