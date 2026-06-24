@@ -764,9 +764,6 @@ async def admin_finalise_compliance_request(
     except NoResultFound as err:
         raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="TODO ERROR MESSAGE") from err
 
-    if compliance_artifact is None:
-        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Compliance Artifact does not exist.")
-
     # Update the compliance record to include pdf data (also sets status and updated by)
     try:
         await finalise_compliance_request(
