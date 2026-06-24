@@ -85,11 +85,11 @@ async def clone_statefulset(template_names: TemplateResourceNames, run_names: Ru
         raise CactusOrchestratorError(
             f"{template_names.namespace} {template_names.stateful_set} - missing template spec"
         )
-    update_containers = [c for c in new_spec.template.spec.containers if c.name in {"envoy", "taskiq-worker"}]
-    if len(update_containers) != 2:
+    update_containers = [c for c in new_spec.template.spec.containers if c.name == "envoy"]
+    if len(update_containers) != 1:
         raise CactusOrchestratorError(
-            f"{template_names.namespace} {template_names.stateful_set} - Expected 2 but found {len(update_containers)}"
-            + " envoy/taskiq-worker containers."
+            f"{template_names.namespace} {template_names.stateful_set} - Expected 1 but found {len(update_containers)}"
+            + " envoy containers."
         )
     for container_to_update in update_containers:
         if container_to_update.env is None:
