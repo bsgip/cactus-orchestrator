@@ -27,6 +27,9 @@ Web API for management of the podman platform and orchestration of test executio
 | `IDLETEARDOWNTASK_MAX_LIFETIME_SECONDS` | `3600 * 24 * 4` | Test runs older than this will be destroyed |
 | `IDLETEARDOWNTASK_IDLE_TIMEOUT_SECONDS` | `3600 * 2` | Test runs with no comms for longer than this will be destroyed |
 | `IDLETEARDOWNTASK_REPEAT_EVERY_SECONDS` | `120` | Check for idle test runs at this frequency |
+| `IDLETEARDOWNTASK_STARTUP_GRACE_SECONDS` | `300` | A pod must be at least this old before it can be declared an orphan |
+
+
 | `PULLTASK_REPEAT_EVERY_SECONDS` | `120` | Check for unpulled podman images at this frequency |
 | `IGNORED_CSIP_AUS_VERSIONS` | - | JSON encoded list of strings - each representing a CSIP-Aus version to be ignored |
 | `IGNORED_TEST_PROCEDURES` | - | JSON encoded list of strings - each representing a TestProcedureID to be ignored |

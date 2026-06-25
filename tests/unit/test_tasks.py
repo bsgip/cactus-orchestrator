@@ -114,6 +114,7 @@ async def test_destroy_idle_pods_and_orphans(podman_mock: MockedPodman, pg_base_
         finalised_run_id = (
             await insert_run_for_run_group(session, RUN_GROUP_ID, "ALL-02", RunStatus.finalised_by_timeout, False)
         ).run_id
+        grace_period_run_id = 98
 
         # Create an active playlist
         p1_r1 = await insert_run_for_run_group(session, RUN_GROUP_ID, "ALL-01", RunStatus.skipped, False)
@@ -148,6 +149,13 @@ async def test_destroy_idle_pods_and_orphans(podman_mock: MockedPodman, pg_base_
             run_id=99,
             resources=generate_class_instance(PodResources, pod_name="run-99"),
         ),  # ORPHAN - There is no run-99
+        generate_class_instance(
+            RunningPod,
+            run_group_id=RUN_GROUP_ID,
+            run_id=grace_period_run_id,
+            created_time=datetime.now(UTC),
+            resources=generate_class_instance(PodResources, pod_name=f"run-{grace_period_run_id}"),
+        ),  # ORPHAN - but within the grace period so it WON'T be touched - There is no run-98
         generate_class_instance(
             RunningPod,
             run_group_id=RUN_GROUP_ID,

@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from typing import Any, Never
 
 from cactus_runner.client import ClientSession, ClientTimeout, RunnerClient
+from envoy.server.manager.time import utc_now
 from fastapi import FastAPI
 from fastapi_async_sqlalchemy import db
 from fastapi_utils.tasks import repeat_every
@@ -138,8 +139,14 @@ async def destroy_orphaned_pods(session: AsyncSession) -> None:
             #  1) The run is missing
             #  2) The run is NOT in a playlist and is marked as inactive
             #  3) The run IS in a playlist and there are no playlist runs that are active
-            is_orphaned_pod = True
-            if run is not None:
+            if run is None:
+                # Remember that the run record is held in a transaction UNTIL the job is full spawned
+                # This will mean that from this part of the code - it will be appear as missing (record is dirty)
+                # we could look for "dirty" DB records but it's easier to just give a startup grace period
+                is_orphaned_pod = (
+                    utc_now() - pod.created_time
+                ).total_seconds() > settings.idleteardowntask_startup_grace_seconds
+            else:
                 if run.playlist_execution_id:
                     # We can only nuke a playlist pod when ALL playlist runs are inactive
                     playlist_runs = await select_playlist_runs(session, run.playlist_execution_id)

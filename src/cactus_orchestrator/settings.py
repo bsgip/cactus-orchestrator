@@ -79,6 +79,7 @@ class CactusOrchestratorSettings(BaseSettings):
     idleteardowntask_max_lifetime_seconds: int = 3600 * 24 * 4
     idleteardowntask_idle_timeout_seconds: int = 7200
     idleteardowntask_repeat_every_seconds: int = 120
+    idleteardowntask_startup_grace_seconds: int = 300  # Runs have this much time to start before being orphaned
 
     # image pull task
     pulltask_repeat_every_seconds: int = 120
