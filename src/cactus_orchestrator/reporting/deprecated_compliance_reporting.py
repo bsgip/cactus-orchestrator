@@ -27,7 +27,7 @@ from reportlab.platypus import (
 )
 
 from cactus_orchestrator import __version__ as cactus_orchestrator_version
-from cactus_orchestrator.model import Run, User
+from cactus_orchestrator.model import User
 
 logger = logging.getLogger(__name__)
 
@@ -252,18 +252,13 @@ def fig_to_image(fig: go.Figure, content_width: float) -> Image:
     )
 
 
-def format_utcdatetime(d: datetime | None) -> str:
-    if d is None:
-        return "-"
-    format_code = "%Y-%m-%d %H:%M:%S"
-    return d.strftime(format_code) + " (UTC)"
-
-
 def generate_overview_section(
     requester: User,
     user: User,
     csip_aus_version: str,
-    request_id: str,
+    name: str,
+    name_id: str,
+    name_type: str,
     finalisation_datetime: datetime,
     stylesheet: StyleSheet,
 ) -> list[Flowable]:
@@ -284,12 +279,12 @@ def generate_overview_section(
             ),
             "",
             "Generated on",
-            f"{format_utcdatetime(finalisation_datetime)}",
+            f"{finalisation_datetime}",
         ],
         [
-            "Request",
+            name_type,
             Paragraph(
-                f"#{request_id}",
+                f"{name} <i>(ID {name_id})</i>",
                 style=stylesheet.overview_table,
             ),
             "",
@@ -331,18 +326,15 @@ def to_comma_separated_list(items: list[str]) -> str:
 
 
 def generate_compliance_table(
-    compliance_classes: list[str],
-    compliance_runs: dict[str, Run],
-    class_to_test_procedures: dict[str, list[str]],
+    compliance_by_class: dict,
     stylesheet: StyleSheet,
 ) -> Table:
     # Generate table data
     compliance_data = []
-    if len(compliance_classes) > 0:
-        for c in compliance_classes:
-            compliance_data.append([c, to_comma_separated_list(class_to_test_procedures[c])])
-    else:
-        compliance_data.append(["-", ""])
+    for c in compliance_by_class.values():
+        if c.is_compliant:
+            runs = [rc.run.test_procedure_id for rc in c.per_run_compliance]
+            compliance_data.append([c.class_details.name, to_comma_separated_list(runs)])
 
     # Add table header
     compliance_data.insert(0, ["Class", "Test Procedures"])
@@ -356,12 +348,10 @@ def generate_compliance_table(
 
 
 def generate_compliance_summary(
+    name: str,
     csip_aus_version: str,
     finalisation_datetime: datetime,
-    compliance_classes: list[str],
-    compliance_runs: dict[str, Run],
-    excluded_compliance_classes: list[str],
-    class_to_test_procedures: dict[str, list[str]],
+    compliance_by_class: dict,
     stylesheet: StyleSheet,
 ) -> list[Flowable]:
     elements: list[Flowable] = []
@@ -369,42 +359,47 @@ def generate_compliance_summary(
     elements.append(
         Paragraph(
             "The following compliance classes defined under"
-            f" <b>CSIP-Aus {csip_aus_version}</b> have been attained"
-            f" on <i>{format_utcdatetime(finalisation_datetime)}</i>."
+            f" <b>CSIP-Aus {csip_aus_version}</b> have been attained by"
+            f" <b>{name}</b> on <i>{finalisation_datetime}</i>."
         )
     )
     elements.append(stylesheet.spacer)
-
-    table = generate_compliance_table(
-        compliance_classes=compliance_classes,
-        compliance_runs=compliance_runs,
-        class_to_test_procedures=class_to_test_procedures,
-        stylesheet=stylesheet,
-    )
+    table = generate_compliance_table(compliance_by_class=compliance_by_class, stylesheet=stylesheet)
 
     elements.append(table)
     elements.append(stylesheet.spacer)
 
     elements.append(Paragraph("The following compliance classes have <b>not</b> been met."))
 
-    excluded_classes = [f"<b>{c}</b>" for c in excluded_compliance_classes]
+    excluded_classes = []
+    for c in compliance_by_class.values():
+        if not c.is_compliant:
+            excluded_classes.append(f"<b>{c.class_details.name}</b>")
     elements.append(Paragraph(to_comma_separated_list(sorted(excluded_classes))))
     elements.append(stylesheet.spacer)
 
     return elements
 
 
-def generate_runs_table(compliance_runs: dict[str, Run], stylesheet: StyleSheet) -> Table:
+def generate_runs_table(compliance_by_class: dict, stylesheet: StyleSheet) -> Table:
     # Generate table data
+    procedures = {}
+    for c in compliance_by_class.values():
+        if c.is_compliant:
+            for rc in c.per_run_compliance:
+                id = rc.run.test_procedure_id
+                if id not in procedures:
+                    procedures[id] = rc.run
+
     runs_data = []
-    for k, v in compliance_runs.items():
-        runs_data.append([k, v.run_id, v.run_group_id, format_utcdatetime(v.finalised_at)])
+    for k in sorted(procedures.keys()):
+        runs_data.append([k, procedures[k].latest_run_id, procedures[k].latest_run_timestamp])
 
     # Add table header
-    runs_data.insert(0, ["Test Procedure", "Run ID", "Run Group ID", "Timestamp"])
+    runs_data.insert(0, ["Test Procedure", "Run ID", "Timestamp"])
 
     # Create the table
-    column_widths = [int(fraction * stylesheet.table_width) for fraction in [0.35, 0.15, 0.2, 0.3]]
+    column_widths = [int(fraction * stylesheet.table_width) for fraction in [0.45, 0.15, 0.4]]
     table = Table(runs_data, colWidths=column_widths)
     table.setStyle(stylesheet.table)
 
@@ -412,13 +407,13 @@ def generate_runs_table(compliance_runs: dict[str, Run], stylesheet: StyleSheet)
 
 
 def generate_runs_section(
-    compliance_runs: dict[str, Run],
+    compliance_by_class: dict,
     stylesheet: StyleSheet,
 ) -> list[Flowable]:
     elements: list[Flowable] = []
     elements.append(Paragraph("Contributing Runs", stylesheet.heading))
     elements.append(stylesheet.spacer)
-    table = generate_runs_table(compliance_runs=compliance_runs, stylesheet=stylesheet)
+    table = generate_runs_table(compliance_by_class=compliance_by_class, stylesheet=stylesheet)
     elements.append(table)
     elements.append(stylesheet.spacer)
 
@@ -428,12 +423,11 @@ def generate_runs_section(
 def generate_page_elements(
     requester: User,
     user: User,
-    request_id: str,
+    name: str,
+    name_id: str,
+    name_type: str,
     csip_aus_version: str,
-    compliance_classes: list[str],
-    compliance_runs: dict[str, Run],
-    excluded_compliance_classes: list[str],
-    class_to_test_procedures: dict[str, list[str]],
+    compliance_by_class: dict,
     finalisation_datetime: datetime,
     stylesheet: StyleSheet,
 ) -> list[Flowable]:
@@ -449,7 +443,9 @@ def generate_page_elements(
     try:
         page_elements.extend(
             generate_overview_section(
-                request_id=request_id,
+                name=name,
+                name_id=name_id,
+                name_type=name_type,
                 csip_aus_version=csip_aus_version,
                 finalisation_datetime=finalisation_datetime,
                 requester=requester,
@@ -467,12 +463,10 @@ def generate_page_elements(
     try:
         page_elements.extend(
             generate_compliance_summary(
+                name=name,
                 csip_aus_version=csip_aus_version,
                 finalisation_datetime=finalisation_datetime,
-                compliance_classes=compliance_classes,
-                compliance_runs=compliance_runs,
-                excluded_compliance_classes=excluded_compliance_classes,
-                class_to_test_procedures=class_to_test_procedures,
+                compliance_by_class=compliance_by_class,
                 stylesheet=stylesheet,
             )
         )
@@ -483,14 +477,13 @@ def generate_page_elements(
         logger.error(f"Unable to add compliance summary to PDF report. Reason={repr(e)}")
 
     # Contributing Runs Section
-    if len(compliance_classes) > 0:
-        try:
-            page_elements.extend(generate_runs_section(compliance_runs=compliance_runs, stylesheet=stylesheet))
-        except ValueError as e:
-            # ValueError is raised by 'first_client_interaction_of_type' if it can find the required
-            # client interations. This is a guard-rail. If we have an active test procedure then
-            # the appropriate client interactions SHOULD be defined in the runner state.
-            logger.error(f"Unable to add runs section to PDF report. Reason={repr(e)}")
+    try:
+        page_elements.extend(generate_runs_section(compliance_by_class=compliance_by_class, stylesheet=stylesheet))
+    except ValueError as e:
+        # ValueError is raised by 'first_client_interaction_of_type' if it can find the required
+        # client interations. This is a guard-rail. If we have an active test procedure then
+        # the appropriate client interactions SHOULD be defined in the runner state.
+        logger.error(f"Unable to add runs section to PDF report. Reason={repr(e)}")
 
     return page_elements
 
@@ -498,14 +491,13 @@ def generate_page_elements(
 def pdf_report_as_bytes(
     requester: User,
     user: User,
-    request_id: str,
+    name: str,
+    name_id: str,
+    name_type: str,
     csip_aus_version: str,
     finalisation_datetime: datetime,
     compliance_id: int,
-    compliance_classes: list[str],
-    compliance_runs: dict[str, Run],
-    excluded_compliance_classes: list[str],
-    class_to_test_procedures: dict[str, list[str]],
+    compliance_by_class: dict,
     no_spacers: bool = False,
 ) -> bytes:
     """Generates a compliance report as PDF bytes"""
@@ -517,12 +509,11 @@ def pdf_report_as_bytes(
     page_elements = generate_page_elements(
         requester=requester,
         user=user,
-        request_id=request_id,
+        name=name,
+        name_id=name_id,
+        name_type=name_type,
         csip_aus_version=csip_aus_version,
-        compliance_classes=compliance_classes,
-        compliance_runs=compliance_runs,
-        excluded_compliance_classes=excluded_compliance_classes,
-        class_to_test_procedures=class_to_test_procedures,
+        compliance_by_class=compliance_by_class,
         finalisation_datetime=finalisation_datetime,
         stylesheet=stylesheet,
     )
