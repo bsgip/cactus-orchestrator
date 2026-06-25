@@ -2,11 +2,12 @@ import asyncio
 import logging
 import time
 from datetime import datetime
-from typing import cast
+from typing import Any, cast
 
 import podman
 import podman.api as podman_api
 import podman.errors as podman_errors
+from podman.domain.containers import Container
 
 from cactus_orchestrator.pod.models import PodImages, PodResources, PodRoutes, RunningPod
 from cactus_orchestrator.settings import CactusOrchestratorError
@@ -137,6 +138,84 @@ async def create_pod_run(
     return pod_name
 
 
+def _create_and_run_container(
+    client: podman.PodmanClient,
+    image: str,
+    pod: str,
+    name: str,
+    command: list[str] | None = None,
+    environment: dict[str, str] | None = None,
+    remove: bool = False,
+    volumes: dict[str, Any] | None = None,
+    labels: dict[str, str] | None = None,
+    health_test: list[str] | None = None,
+    health_interval_ns: int = 0,
+    health_timeout_ns: int = 0,
+    health_retries: int = 0,
+    health_startup_interval_ns: int = 0,
+    health_startup_timeout_ns: int = 0,
+    health_startup_retries: int = 0,
+) -> Container:
+    """Creates a podman container with the specified settings - then ensures it runs. Does NOT wait for health."""
+
+    #
+    # HERE BE DRAGONS - This is mostly a moment in time workaround while podman v5 isn't widely accessible
+    #
+    # We are using the podman api v5 - but a LOT of our servers / dev environments are podman v4
+    # We have requirements for startup health checks (which podman v4 supports) but the API client does NOT
+    #
+    # The following abuse of the internals is how we can roll us forward
+    #
+    # Let podman-py build the SpecGenerator body for everything EXCEPT health checks
+    # (this handles environment -> env, the volumes dict -> mounts/volumes, pod, name, etc.)
+    raw_config_options = {
+        "image": image,
+        "pod": pod,
+        "userns_mode": "auto",
+        "name": name,
+        "labels": labels,
+        "command": command,
+        "environment": environment,
+        "auto_remove": remove,
+    }
+    if volumes:
+        raw_config_options["volumes"] = volumes
+    spec = client.containers._render_payload(raw_config_options)
+
+    if health_test is not None:
+        # Regular healthcheck -> Schema2HealthConfig under "healthconfig"
+        spec["healthconfig"] = {
+            "Test": health_test,
+            "Interval": health_interval_ns,
+            "Timeout": health_timeout_ns,
+            "Retries": health_retries,
+        }
+
+        # Startup healthcheck -> StartupHealthCheck under "startupHealthConfig"
+        # (embeds the same fields as above, plus Successes)
+        spec["startupHealthConfig"] = {
+            "Test": health_test,
+            "Interval": health_startup_interval_ns,
+            "Timeout": health_startup_timeout_ns,
+            "Retries": health_startup_retries,
+        }
+
+    # Logging for journald doesn't properly support tagging via the client - but the API DOES support it.
+    spec["log_configuration"] = {"driver": "journald", "labels": {"cactus": "true"}, "options": {"tag": pod}}
+
+    # Submit the create request via the low-level client (mirrors CreateMixin.create)
+    resp = client.api.post(
+        "/containers/create",
+        headers={"content-type": "application/json"},
+        data=podman_api.prepare_body(spec),
+    )
+    resp.raise_for_status()
+    container_id = resp.json()["Id"]
+    container: Container = client.containers.get(container_id)
+    container.start()
+    return container
+
+
 def _create_pod_and_containers(
     client: podman.PodmanClient,
     images: PodImages,
@@ -167,11 +246,10 @@ def _create_pod_and_containers(
     timings.append(("pod", time.monotonic() - t0))
 
     # 1. Postgres — binds localhost so other teststacks on cactus-net can't reach it
-    client.containers.run(
-        images.postgres,
-        detach=True,
+    _create_and_run_container(
+        client,
+        image=images.postgres,
         pod=resources.pod_name,
-        userns_mode="auto",
         name=resources.container_postgres_name,
         command=["-c", "listen_addresses=localhost"],
         environment={"POSTGRES_PASSWORD": "envoy", "POSTGRES_USER": "envoy", "POSTGRES_DB": "envoy"},  # nosec # This is for internal use only - not exposed
@@ -179,27 +257,25 @@ def _create_pod_and_containers(
     timings.append(("postgres", time.monotonic() - t0))
 
     # 2. teststack-init — polls postgres itself, runs SQL migrations, exits
-    client.containers.run(
-        images.init,
+    _create_and_run_container(
+        client,
+        image=images.init,
         pod=resources.pod_name,
-        userns_mode="auto",
         name=resources.container_init_name,
         environment={
             "ENVOY_DATABASE_URL": ENVOY_DATABASE_URL_PLAIN,
             "MIGRATION_SENTINEL": "/shared/migrations.ready",
         },
-        detach=True,
-        remove=True,
         volumes=shared_volumes,
+        remove=True,  # This should ONLY run once
     )
     timings.append(("init", time.monotonic() - t0))
 
     # 3. Envoy — internal only; binds 127.0.0.1 so the runner (not other teststacks) reaches it
-    client.containers.run(
+    _create_and_run_container(
+        client,
         images.envoy,
-        detach=True,
         pod=resources.pod_name,
-        userns_mode="auto",
         name=resources.container_envoy_server_name,
         environment={
             "HOST": "127.0.0.1",
@@ -220,11 +296,10 @@ def _create_pod_and_containers(
     timings.append(("envoy", time.monotonic() - t0))
 
     # 4. Envoy admin — same image, different entry point
-    client.containers.run(
+    _create_and_run_container(
+        client,
         images.envoy,
-        detach=True,
         pod=resources.pod_name,
-        userns_mode="auto",
         name=resources.container_envoy_admin_name,
         environment={
             "APP_MODULE": "envoy.admin.main:app",
@@ -254,64 +329,31 @@ def _create_pod_and_containers(
         f"traefik.http.routers.{resources.pod_name}.entrypoints": "web",
         f"traefik.http.services.{resources.pod_name}.loadbalancer.server.port": str(routes.exposed_port),
     }
-    #
-    # HERE BE DRAGONS - This is mostly a moment in time workaround while podman v5 isn't widely accessible
-    #
-    # We are using the podman api v5 - but a LOT of our servers / dev environments are podman v4
-    # We have requirements for startup health checks (which podman v4 supports) but the API client does NOT
-    #
-    # The following abuse of the internals is how we can roll us forward
-    #
-    # Let podman-py build the SpecGenerator body for everything EXCEPT health checks
-    # (this handles environment -> env, the volumes dict -> mounts/volumes, pod, name, etc.)
-    spec = client.containers._render_payload(
-        {
-            "image": images.runner,
-            "pod": resources.pod_name,
-            "userns_mode": "auto",
-            "name": resources.container_runner_name,
-            "labels": traefik_labels,
-            "environment": {
-                "PORT": str(routes.exposed_port),
-                "SERVER_URL": "http://localhost:8000",
-                "ENVOY_ADMIN_URL": "http://localhost:8001",
-                "DATABASE_URL": ENVOY_DATABASE_URL_PSYCOPG,
-                "ENVOY_ADMIN_BASICAUTH_USERNAME": "admin",
-                "ENVOY_ADMIN_BASICAUTH_PASSWORD": "password",  # nosec # This is for internal use only - not exposed
-                "HEADER_MEDIA_PARAM_VALUE": images.csip_aus_version,
-                "ENVOY_PROXY_PREFIX": routes.href_prefix,
-            },
-            "volumes": shared_volumes,
-        }
+    _create_and_run_container(
+        client,
+        image=images.runner,
+        pod=resources.pod_name,
+        name=resources.container_runner_name,
+        labels=traefik_labels,
+        environment={
+            "PORT": str(routes.exposed_port),
+            "SERVER_URL": "http://localhost:8000",
+            "ENVOY_ADMIN_URL": "http://localhost:8001",
+            "DATABASE_URL": ENVOY_DATABASE_URL_PSYCOPG,
+            "ENVOY_ADMIN_BASICAUTH_USERNAME": "admin",
+            "ENVOY_ADMIN_BASICAUTH_PASSWORD": "password",  # nosec # This is for internal use only - not exposed
+            "HEADER_MEDIA_PARAM_VALUE": images.csip_aus_version,
+            "ENVOY_PROXY_PREFIX": routes.href_prefix,
+        },
+        volumes=shared_volumes,
+        health_test=["CMD-SHELL", f"curl -fiSs 'http://localhost:{routes.exposed_port}/health'"],
+        health_interval_ns=3600 * SEC,  # every hour (we don't care too much about this once running)
+        health_timeout_ns=5 * SEC,
+        health_retries=1,
+        health_startup_interval_ns=1 * SEC,
+        health_startup_timeout_ns=5 * SEC,
+        health_startup_retries=180,
     )
-
-    # Regular healthcheck -> Schema2HealthConfig under "healthconfig"
-    spec["healthconfig"] = {
-        "Test": ["CMD-SHELL", f"curl -fiSs 'http://localhost:{routes.exposed_port}/health'"],
-        "Interval": 3600 * SEC,  # every hour (we don't care too much about this once running)
-        "Timeout": 5 * SEC,
-        "Retries": 1,
-    }
-
-    # Startup healthcheck -> StartupHealthCheck under "startupHealthConfig"
-    # (embeds the same fields as above, plus Successes)
-    spec["startupHealthConfig"] = {
-        "Test": ["CMD-SHELL", f"curl -fiSs 'http://localhost:{routes.exposed_port}/health'"],
-        "Interval": 1 * SEC,
-        "Timeout": 5 * SEC,
-        "Retries": 180,
-    }
-
-    # Submit the create request via the low-level client (mirrors CreateMixin.create)
-    resp = client.api.post(
-        "/containers/create",
-        headers={"content-type": "application/json"},
-        data=podman_api.prepare_body(spec),
-    )
-    resp.raise_for_status()
-    container_id = resp.json()["Id"]
-    container = client.containers.get(container_id)
-    container.start()
     timings.append(("runner", time.monotonic() - t0))
 
     if logger.isEnabledFor(logging.DEBUG):

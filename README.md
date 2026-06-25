@@ -106,3 +106,15 @@ Apply alembic migrations
 export ORCHESTRATOR_DATABASE_URL="postgresql+asyncpg://cactususer:mypass@localhost:5432/cactusorchestrator"
 uv run alembic upgrade head
 ```
+
+## Logging
+
+Running pods will write to journald - to access logs:
+
+```
+# Logs for a whole pod
+journalctl CONTAINER_TAG=run-123
+
+# Logs for a specific container
+journalctl CONTAINER_TAG=run-123 CONTAINER_NAME=run-123-envoy
+```

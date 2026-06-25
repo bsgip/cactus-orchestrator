@@ -317,32 +317,23 @@ async def test_create_pod_run_success(mock_client: MockedPodmanClient, health_va
         [mock.call(name=resources.pod_name, Networks=mock.ANY, userns=mock.ANY, labels=resources.pod_labels)]
     )
 
-    # Our containers are created - noting that runner is created via low level API due to startup
-    assert mock_client.containers_run.call_count == 6
-    assert all([c.kwargs["detach"] is True for c in mock_client.containers_run.call_args_list]), (
-        "Every container should run detached"
-    )
-    assert all([c.kwargs["pod"] == resources.pod_name for c in mock_client.containers_run.call_args_list]), (
-        "Every container should run in pod"
-    )
+    # Our containers are created - noting that we create via the low level API due to startup health checks
+    assert mock_client.containers_run.call_count == 0
+    assert mock_client.containers_render_payload.call_count == 5
+    assert mock_client.api_post.call_count == 5
+    assert all(
+        [c.args[0]["pod"] == resources.pod_name for c in mock_client.containers_render_payload.call_args_list]
+    ), "Every container should run in pod"
 
     # Count up the container creations - make sure they make sense
     # Also account for the low level API call for runner
     creation_by_image_name: dict[str, int] = {}
-    for img_name in [c.args[0] for c in mock_client.containers_run.call_args_list]:
+    for img_name in [c.args[0]["image"] for c in mock_client.containers_render_payload.call_args_list]:
         existing = creation_by_image_name.get(img_name, None)
         if existing is None:
             creation_by_image_name[img_name] = 1
         else:
             creation_by_image_name[img_name] = existing + 1
-
-    mock_client.containers_render_payload.assert_called_once()
-    mock_client.api_post.assert_called_once()
-    assert mock_client.containers_render_payload.call_args_list[0].args[0]["image"] == images.runner
-    assert images.runner not in creation_by_image_name, (
-        "This is because we are manually calling api_post instead of container.run"
-    )
-    creation_by_image_name[images.runner] = 1
 
     assert creation_by_image_name[images.envoy] == 2, "envoy, admin"
     assert creation_by_image_name[images.postgres] == 1
