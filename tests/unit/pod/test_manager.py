@@ -132,10 +132,10 @@ async def test_get_version(
     "unpulled_images, pull_error_images, error",
     [
         ([], [], None),
-        (["my/image/rabbitmq", "my/image/runner"], [], None),
-        (["my/image/rabbitmq", "my/image/runner"], ["my/image/runner"], ImageNotFound),
+        (["my/image/postgres", "my/image/runner"], [], None),
+        (["my/image/postgres", "my/image/runner"], ["my/image/runner"], ImageNotFound),
         (
-            ["my/image/postgres", "my/image/rabbitmq", "my/image/envoy", "my/image/runner", "my/image/init"],
+            ["my/image/postgres", "my/image/envoy", "my/image/runner", "my/image/init"],
             [],
             None,
         ),
@@ -152,14 +152,12 @@ async def test_ensure_images(
     images = PodImages(
         csip_aus_version="v99",
         postgres="my/image/postgres",
-        rabbitmq="my/image/rabbitmq",
         envoy="my/image/envoy",
         runner="my/image/runner",
         init="my/image/init",
     )
     ALL_IMAGES = [
         "my/image/postgres",
-        "my/image/rabbitmq",
         "my/image/envoy",
         "my/image/runner",
         "my/image/init",
@@ -346,9 +344,8 @@ async def test_create_pod_run_success(mock_client: MockedPodmanClient, health_va
     )
     creation_by_image_name[images.runner] = 1
 
-    assert creation_by_image_name[images.envoy] == 3, "envoy, admin, taskiq-worker"
+    assert creation_by_image_name[images.envoy] == 2, "envoy, admin"
     assert creation_by_image_name[images.postgres] == 1
-    assert creation_by_image_name[images.rabbitmq] == 1
     assert creation_by_image_name[images.init] == 1
     assert creation_by_image_name[images.runner] == 1
 

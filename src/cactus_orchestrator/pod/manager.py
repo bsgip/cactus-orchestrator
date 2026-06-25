@@ -194,23 +194,7 @@ def _create_pod_and_containers(
     )
     timings.append(("init", time.monotonic() - t0))
 
-    # 4. RabbitMQ
-    client.containers.run(
-        images.rabbitmq,
-        detach=True,
-        pod=resources.pod_name,
-        userns_mode="auto",
-        name=resources.container_rabbitmq_name,
-        environment={
-            "RABBITMQ_DEFAULT_USER": "guest",
-            "RABBITMQ_DEFAULT_PASS": "guest",  # nosec # This is for internal use only - not exposed
-            "RABBITMQ_ERLANG_COOKIE": "teststack_cookie",
-            "RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS": "-setcookie teststack_cookie",
-        },
-    )
-    timings.append(("rabbitmq", time.monotonic() - t0))
-
-    # 5. Envoy — internal only; binds 127.0.0.1 so the runner (not other teststacks) reaches it
+    # 3. Envoy — internal only; binds 127.0.0.1 so the runner (not other teststacks) reaches it
     client.containers.run(
         images.envoy,
         detach=True,
@@ -235,7 +219,7 @@ def _create_pod_and_containers(
     )
     timings.append(("envoy", time.monotonic() - t0))
 
-    # 6. Envoy admin — same image, different entry point
+    # 4. Envoy admin — same image, different entry point
     client.containers.run(
         images.envoy,
         detach=True,
@@ -260,36 +244,7 @@ def _create_pod_and_containers(
     )
     timings.append(("envoy-admin", time.monotonic() - t0))
 
-    # 7. Taskiq worker — notification fan-out
-    client.containers.run(
-        images.envoy,
-        detach=True,
-        pod=resources.pod_name,
-        userns_mode="auto",
-        name=resources.container_envoy_notifications_name,
-        command=[
-            "taskiq",
-            "worker",
-            "--no-configure-logging",
-            "envoy.notification.main:broker",
-            "envoy.notification.task.check",
-            "envoy.notification.task.transmit",
-        ],
-        environment={
-            "DATABASE_URL": ENVOY_DATABASE_URL_ASYNCPG,
-            "HREF_PREFIX": routes.href_prefix,
-            "CERT_HEADER": "ssl-client-cert",
-            "ENABLE_NOTIFICATIONS": "True",
-            "RABBIT_MQ_BROKER_URL": RABBIT_MQ_BROKER_URL,
-            "ALLOW_DEVICE_REGISTRATION": "True",
-            "LOG_CONFIG": "logconf.notification.json",
-            "MIGRATION_SENTINEL": "/shared/migrations.ready",
-        },
-        volumes=shared_volumes,
-    )
-    timings.append(("taskiq-worker", time.monotonic() - t0))
-
-    # 8. Runner — the ingress: the Traefik labels (with a StripPrefix middleware) live here, not on
+    # 5. Runner — the ingress: the Traefik labels (with a StripPrefix middleware) live here, not on
     # envoy, so external device traffic flows through the runner's proxy before reaching envoy.
     traefik_router_rule = f"Host(`{routes.external_host}`) && PathPrefix(`{routes.href_prefix}`)"
     traefik_labels = {

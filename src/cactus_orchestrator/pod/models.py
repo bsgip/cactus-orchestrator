@@ -19,7 +19,6 @@ class PodImages:
     csip_aus_version: str  # This is not an image - but a plaintext CSIPAus version that will be encoded into the env
 
     postgres: str
-    rabbitmq: str
     init: str  # For cactus-teststack-init
     envoy: str  # This image has envoy-server, envoy-admin and envoy-notification all built in
     runner: str  # For cactus-runner
@@ -66,9 +65,7 @@ class PodResources:
     container_runner_name: str
     container_envoy_server_name: str
     container_envoy_admin_name: str
-    container_envoy_notifications_name: str
     container_postgres_name: str
-    container_rabbitmq_name: str
 
     @staticmethod
     def from_run(shared_network_name: str, run: Run) -> "PodResources":
@@ -90,9 +87,7 @@ class PodResources:
             container_runner_name=pod_name + "-runner",
             container_envoy_server_name=pod_name + "-envoy",
             container_envoy_admin_name=pod_name + "-envoy-admin",
-            container_envoy_notifications_name=pod_name + "-taskiq-worker",
             container_postgres_name=pod_name + "-postgres",
-            container_rabbitmq_name=pod_name + "-rabbitmq",
         )
 
 

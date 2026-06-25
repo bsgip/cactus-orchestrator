@@ -16,7 +16,6 @@ Web API for management of the podman platform and orchestration of test executio
 | `PODMAN_RUNNER_PORT` | `8080` | The exposed port in each test pod that will route to the cactus-runner test harness |
 | `CACTUS_IMAGE__XXX__CSIP_AUS_VERSION` * | – | Replace `XXX` with a version tag - The full CSIP-Aus version tag |
 | `CACTUS_IMAGE__XXX__POSTGRES` * | – | Replace `XXX` with a version tag - The postgres image for version `XXX` |
-| `CACTUS_IMAGE__XXX__RABBITMQ` * | – | Replace `XXX` with a version tag - The Rabbit MQ image for version `XXX` |
 | `CACTUS_IMAGE__XXX__INIT` * | – | Replace `XXX` with a version tag - The db migration script image for version `XXX` |
 | `CACTUS_IMAGE__XXX__ENVOY` * | – | Replace `XXX` with a version tag - The envoy image for version `XXX` |
 | `CACTUS_IMAGE__XXX__RUNNER` * | – | Replace `XXX` with a version tag - The runner image for version `XXX` |
@@ -37,14 +36,12 @@ Web API for management of the podman platform and orchestration of test executio
 
 CACTUS_IMAGE__V1_99__CSIP_AUS_VERSION = "v1.99"
 CACTUS_IMAGE__V1_99__POSTGRES = "postgres:123"
-CACTUS_IMAGE__V1_99__RABBITMQ = "rabbitmq:123"
 CACTUS_IMAGE__V1_99__INIT = "init-script:123"
 CACTUS_IMAGE__V1_99__ENVOY = "envoy:123"
 CACTUS_IMAGE__V1_99__RUNNER = "runner:123"
 
 CACTUS_IMAGE__V1_2__CSIP_AUS_VERSION" = "v1.2"
 CACTUS_IMAGE__V1_2__POSTGRES = "postgres:456"
-CACTUS_IMAGE__V1_2__RABBITMQ = "rabbitmq:456"
 CACTUS_IMAGE__V1_2__INIT = "init-script:456"
 CACTUS_IMAGE__V1_2__ENVOY = "envoy:456"
 CACTUS_IMAGE__V1_2__RUNNER = "runner:456"

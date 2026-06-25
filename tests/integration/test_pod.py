@@ -97,7 +97,6 @@ async def test_spawn_brings_up_healthy_pod_then_destroy_cleans_up(ensure_network
     images = PodImages(
         csip_aus_version=CSIP_AUS_VERSION,
         postgres="docker.io/library/postgres:15",
-        rabbitmq="docker.io/library/rabbitmq:3",
         init="cactusimageregistry.azurecr.io/cactus-teststack-init:158-v12",
         envoy="cactusimageregistry.azurecr.io/cactus-envoy:158-v12",
         runner="cactusimageregistry.azurecr.io/cactus-runner:158-v12",
@@ -111,10 +110,8 @@ async def test_spawn_brings_up_healthy_pod_then_destroy_cleans_up(ensure_network
         container_init_name="pytest-test-pod-init",
         container_runner_name="pytest-test-pod-runner",
         container_envoy_admin_name="pytest-test-pod-admin",
-        container_envoy_notifications_name="pytest-test-pod-notif",
         container_envoy_server_name="pytest-test-pod-envoy",
         container_postgres_name="pytest-test-pod-pg",
-        container_rabbitmq_name="pytest-test-pod-rabbitmq",
     )
 
     routes = PodRoutes(
