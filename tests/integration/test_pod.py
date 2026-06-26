@@ -96,7 +96,7 @@ def in_network_curl():
 async def test_spawn_brings_up_healthy_pod_then_destroy_cleans_up(ensure_network, empty_pods, in_network_curl):
     images = PodImages(
         csip_aus_version=CSIP_AUS_VERSION,
-        postgres="docker.io/library/postgres:15",
+        postgres="docker.io/library/postgres:17",
         init="cactusimageregistry.azurecr.io/cactus-teststack-init:163-v12",
         envoy="cactusimageregistry.azurecr.io/cactus-envoy:163-v12",
         runner="cactusimageregistry.azurecr.io/cactus-runner:163-v12",
