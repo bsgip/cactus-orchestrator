@@ -1,5 +1,7 @@
 import asyncio
+import io
 import logging
+import tarfile
 import time
 from datetime import datetime
 from typing import Any, cast
@@ -9,7 +11,7 @@ import podman.api as podman_api
 import podman.errors as podman_errors
 from podman.domain.containers import Container
 
-from cactus_orchestrator.pod.models import PodImages, PodResources, PodRoutes, RunningPod
+from cactus_orchestrator.pod.models import PodImages, PodPKI, PodResources, PodRoutes, RunningPod
 from cactus_orchestrator.settings import CactusOrchestratorError
 
 logger = logging.getLogger(__name__)
@@ -105,6 +107,7 @@ async def create_pod_run(
     images: PodImages,
     resources: PodResources,
     routes: PodRoutes,
+    pki: PodPKI | None = None,
 ) -> str:
     """Creates a new pod with the specified pod resources using the specified set of images/config options. Will wait
     until the pod is healthy before returning. Raises an exception (and attempts to clean up) on failure.
@@ -116,7 +119,7 @@ async def create_pod_run(
     t0 = time.monotonic()
     with _client(podman_socket) as client:
         try:
-            pod_name = await asyncio.to_thread(_create_pod_and_containers, client, images, resources, routes)
+            pod_name = await asyncio.to_thread(_create_pod_and_containers, client, images, resources, routes, pki)
         except Exception as exc:
             logger.warning(f"Failed to create pod {resources.pod_name}, cleaning up", exc_info=exc)
             await _do_destroy_pod_resources(client, resources)
@@ -216,11 +219,27 @@ def _create_and_run_container(
     return container
 
 
+def build_cert_tar(files: dict[str, bytes]) -> bytes:
+    """Builds an in-memory tar (for podman put_archive) from each name -> PEM-bytes entry. Entries are written
+    root-owned 0o600 - readable by envoy (which runs as container-root) but no weaker, since one entry is a private
+    key. If envoy ever stops running as root this mode must be revisited or the key becomes unreadable at startup."""
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w") as tar:
+        for name, content in files.items():
+            info = tarfile.TarInfo(name)
+            info.size = len(content)
+            info.mode = 0o600
+            info.mtime = int(time.time())
+            tar.addfile(info, io.BytesIO(content))
+    return buf.getvalue()
+
+
 def _create_pod_and_containers(
     client: podman.PodmanClient,
     images: PodImages,
     resources: PodResources,
     routes: PodRoutes,
+    pki: PodPKI | None = None,
 ) -> str:
     """Returns pod-name on success"""
     t0 = time.monotonic()
@@ -246,7 +265,7 @@ def _create_pod_and_containers(
     timings.append(("pod", time.monotonic() - t0))
 
     # 1. Postgres — binds localhost so other teststacks on cactus-net can't reach it
-    _create_and_run_container(
+    postgres_container = _create_and_run_container(
         client,
         image=images.postgres,
         pod=resources.pod_name,
@@ -271,6 +290,20 @@ def _create_pod_and_containers(
     )
     timings.append(("init", time.monotonic() - t0))
 
+    # Put envoy's notification mTLS cert + key into the shared volume before envoy starts (it reads them once at
+    # notification-worker startup). Written via the postgres container - it's up and mounts /shared
+    # put_archive extracts the tar INTO /shared, which already exists as the mount point.
+    if pki is not None:
+        tar_bytes = build_cert_tar(
+            {
+                "notif-certs/cert.pem": pki.server_cert_bytes,
+                "notif-certs/key.pem": pki.server_key_bytes,
+            }
+        )
+        if not postgres_container.put_archive("/shared", tar_bytes):
+            raise CactusOrchestratorError(f"Failed to stage notification mTLS certs into pod {resources.pod_name}")
+        timings.append(("notif-certs", time.monotonic() - t0))
+
     # 3. Envoy — internal only; binds 127.0.0.1 so the runner (not other teststacks) reaches it
     _create_and_run_container(
         client,
@@ -290,6 +323,15 @@ def _create_pod_and_containers(
             "LOG_CONFIG": "logconf.server.json",
             "NOTIFICATION_DISABLE_TLS_VERIFY": "True",
             "MIGRATION_SENTINEL": "/shared/migrations.ready",
+            **(
+                {
+                    "NOTIFICATIONS_WITH_MTLS": "True",
+                    "NOTIFICATION_MTLS_CERT": "/shared/notif-certs/cert.pem",
+                    "NOTIFICATION_MTLS_KEY": "/shared/notif-certs/key.pem",
+                }
+                if pki is not None
+                else {}
+            ),
         },
         volumes=shared_volumes,
     )

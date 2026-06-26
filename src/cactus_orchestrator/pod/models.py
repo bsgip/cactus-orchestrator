@@ -102,3 +102,18 @@ class RunningPod:
     created_time: datetime  # tz aware
     is_running: bool
     resources: PodResources
+
+
+@dataclass(frozen=True)
+class PodPKI:
+    """mTLS material envoy presents when POSTing notifications to a client's webhook (plus the SERCA used to verify the
+    client's notification endpoint, for the future peer-verify path)."""
+
+    server_ca_bytes: bytes
+    server_cert_bytes: bytes
+    server_key_bytes: bytes
+
+    @staticmethod
+    def from_run() -> "PodPKI":
+        # TODO: generate the per-pod notification mTLS material
+        raise NotImplementedError
