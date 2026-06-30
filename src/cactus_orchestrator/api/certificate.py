@@ -54,11 +54,11 @@ def _chain_certs_for(settings: CactusOrchestratorSettings, is_device_cert: bool)
 
 def _issue_run_group_certificate(
     settings: CactusOrchestratorSettings, user: User, is_device_cert: bool, cert_identifier: str
-) -> tuple[x509.Certificate, bytes, bytes, bytes]:
+) -> tuple[bytes, bytes]:
     """Mints a new EE certificate for a run group on the appropriate chain.
 
-    Returns (client_cert, client_cert_pem, key_pem, fullchain_pem) where fullchain_pem is the EE concatenated with its
-    intermediate CA chain (excluding SERCA).
+    Returns (client_cert_pem, zip_bytes): the EE certificate PEM to persist on the run group, and the downloadable ZIP
+    bundle (see _build_certificate_zip).
     """
     if is_device_cert:
         mca_cert = fetch_certificate_only(settings.cert_device_mca_path)
@@ -94,7 +94,7 @@ def _issue_run_group_certificate(
     )
 
     zip_bytes = _build_certificate_zip(fullchain_pem, key_pem, pfx_bytes)
-    return client_cert, client_cert_pem, fullchain_pem, zip_bytes
+    return client_cert_pem, zip_bytes
 
 
 def _build_certificate_zip(fullchain_pem: bytes, key_pem: bytes, pfx_bytes: bytes) -> bytes:
@@ -228,7 +228,7 @@ async def generate_shared_aggregator_certificate(
     run_group_id = run_group_name
     identifier = f"rg-{run_group_id}-{cert_label}-{cert_counter}"
     settings = get_current_settings()
-    client_cert, client_cert_pem, _, zip_bytes = _issue_run_group_certificate(
+    client_cert_pem, zip_bytes = _issue_run_group_certificate(
         settings, user, is_device_cert=False, cert_identifier=identifier
     )
 
@@ -282,7 +282,7 @@ async def generate_client_certificate(
     cert_counter = run_group.certificate_id + 1
     identifier = f"rg-{run_group_id}-{cert_label}-{cert_counter}"
     settings = get_current_settings()
-    client_cert, client_cert_pem, _, zip_bytes = _issue_run_group_certificate(
+    client_cert_pem, zip_bytes = _issue_run_group_certificate(
         settings, user, body.is_device_cert, cert_identifier=identifier
     )
 
