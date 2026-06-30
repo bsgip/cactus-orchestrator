@@ -137,8 +137,14 @@ async def select_users(session: AsyncSession) -> Sequence[User]:
     return result.scalars().all()
 
 
-async def select_run_groups_for_user(session: AsyncSession, user_id: int) -> Sequence[RunGroup]:
-    resp = await session.execute(select(RunGroup).where(RunGroup.user_id == user_id).order_by(RunGroup.run_group_id))
+async def select_run_groups_for_user(
+    session: AsyncSession, user_id: int, for_update: bool = False
+) -> Sequence[RunGroup]:
+    stmt = select(RunGroup).where(RunGroup.user_id == user_id).order_by(RunGroup.run_group_id)
+    if for_update:
+        # Lock the rows so concurrent certificate generation serialises on certificate_id
+        stmt = stmt.with_for_update()
+    resp = await session.execute(stmt)
     return resp.scalars().all()
 
 
@@ -156,11 +162,14 @@ async def select_run_group_counts_for_user(session: AsyncSession, run_group_ids:
 
 
 async def select_run_group_for_user(
-    session: AsyncSession, user_id: int, run_group_id: int, with_cert: bool = False
+    session: AsyncSession, user_id: int, run_group_id: int, with_cert: bool = False, for_update: bool = False
 ) -> RunGroup | None:
     stmt = select(RunGroup).where((RunGroup.user_id == user_id) & (RunGroup.run_group_id == run_group_id)).limit(1)
     if with_cert:
         stmt = stmt.options(undefer(RunGroup.certificate_pem))
+    if for_update:
+        # Lock the row so concurrent certificate generation serialises on certificate_id
+        stmt = stmt.with_for_update()
 
     resp = await session.execute(stmt)
     return resp.scalar_one_or_none()

@@ -121,18 +121,25 @@ async def select_user_or_raise(
 
 
 async def select_user_run_group_or_raise(
-    session: AsyncSession, user_context: UserContext, run_group_id: int, with_cert: bool = False
+    session: AsyncSession,
+    user_context: UserContext,
+    run_group_id: int,
+    with_cert: bool = False,
+    for_update: bool = False,
 ) -> tuple[User, RunGroup]:
     """Selects a user for the specific user context AND their associated run_group_id or raises a HTTPException if none
     can be found.
 
-    Can optionally include deferred certificate values on the RunGroup"""
+    Can optionally include deferred certificate values on the RunGroup. Set for_update to lock the run_group row for
+    the duration of the transaction (used by certificate generation to serialise the certificate_id counter)."""
     user = await select_user_or_raise(
         session,
         user_context,
     )
 
-    run_group = await select_run_group_for_user(session, user.user_id, run_group_id, with_cert=with_cert)
+    run_group = await select_run_group_for_user(
+        session, user.user_id, run_group_id, with_cert=with_cert, for_update=for_update
+    )
     if run_group is None:
         logger.error(f"Cannot find run_group {run_group_id} for user {user.user_id}")
         raise HTTPException(
@@ -166,15 +173,16 @@ async def select_user_run_group_run_or_raise(
 
 
 async def select_user_run_groups_or_raise(
-    session: AsyncSession, user_context: UserContext
+    session: AsyncSession, user_context: UserContext, for_update: bool = False
 ) -> tuple[User, list[RunGroup]]:
     """Selects a user for the specific user context AND their associated run_groups.
 
-    Raises if the user not found."""
+    Set for_update to lock the run_group rows for the duration of the transaction (used by certificate generation to
+    serialise the certificate_id counter). Raises if the user not found."""
 
     user = await select_user_or_raise(session, user_context)
 
-    run_groups = await select_run_groups_for_user(session, user.user_id)
+    run_groups = await select_run_groups_for_user(session, user.user_id, for_update=for_update)
 
     if not run_groups:
         logger.error(f"No run groups found for user {user.user_id}")

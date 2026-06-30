@@ -74,7 +74,7 @@ from cactus_orchestrator.crud import (
 )
 from cactus_orchestrator.model import Run, RunArtifact, RunStatus, User
 from cactus_orchestrator.pod.manager import create_pod_run, destroy_pod_resources, ensure_images
-from cactus_orchestrator.pod.models import PodResources, PodRoutes
+from cactus_orchestrator.pod.models import PodPKI, PodResources, PodRoutes
 from cactus_orchestrator.settings import CactusOrchestratorError, get_current_settings
 
 logger = logging.getLogger(__name__)
@@ -278,7 +278,20 @@ async def spawn_teststack_and_init_run(  # noqa: C901
     # create a new pod
     try:
         user_identifier = user.user_name or user.subject_id
-        pod_name = await create_pod_run(settings.podman_socket, pod_images, pod_resources, pod_routes)
+        # Global static utility-server (envoy / DNSP) notification mTLS material - envoy presents this when POSTing
+        # notifications (and verifies the OEM webhook's chain to SERCA). Required: pod creation fails without it.
+        pod_pki = (
+            PodPKI.from_paths(
+                settings.cert_serca_path,
+                settings.cert_envoy_ee_crt_path,
+                settings.cert_envoy_ee_key_path,
+                settings.cert_envoy_ica_path,
+                settings.cert_envoy_pca_path,
+            )
+            if settings.cert_serca_path and settings.cert_envoy_ee_crt_path and settings.cert_envoy_ee_key_path
+            else None
+        )
+        pod_name = await create_pod_run(settings.podman_socket, pod_images, pod_resources, pod_routes, pod_pki)
     except Exception as exc:
         logger.error(f"Failed to create new pod for run_group {run_group_id}", exc_info=exc)
         raise HTTPException(HTTPStatus.INTERNAL_SERVER_ERROR, detail="Internal Server Error") from exc

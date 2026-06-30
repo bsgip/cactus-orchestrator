@@ -71,7 +71,7 @@ def mocked_pod() -> Generator[MockedPod, None, None]:
         patch("cactus_orchestrator.api.run.RunnerClient.proceed") as proceed,
     ):
         # create_pod_run returns pod_name
-        async def create_pod_run_side_effect(podman_socket: str, images, resources, routes):
+        async def create_pod_run_side_effect(podman_socket: str, images, resources, routes, pki=None):
             return resources.pod_name
 
         mock_create_pod_run.side_effect = create_pod_run_side_effect

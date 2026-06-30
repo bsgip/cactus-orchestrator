@@ -1,9 +1,9 @@
 
 -- Users
-INSERT INTO user_ (subject_id, issuer_id, pen, user_name)
-VALUES ('user1', 'https://test-cactus-issuer.example.com', 64, 'user1@cactus.example.com');
-INSERT INTO user_ (subject_id, issuer_id, pen, user_name)
-VALUES ('user2', 'https://test-cactus-issuer.example.com', 64, 'user2@cactus.example.com');
+INSERT INTO user_ (subject_id, issuer_id, pen, user_name, subscription_domain)
+VALUES ('user1', 'https://test-cactus-issuer.example.com', 64, 'user1@cactus.example.com', 'user1.example.com');
+INSERT INTO user_ (subject_id, issuer_id, pen, user_name, subscription_domain)
+VALUES ('user2', 'https://test-cactus-issuer.example.com', 64, 'user2@cactus.example.com', 'user2.example.com');
 INSERT INTO user_ (subject_id, issuer_id, pen, user_name)
 VALUES ('user3', 'https://test-cactus-issuer.example.com', 64, NULL);
 

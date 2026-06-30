@@ -15,10 +15,11 @@ import podman
 import pytest
 from assertical.asserts.time import assert_nowish
 from assertical.asserts.type import assert_list_type
+from cryptography.hazmat.primitives import serialization
 from podman.errors import ImageNotFound
 
 from cactus_orchestrator.pod.manager import create_pod_run, destroy_pod_resources, ensure_images, fetch_running_pods
-from cactus_orchestrator.pod.models import PodImages, PodResources, PodRoutes, RunningPod
+from cactus_orchestrator.pod.models import PodImages, PodPKI, PodResources, PodRoutes, RunningPod
 
 PODMAN_SOCKET = "/run/podman/podman.sock"
 PODMAN_NETWORK = "pytest-cactus"
@@ -93,7 +94,9 @@ def in_network_curl():
 
 
 @pytest.mark.asyncio
-async def test_spawn_brings_up_healthy_pod_then_destroy_cleans_up(ensure_network, empty_pods, in_network_curl):
+async def test_spawn_brings_up_healthy_pod_then_destroy_cleans_up(
+    ensure_network, empty_pods, in_network_curl, serca_cert_key_pair
+):
     images = PodImages(
         csip_aus_version=CSIP_AUS_VERSION,
         postgres="docker.io/library/postgres:17",
@@ -127,7 +130,17 @@ async def test_spawn_brings_up_healthy_pod_then_destroy_cleans_up(ensure_network
 
     await ensure_images(PODMAN_SOCKET, images)
 
-    pod_name = await create_pod_run(PODMAN_SOCKET, images, resources, routes)
+    serca_cert, serca_key = serca_cert_key_pair
+    serca_pem = serca_cert.public_bytes(serialization.Encoding.PEM)
+    pki = PodPKI(
+        server_ca_bytes=serca_pem,
+        server_cert_bytes=serca_pem,
+        server_key_bytes=serca_key.private_bytes(
+            serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()
+        ),
+    )
+
+    pod_name = await create_pod_run(PODMAN_SOCKET, images, resources, routes, pki)
     assert pod_name
 
     # check we can connect - we have to do this from WITHIN the podman-network (as if this test was operating

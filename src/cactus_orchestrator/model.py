@@ -87,7 +87,7 @@ class RunGroup(Base):
     certificate_generated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     certificate_id: Mapped[int] = mapped_column(
         Integer, server_default="0"
-    )  # This is a "best effort" counter - can be subject to race conditions
+    )  # Monotonic per-group cert counter; generation locks the row (SELECT FOR UPDATE) to serialise increments
 
     is_static_uri: Mapped[bool] = mapped_column(
         BOOLEAN

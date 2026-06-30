@@ -69,10 +69,26 @@ class CactusOrchestratorSettings(BaseSettings):
     images: dict[str, PodImages]  # PodImages keyed by CSIP-Aus version
 
     # certificates (file paths)
+    # Shared trust anchor for every chain below.
     cert_serca_path: str = ""  # path to SERCA ca.crt PEM file
-    cert_mca_path: str = ""  # path to MCA ca.crt PEM file
-    cert_mica_crt_path: str = ""  # path to MICA tls.crt PEM file
-    cert_mica_key_path: str = ""  # path to MICA tls.key PEM file
+
+    # Device signing chain: SERCA -> Device MCA -> Device MICA -> Device EE (issued per run group).
+    cert_device_mca_path: str = ""  # path to Device MCA ca.crt PEM file
+    cert_device_mica_crt_path: str = ""  # path to Device MICA tls.crt PEM file
+    cert_device_mica_key_path: str = ""  # path to Device MICA tls.key PEM file (signs device EE certs)
+
+    # Aggregator signing chain: SERCA -> Agg PCA -> Agg ICA -> Aggregator EE (issued per run group, carries domain SAN).
+    cert_agg_pca_path: str = ""  # path to Aggregator PCA ca.crt PEM file
+    cert_agg_ica_crt_path: str = ""  # path to Aggregator ICA tls.crt PEM file
+    cert_agg_ica_key_path: str = ""  # path to Aggregator ICA tls.key PEM file (signs aggregator EE certs)
+
+    # Utility-server (envoy / DNSP) chain: SERCA -> envoy PCA -> envoy ICA -> envoy EE. The EE is a fixed wildcard cert
+    # that envoy presents as the mTLS client when POSTing notifications, and that OEMs download to trust the utility
+    # server.
+    cert_envoy_pca_path: str = ""  # path to envoy (DNSP) PCA ca.crt PEM file
+    cert_envoy_ica_path: str = ""  # path to envoy (DNSP) ICA ca.crt PEM file
+    cert_envoy_ee_crt_path: str = ""  # path to envoy (DNSP) EE tls.crt PEM file (wildcard SAN)
+    cert_envoy_ee_key_path: str = ""  # path to envoy (DNSP) EE tls.key PEM file
 
     # teardown task
     idleteardowntask_enable: bool = True

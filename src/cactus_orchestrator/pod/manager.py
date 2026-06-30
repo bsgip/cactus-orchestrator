@@ -242,6 +242,9 @@ def _create_pod_and_containers(
     pki: PodPKI | None = None,
 ) -> str:
     """Returns pod-name on success"""
+    if pki is None:
+        raise CactusOrchestratorError("Cannot create pod without PodPKI - notification mTLS material is required")
+
     t0 = time.monotonic()
     timings: list[tuple[str, float]] = []
 
@@ -290,19 +293,19 @@ def _create_pod_and_containers(
     )
     timings.append(("init", time.monotonic() - t0))
 
-    # Put envoy's notification mTLS cert + key into the shared volume before envoy starts (it reads them once at
+    # Put envoy's notification mTLS cert + key + SERCA into the shared volume before envoy starts (it reads them once at
     # notification-worker startup). Written via the postgres container - it's up and mounts /shared
     # put_archive extracts the tar INTO /shared, which already exists as the mount point.
-    if pki is not None:
-        tar_bytes = build_cert_tar(
-            {
-                "notif-certs/cert.pem": pki.server_cert_bytes,
-                "notif-certs/key.pem": pki.server_key_bytes,
-            }
-        )
-        if not postgres_container.put_archive("/shared", tar_bytes):
-            raise CactusOrchestratorError(f"Failed to stage notification mTLS certs into pod {resources.pod_name}")
-        timings.append(("notif-certs", time.monotonic() - t0))
+    tar_bytes = build_cert_tar(
+        {
+            "notif-certs/cert.pem": pki.server_cert_bytes,
+            "notif-certs/key.pem": pki.server_key_bytes,
+            "notif-certs/serca.pem": pki.server_ca_bytes,
+        }
+    )
+    if not postgres_container.put_archive("/shared", tar_bytes):
+        raise CactusOrchestratorError(f"Failed to stage notification mTLS certs into pod {resources.pod_name}")
+    timings.append(("notif-certs", time.monotonic() - t0))
 
     # 3. Envoy — internal only; binds 127.0.0.1 so the runner (not other teststacks) reaches it
     _create_and_run_container(
@@ -321,17 +324,14 @@ def _create_pod_and_containers(
             "ALLOW_DEVICE_REGISTRATION": "True",
             "STATIC_REGISTRATION_PIN": "11111",
             "LOG_CONFIG": "logconf.server.json",
-            "NOTIFICATION_DISABLE_TLS_VERIFY": "True",
             "MIGRATION_SENTINEL": "/shared/migrations.ready",
-            **(
-                {
-                    "NOTIFICATIONS_WITH_MTLS": "True",
-                    "NOTIFICATION_MTLS_CERT": "/shared/notif-certs/cert.pem",
-                    "NOTIFICATION_MTLS_KEY": "/shared/notif-certs/key.pem",
-                }
-                if pki is not None
-                else {}
-            ),
+            # Notification mTLS: envoy presents the utility-server EE and verifies the OEM webhook's
+            # aggregator chain to SERCA (full peer verification - NOTIFICATION_DISABLE_TLS_VERIFY stays off).
+            "NOTIFICATIONS_WITH_MTLS": "True",
+            "NOTIFICATION_DISABLE_TLS_VERIFY": "False",
+            "NOTIFICATION_MTLS_CERT": "/shared/notif-certs/cert.pem",
+            "NOTIFICATION_MTLS_KEY": "/shared/notif-certs/key.pem",
+            "NOTIFICATION_MTLS_SERCA": "/shared/notif-certs/serca.pem",
         },
         volumes=shared_volumes,
     )

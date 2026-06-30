@@ -106,14 +106,34 @@ class RunningPod:
 
 @dataclass(frozen=True)
 class PodPKI:
-    """mTLS material envoy presents when POSTing notifications to a client's webhook (plus the SERCA used to verify the
-    client's notification endpoint, for the future peer-verify path)."""
+    """mTLS material envoy presents when POSTing notifications to a client's webhook, plus the SERCA used to verify the
+    client's notification endpoint.
+
+    The notification identity is the global, fixed utility-server (envoy / DNSP) EE certificate - its wildcard SAN
+    covers every pod - so this is loaded straight from the configured cert paths rather than minted per run.
+    server_cert_bytes is the EE + DNSP ICA + DNSP PCA fullchain (minus SERCA): the OEM webhook trusts only SERCA, so
+    envoy must present the intermediates for the peer to build a path to the root."""
 
     server_ca_bytes: bytes
     server_cert_bytes: bytes
     server_key_bytes: bytes
 
     @staticmethod
-    def from_run() -> "PodPKI":
-        # TODO: generate the per-pod notification mTLS material
-        raise NotImplementedError
+    def from_paths(
+        serca_path: str, envoy_ee_crt_path: str, envoy_ee_key_path: str, envoy_ica_path: str, envoy_pca_path: str
+    ) -> "PodPKI":
+        with open(serca_path, "rb") as f:
+            server_ca_bytes = f.read()
+        with open(envoy_ee_crt_path, "rb") as f:
+            ee_bytes = f.read()
+        with open(envoy_ica_path, "rb") as f:
+            ica_bytes = f.read()
+        with open(envoy_pca_path, "rb") as f:
+            pca_bytes = f.read()
+        with open(envoy_ee_key_path, "rb") as f:
+            server_key_bytes = f.read()
+        return PodPKI(
+            server_ca_bytes=server_ca_bytes,
+            server_cert_bytes=ee_bytes + ica_bytes + pca_bytes,
+            server_key_bytes=server_key_bytes,
+        )

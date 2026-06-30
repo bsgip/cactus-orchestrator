@@ -16,7 +16,7 @@ from cactus_orchestrator.pod.manager import (
     fetch_running_pods,
     get_podman_version,
 )
-from cactus_orchestrator.pod.models import PodImages, PodResources, PodRoutes, RunningPod
+from cactus_orchestrator.pod.models import PodImages, PodPKI, PodResources, PodRoutes, RunningPod
 
 
 @dataclass(frozen=True)
@@ -277,6 +277,7 @@ async def test_create_pod_run_success(mock_client: MockedPodmanClient, health_va
     images = generate_class_instance(PodImages, seed=101)
     routes = generate_class_instance(PodRoutes, seed=202)
     resources = generate_class_instance(PodResources, seed=303)
+    pki = PodPKI(server_ca_bytes=b"ca", server_cert_bytes=b"cert", server_key_bytes=b"key")
 
     mock_client.containers_render_payload.side_effect = lambda kwargs: kwargs
 
@@ -305,7 +306,7 @@ async def test_create_pod_run_success(mock_client: MockedPodmanClient, health_va
     mock_client.volumes_get.return_value = mock_volume
 
     # Act
-    returned_pod_name = await create_pod_run("/fake/socket", images, resources, routes)
+    returned_pod_name = await create_pod_run("/fake/socket", images, resources, routes, pki)
 
     # Assert
     assert isinstance(returned_pod_name, str)
