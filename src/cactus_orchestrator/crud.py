@@ -35,10 +35,12 @@ FINALISED_RUN_STATUSES: set[RunStatus] = {
 }
 
 
-async def insert_run_group(session: AsyncSession, user_id: int, csip_aus_version: str) -> RunGroup:
+async def insert_run_group(session: AsyncSession, user_id: int, csip_aus_version: str, is_static_uri: bool) -> RunGroup:
     """Inserts a new RunGroup with the specified csip_aus_version. Returns the inserted RunGroup."""
 
-    new_group = RunGroup(name="New Group", csip_aus_version=csip_aus_version, user_id=user_id)
+    new_group = RunGroup(
+        name="New Group", csip_aus_version=csip_aus_version, user_id=user_id, is_static_uri=is_static_uri
+    )
     session.add(new_group)
     await session.flush()
     return new_group
@@ -51,7 +53,9 @@ async def insert_user(session: AsyncSession, user_context: UserContext) -> User:
     user = User(
         subject_id=user_context.subject_id,
         issuer_id=user_context.issuer_id,
-        run_groups=[RunGroup(name="Default Group", csip_aus_version=CSIPAusVersion.RELEASE_1_2.value)],
+        run_groups=[
+            RunGroup(name="Default Group", csip_aus_version=CSIPAusVersion.RELEASE_1_2.value, is_static_uri=True)
+        ],
     )
     session.add(user)
     await session.flush()
@@ -102,21 +106,20 @@ async def select_user_from_run(session: AsyncSession, run_id: int) -> User | Non
 async def insert_run_for_run_group(
     session: AsyncSession,
     run_group_id: int,
-    teststack_id: str,
     testprocedure_id: str,
     run_status: RunStatus,
     is_device_cert: bool,
-) -> int:
+) -> Run:
     run = Run(
         run_group_id=run_group_id,
-        teststack_id=teststack_id,
+        pod_name=None,
         testprocedure_id=testprocedure_id,
         run_status=run_status,
         is_device_cert=is_device_cert,
     )
     session.add(run)
     await session.flush()
-    return run.run_id
+    return run
 
 
 async def select_run_groups_by_user(session: AsyncSession) -> dict[int, list[RunGroup]]:
@@ -134,8 +137,14 @@ async def select_users(session: AsyncSession) -> Sequence[User]:
     return result.scalars().all()
 
 
-async def select_run_groups_for_user(session: AsyncSession, user_id: int) -> Sequence[RunGroup]:
-    resp = await session.execute(select(RunGroup).where(RunGroup.user_id == user_id).order_by(RunGroup.run_group_id))
+async def select_run_groups_for_user(
+    session: AsyncSession, user_id: int, for_update: bool = False
+) -> Sequence[RunGroup]:
+    stmt = select(RunGroup).where(RunGroup.user_id == user_id).order_by(RunGroup.run_group_id)
+    if for_update:
+        # Lock the rows so concurrent certificate generation serialises on certificate_id
+        stmt = stmt.with_for_update()
+    resp = await session.execute(stmt)
     return resp.scalars().all()
 
 
@@ -153,11 +162,33 @@ async def select_run_group_counts_for_user(session: AsyncSession, run_group_ids:
 
 
 async def select_run_group_for_user(
-    session: AsyncSession, user_id: int, run_group_id: int, with_cert: bool = False
+    session: AsyncSession, user_id: int, run_group_id: int, with_cert: bool = False, for_update: bool = False
 ) -> RunGroup | None:
     stmt = select(RunGroup).where((RunGroup.user_id == user_id) & (RunGroup.run_group_id == run_group_id)).limit(1)
     if with_cert:
         stmt = stmt.options(undefer(RunGroup.certificate_pem))
+    if for_update:
+        # Lock the row so concurrent certificate generation serialises on certificate_id
+        stmt = stmt.with_for_update()
+
+    resp = await session.execute(stmt)
+    return resp.scalar_one_or_none()
+
+
+async def select_run_with_run_group_for_user(
+    session: AsyncSession, user_id: int, run_id: int, with_cert: bool = False, with_artifact: bool = False
+) -> Run | None:
+    """Selects a Run underneath a specific user_id with the parent RunGroup relationship populated."""
+
+    stmt = select(Run).join(RunGroup).where((Run.run_id == run_id) & (RunGroup.user_id == user_id))
+
+    if with_artifact:
+        stmt = stmt.options(joinedload(Run.run_artifact))
+
+    if with_cert:
+        stmt = stmt.options(selectinload(Run.run_group).undefer(RunGroup.certificate_pem))
+    else:
+        stmt = stmt.options(selectinload(Run.run_group))
 
     resp = await session.execute(stmt)
     return resp.scalar_one_or_none()
@@ -169,6 +200,12 @@ async def delete_runs(session: AsyncSession, runs: Sequence[Run]) -> None:
         await session.delete(run)
     if run_artifact_ids:
         await session.execute(delete(RunArtifact).where(RunArtifact.run_artifact_id.in_(run_artifact_ids)))
+
+
+async def select_run_for_group(session: AsyncSession, run_group_id: int, run_id: int) -> Run | None:
+    stmt = select(Run).where((Run.run_id == run_id) & (Run.run_group_id == run_group_id)).limit(1)
+    resp = await session.execute(stmt)
+    return resp.scalar_one_or_none()
 
 
 async def select_runs_for_group(
@@ -234,7 +271,8 @@ async def select_passed_runs_for_user(session: AsyncSession, user_id: int) -> Se
 
 
 async def select_nonfinalised_runs(session: AsyncSession) -> Sequence[Run]:
-    stmt = select(Run).where(Run.run_status.in_(ACTIVE_RUN_STATUSES))
+    """Will include RunGroup relationship"""
+    stmt = select(Run).where(Run.run_status.in_(ACTIVE_RUN_STATUSES)).options(selectinload(Run.run_group))
     resp = await session.execute(stmt)
     return resp.scalars().all()
 
@@ -580,7 +618,6 @@ async def delete_compliance_request(session: AsyncSession, compliance_request: C
 async def insert_playlist_runs(
     session: AsyncSession,
     run_group_id: int,
-    teststack_id: str,
     playlist_execution_id: str,
     test_procedure_ids: list[str],
     is_device_cert: bool,
@@ -604,7 +641,7 @@ async def insert_playlist_runs(
             # Runs before start_index are skipped
             run = Run(
                 run_group_id=run_group_id,
-                teststack_id=teststack_id,
+                pod_name=None,
                 testprocedure_id=procedure_id,
                 run_status=RunStatus.skipped,
                 is_device_cert=is_device_cert,
@@ -616,7 +653,7 @@ async def insert_playlist_runs(
             # The run at start_index is the first active run
             run = Run(
                 run_group_id=run_group_id,
-                teststack_id=teststack_id,
+                pod_name=None,
                 testprocedure_id=procedure_id,
                 run_status=RunStatus.provisioning,
                 is_device_cert=is_device_cert,
@@ -627,7 +664,7 @@ async def insert_playlist_runs(
             # Runs after start_index are pending
             run = Run(
                 run_group_id=run_group_id,
-                teststack_id=teststack_id,
+                pod_name=None,
                 testprocedure_id=procedure_id,
                 run_status=RunStatus.initialised,
                 is_device_cert=is_device_cert,

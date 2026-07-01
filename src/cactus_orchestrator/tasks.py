@@ -5,24 +5,25 @@ from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from typing import Any, Never
 
-from aiohttp import ClientConnectionError
 from cactus_runner.client import ClientSession, ClientTimeout, RunnerClient
+from envoy.server.manager.time import utc_now
 from fastapi import FastAPI
 from fastapi_async_sqlalchemy import db
 from fastapi_utils.tasks import repeat_every
-from kubernetes.client.exceptions import ApiException
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from cactus_orchestrator.api.run import finalise_run, teardown_teststack
+from cactus_orchestrator.api.run import finalise_run
 from cactus_orchestrator.crud import (
     ACTIVE_RUN_STATUSES,
     select_nonfinalised_runs,
     select_playlist_runs,
+    select_run_for_group,
     update_run_run_status,
 )
-from cactus_orchestrator.k8s.resource import get_resource_names
 from cactus_orchestrator.model import Run, RunStatus
-from cactus_orchestrator.settings import CactusOrchestratorSettings
+from cactus_orchestrator.pod.manager import destroy_pod_resources, ensure_images, fetch_running_pods
+from cactus_orchestrator.pod.models import PodResources, PodRoutes
+from cactus_orchestrator.settings import CactusOrchestratorSettings, get_current_settings
 
 logger = logging.getLogger(__name__)
 
@@ -66,12 +67,15 @@ async def finalize_teststack_runs(
             await finalise_run(run, runner_url, session, run_status, finalised_at, comms_timeout_seconds)
 
 
-async def teardown_idle_teststack(
+async def destroy_idle_pods(
     session: AsyncSession,
-    teardowntask_max_lifetime_seconds: int,
-    teardowntask_idle_timeout_seconds: int,
+    max_lifetime_seconds: int,
+    idle_timeout_seconds: int,
     comms_timeout_seconds: int,
 ) -> None:
+    """Enumerates runs - tries to find those that are idle / too old. Those runs will be finalised and have their pods
+    shutdown."""
+    settings = get_current_settings()
     runs = await select_nonfinalised_runs(session)
 
     # Track playlist_execution_ids we've already processed
@@ -83,19 +87,25 @@ async def teardown_idle_teststack(
             continue
 
         now = datetime.now(UTC)
-        run_resource_names = get_resource_names(run.teststack_id)
+        pod_resources = PodResources.from_run(settings.podman_network, run)
+        pod_routes = PodRoutes.from_run(
+            settings.cactus_fqdn,
+            settings.envoy_prefix,
+            settings.podman_runner_port,
+            pod_resources,
+            run.run_group,
+            run,
+        )
 
         idle = False
         try:
-            idle = await is_idle(
-                now, run_resource_names.runner_base_url, teardowntask_idle_timeout_seconds, comms_timeout_seconds
-            )
+            idle = await is_idle(now, pod_routes.internal_base_url, idle_timeout_seconds, comms_timeout_seconds)
         except Exception as exc:
             logger.warning("Call to cactus-runner last request endpoint failed.")
             logger.debug("Exception", exc_info=exc)
 
-        if idle or is_maxlive_overtime(now, run.created_at, teardowntask_max_lifetime_seconds):
-            logger.info(f"(Idle/Overtime Task) Shutting down {run_resource_names.service}")
+        if idle or is_maxlive_overtime(now, run.created_at, max_lifetime_seconds):
+            logger.info(f"(Idle/Overtime Task) Shutting down {run.run_id} at pod {pod_resources.pod_name}")
             if run.playlist_execution_id:
                 processed_playlists.add(run.playlist_execution_id)
 
@@ -103,30 +113,56 @@ async def teardown_idle_teststack(
                 await finalize_teststack_runs(
                     session,
                     run,
-                    run_resource_names.runner_base_url,
+                    pod_routes.internal_base_url,
                     RunStatus.finalised_by_timeout,
                     now,
                     comms_timeout_seconds,
                 )
                 await session.commit()
-                await teardown_teststack(run_resource_names)
-
-            except (ApiException, ClientConnectionError) as exc:
-                logger.warning(
-                    f"Failed to teardown idle instance with service name {run_resource_names.service} because it "
-                    "could not be reached, flagging as terminated...",
-                    exc_info=exc,
-                )
-                await finalize_teststack_runs(
-                    session, run, run_resource_names.runner_base_url, RunStatus.terminated, now, comms_timeout_seconds
-                )
-                await session.commit()
-
             except Exception as exc:
                 logger.warning(
-                    f"Failed to teardown idle instance with service name {run_resource_names.service}", exc_info=exc
+                    f"Failed to finalize idle instance {run.run_id} at pod {pod_resources.pod_name}: {exc}",
+                    exc_info=exc,
                 )
-                continue
+            await destroy_pod_resources(settings.podman_socket, pod_resources)
+
+
+async def destroy_orphaned_pods(session: AsyncSession) -> None:
+    """Enumerates all running cactus pods and attempts to kill any whose parent run is missing / inactive"""
+    settings = get_current_settings()
+
+    for pod in await fetch_running_pods(settings.podman_socket):
+        try:
+            run = await select_run_for_group(session, pod.run_group_id, pod.run_id)
+
+            # A pod is orphaned under the following situations:
+            #  1) The run is missing
+            #  2) The run is NOT in a playlist and is marked as inactive
+            #  3) The run IS in a playlist and there are no playlist runs that are active
+            if run is None:
+                # Remember that the run record is held in a transaction UNTIL the job is full spawned
+                # This will mean that from this part of the code - it will be appear as missing (record is dirty)
+                # we could look for "dirty" DB records but it's easier to just give a startup grace period
+                is_orphaned_pod = (
+                    utc_now() - pod.created_time
+                ).total_seconds() > settings.idleteardowntask_startup_grace_seconds
+            else:
+                if run.playlist_execution_id:
+                    # We can only nuke a playlist pod when ALL playlist runs are inactive
+                    playlist_runs = await select_playlist_runs(session, run.playlist_execution_id)
+                    is_orphaned_pod = not any(
+                        [playlist_run.run_status in ACTIVE_RUN_STATUSES for playlist_run in playlist_runs]
+                    )
+                else:
+                    is_orphaned_pod = run.run_status not in ACTIVE_RUN_STATUSES
+
+            if is_orphaned_pod:
+                logger.info(
+                    f"(Orphan Task) pod {pod.name} originally for run {pod.run_id} is an orphan and will be removed."
+                )
+                await destroy_pod_resources(settings.podman_socket, pod.resources)
+        except Exception as exc:
+            logger.warning(f"Failed to check pod {pod.name} as being orphaned: {exc}", exc_info=exc)
 
 
 def generate_idleteardowntask(
@@ -137,16 +173,32 @@ def generate_idleteardowntask(
 ) -> Callable[[], Coroutine[Any, Any, None]]:
     @repeat_every(seconds=idleteardowntask_repeat_every_seconds)
     async def idleteardowntask() -> None:
-        """Task that monitors live teststacks and triggers teardown based on timeout rules."""
+        """Task that monitors live pods and triggers teardown based on timeout rules."""
         async with db():
-            await teardown_idle_teststack(
+            await destroy_idle_pods(
                 db.session,
                 idleteardowntask_max_lifetime_seconds,
                 idleteardowntask_idle_timeout_seconds,
                 comms_timeout_seconds,
             )
 
+            await destroy_orphaned_pods(db.session)
+
     return idleteardowntask
+
+
+def generate_pulltask(pulltask_repeat_every_seconds: int) -> Callable[[], Coroutine[Any, Any, None]]:
+    @repeat_every(seconds=pulltask_repeat_every_seconds)
+    async def pulltask() -> None:
+        """Task ensures podman images are always up to date"""
+        settings = get_current_settings()
+        for version, pod_images in settings.images.items():
+            try:
+                await ensure_images(settings.podman_socket, pod_images)
+            except Exception as exc:
+                logger.error(f"Failure to pull {version} images: {exc}", exc_info=exc)
+
+    return pulltask
 
 
 _task_references: set[asyncio.Task] = set()
@@ -162,9 +214,12 @@ async def lifespan(app: FastAPI, settings: CactusOrchestratorSettings) -> AsyncI
             settings.idleteardowntask_repeat_every_seconds,
             settings.idleteardowntask_max_lifetime_seconds,
             settings.idleteardowntask_idle_timeout_seconds,
-            settings.test_execution_comms_timeout_seconds,
+            settings.comms_timeout_seconds,
         )
         _task_references.add(asyncio.create_task(idleteardowntask()))
+
+        pulltask = generate_pulltask(settings.pulltask_repeat_every_seconds)
+        _task_references.add(asyncio.create_task(pulltask()))
 
     yield  # type: ignore
 

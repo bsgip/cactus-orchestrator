@@ -1,85 +1,129 @@
 # cactus-orchestrator
 
-Web API for management of the Kubernetes platform and orchestration of test execution environments.
-
-The current implementation relies on 'template' resources (defined in YAML) that are cloned into active instances as requests come in.
-
-## Core Resources
-
-- **teststack StatefulSet resource**: Templated resource that defines the Pod running the teststack components (envoy, envoy-admin, db, pubsub, etc.).
-- **teststack Service resource**: A templated `Service` resource created alongside the StatefulSet, used to route requests to the teststack Pod.
-- **mTLS Ingress resource**: An NGINX-based ingress controller configured for mutual TLS. It handles certificate forwarding and client authentication in the `test-execution` namespace.
-- **TLS Ingress resource**: *TODO* — This will secure the orchestrator API itself.
-
-## mTLS Ingress Certificates
-
-- **Custom CA cert/key pair**: Used to sign client certificates. These are stored as separate Kubernetes `Secrets`. The CA certificate is referenced in the Ingress spec for client certificate validation.
-- **Server cert/key pair**: Signed by the custom CA above. Stored in a single TLS secret and referenced in the Ingress.
-- **Client cert/key pair**: Generated and signed dynamically for each request to the orchestrator API.
+Web API for management of the podman platform and orchestration of test execution environments.
 
 
-
-# Nomenclature
-
-- **teststack instance**: A full deployment of the cactus test environment, composed of:
-  - A Kubernetes `Service` resource (for routing)
-  - A Kubernetes `StatefulSet` resource that runs a single `Pod`  consisting of multiple containers:
-    - **cactus-runner**: The main engine responsible for executing tests.
-    - **envoy**: A network proxy used for routing and traffic control within the teststack.
-    - **envoy-admin**: An administrative interface for Envoy, used for inspection, debugging, and dynamic configuration.
-    - **envoy-db**: The database component used by Envoy for storing state and configuration.
-    - **subscription/notification**: Components enabling Envoy’s pub/sub functionality, such as pushing updates or results.
-
-- **template**: A pre-created Kubernetes resource (StatefulSet, Service, etc.) stored in a dedicated namespace and used as a blueprint for launching new teststack instances.
-
-- **test-execution namespace**: The namespace in which active teststack instances are created and managed.
-
-- **test-orchestration namespace**: The namespace where the cactus-orchestrator and cactus-ui components run.
-
-- **teststack template namespace**: The namespace where the reusable resource templates for teststack instances are stored.
-
-- **mTLS Ingress**: An NGINX-based ingress configured for mutual TLS, securing traffic between clients and teststack instances.
-
-- **TLS Ingress**: A planned ingress for securing access to the Cactus orchestrator and UI components.
-
-- **idle teardown**: A background task that identifies and tears down inactive or long-lived teststack instances to free up resources.
-
----
-
-# Environment Variables
+## Environment Variables
 
 | Environment Variable | Default Value | Description |
 |----------------------|----------------|-------------|
-| `KUBERNETES_LOAD_CONFIG` | `true` | For testing only. Set to `false` to skip loading Kubernetes configuration. |
-| `TEST_ORCHESTRATION_NAMESPACE` | `test-orchestration` | Namespace used by the cactus-orchestrator components. |
 | `ORCHESTRATOR_DATABASE_URL` | – | SQLAlchemy-style database connection string using `postgresql+asyncpg` scheme. |
-| `TEST_EXECUTION_NAMESPACE` | `test-execution` | Namespace used for live cactus teststack instances (cactus-runner, envoy, etc.). |
-| `TEST_EXECUTION_INGRESS_NAME` | `test-execution-ingress` | Name of the ingress resource managing external access to teststack instances. |
-| `TESTSTACK_SERVICE_PORT` | `80` | Port exposed by the Kubernetes `Service` for teststack instances. |
-| `TESTSTACK_TEMPLATES_NAMESPACE` | `teststack-templates` | Namespace where teststack templates are stored. |
-| `TEMPLATE_SERVICE_NAME` | `envoy-svc` | Name of the templated Kubernetes `Service`. |
-| `TEMPLATE_APP_NAME` | `envoy` | Name of the main app (container) defined in the template. |
-| `TEMPLATE_STATEFULSET_NAME` | `envoy-set` | Name of the templated StatefulSet for deploying teststack instances. |
-| `TLS_CA_CERTIFICATE_GENERIC_SECRET_NAME` | `tls-ca-certificate` | Name of the generic secret that stores the CA certificate used for client certificate validation. |
-| `TLS_CA_TLS_SECRET_NAME` | `tls-ca-cert-key-pair` | Name of the TLS secret that holds the CA certificate and key used to sign client certificates. |
-| `TEST_EXECUTION_FQDN` | – | Fully qualified domain name for accessing test execution instances. |
-| `IDLETEARDOWNTASK_ENABLE` | `true` | Enables the background task that tears down idle teststack instances. |
-| `IDLETEARDOWNTASK_MAX_LIFETIME_SECONDS` | `86400` | Maximum lifetime (in seconds) allowed for a teststack instance. |
-| `IDLETEARDOWNTASK_IDLE_TIMEOUT_SECONDS` | `3600` | Time (in seconds) after last interaction before an instance is considered idle. |
-| `IDLETEARDOWNTASK_REPEAT_EVERY_SECONDS` | `120` | Frequency (in seconds) at which the idle teardown task runs. |
-| `IGNORED_CSIP_AUS_VERSIONS` | `[]` | JSON Encoded list of strings - what CSIP-Aus versions to be removed/ignored from the supported version list |
+| `CACTUS_FQDN` | – | Fully qualified domain name that the service is hosted under. Test pods will run as a subdomain of this. |
+| `ENVOY_PREFIX` | `/envoy` | href prefix that envoy will be hosted under (allows for upstream routing to be filtered to just this prefix). |
+| `COMMS_TIMEOUT_SECONDS` | 120 | Backend timeout when proxying requests to test pods |
+| `PODMAN_SOCKET` | `/run/podman/podman.sock` | Path to rootful podman socket - will be used to create test pods |
+| `PODMAN_NETWORK` | `cactus-net` | Name of a pre-existing podman bridge network that test pods will operate under |
+| `PODMAN_RUNNER_PORT` | `8080` | The exposed port in each test pod that will route to the cactus-runner test harness |
+| `CACTUS_IMAGE__XXX__CSIP_AUS_VERSION` * | – | Replace `XXX` with a version tag - The full CSIP-Aus version tag |
+| `CACTUS_IMAGE__XXX__POSTGRES` * | – | Replace `XXX` with a version tag - The postgres image for version `XXX` |
+| `CACTUS_IMAGE__XXX__INIT` * | – | Replace `XXX` with a version tag - The db migration script image for version `XXX` |
+| `CACTUS_IMAGE__XXX__ENVOY` * | – | Replace `XXX` with a version tag - The envoy image for version `XXX` |
+| `CACTUS_IMAGE__XXX__RUNNER` * | – | Replace `XXX` with a version tag - The runner image for version `XXX` |
 
----
-## Database-related
-- Only tested with **PostgreSQL 16**.
-- Uses **SQLAlchemy with asyncpg**.
-- **Alembic** manages schema migrations, with scripts located under [`./alembic`](./alembic).
-- Database connection is configured via the `ORCHESTRATOR_DATABASE_URL` environment variable.
-- Migrations are not run automatically; apply manually as part of deployment.
+| `CERT_SERCA_PATH` | – | Path on disk to the SERCA ca.crt PEM file - used for showing server signing chain |
+| `CERT_DEVICE_MCA_PATH` | – | Path on disk to the MCA ca.crt PEM file - used for showing server signing chain - should be the signing cert for device MICA |
+| `CERT_DEVICE_MICA_CRT_PATH` | – | Path on disk to the MICA tls.crt PEM file - used for generating new client DEVICE certs |
+| `CERT_DEVICE_MICA_KEY_PATH` | – | Path on disk to the MICA tls.key PEM file - used for generating new client DEVICE certs |
+| `CERT_AGG_PCA_PATH` | – | Path on disk to the PCA ca.crt PEM file - used for showing server signing chain - should be the signing cert for agg ICA |
+| `CERT_AGG_ICA_CRT_PATH` | – | Path on disk to the ICA tls.crt PEM file - used for generating new client AGGREGATOR certs |
+| `CERT_AGG_ICA_KEY_PATH` | – | Path on disk to the ICA tls.key PEM file - used for generating new client AGGREGATOR certs |
+| `CERT_ENVOY_EE_FULLCHAIN_PATH` | – | Path on disk to the cert bundle (PEM encoded) file - used by utility server instances when establishing a mTLS subscription/notification conection |
+| `CERT_ENVOY_EE_KEY_PATH` | – | Path on disk to the tls.key PEM file - used by utility server instances when establishing a mTLS subscription/notification conection |
+| `IDLETEARDOWNTASK_ENABLE` | `True` | If `True` - Start a background service for monitoring idle/old test pods |
+| `IDLETEARDOWNTASK_MAX_LIFETIME_SECONDS` | `3600 * 24 * 4` | Test runs older than this will be destroyed |
+| `IDLETEARDOWNTASK_IDLE_TIMEOUT_SECONDS` | `3600 * 2` | Test runs with no comms for longer than this will be destroyed |
+| `IDLETEARDOWNTASK_REPEAT_EVERY_SECONDS` | `120` | Check for idle test runs at this frequency |
+| `IDLETEARDOWNTASK_STARTUP_GRACE_SECONDS` | `300` | A pod must be at least this old before it can be declared an orphan |
 
-## TODO / Notes
 
-- Consider dynamically generating all resources instead of relying on pre-defined templates.
-- Evaluate adoption of a modern, typed Kubernetes client library.
-- Investigate replacing StatefulSets with regular Pods if persistent identity is no longer needed.
+| `PULLTASK_REPEAT_EVERY_SECONDS` | `120` | Check for unpulled podman images at this frequency |
+| `IGNORED_CSIP_AUS_VERSIONS` | - | JSON encoded list of strings - each representing a CSIP-Aus version to be ignored |
+| `IGNORED_TEST_PROCEDURES` | - | JSON encoded list of strings - each representing a TestProcedureID to be ignored |
 
+```
+# * All image versions work together as a series of blocks eg:
+
+CACTUS_IMAGE__V1_99__CSIP_AUS_VERSION = "v1.99"
+CACTUS_IMAGE__V1_99__POSTGRES = "postgres:123"
+CACTUS_IMAGE__V1_99__INIT = "init-script:123"
+CACTUS_IMAGE__V1_99__ENVOY = "envoy:123"
+CACTUS_IMAGE__V1_99__RUNNER = "runner:123"
+
+CACTUS_IMAGE__V1_2__CSIP_AUS_VERSION" = "v1.2"
+CACTUS_IMAGE__V1_2__POSTGRES = "postgres:456"
+CACTUS_IMAGE__V1_2__INIT = "init-script:456"
+CACTUS_IMAGE__V1_2__ENVOY = "envoy:456"
+CACTUS_IMAGE__V1_2__RUNNER = "runner:456"
+```
+
+## rootful podman setup
+
+The test pods will be assigned unique hostnames which requires a rootful podman setup
+
+```bash
+# Enable the rootful podman socket
+sudo systemctl enable --now podman.socket
+
+# Verify the socket is active
+sudo systemctl status podman.socket
+sudo ls -la /run/podman/podman.sock
+
+# Allow your user to access it via new group "podman"
+sudo groupadd podman
+sudo usermod -aG podman $USER
+sudo chown root:podman /run/podman/
+sudo chown root:podman /run/podman/podman.sock
+sudo chmod 770 /run/podman/podman.sock
+
+# Then export in your shell profile 
+# This will make all podman commands use the root socket rather than your user socket
+echo 'export CONTAINER_HOST=unix:///run/podman/podman.sock' >> ~/.bashrc
+source ~/.bashrc
+
+# The podman.sock will be recreated every restart - to make the socket group permanent
+sudo tee /etc/tmpfiles.d/podman.conf <<EOF
+d /run/podman 0770 root podman - -
+EOF
+
+# Apply immediately without rebooting
+sudo systemd-tmpfiles --create /etc/tmpfiles.d/podman.conf
+
+sudo mkdir -p /etc/systemd/system/podman.socket.d
+sudo tee /etc/systemd/system/podman.socket.d/override.conf <<EOF
+[Socket]
+SocketGroup=podman
+SocketMode=0770
+EOF
+sudo systemctl daemon-reload
+sudo systemctl restart podman.socket
+```
+
+
+## DB Setup
+
+Create DB and DB user
+```
+sudo -u postgres psql
+postgres=# create database cactusorchestrator;
+postgres=# create user cactususer with encrypted password 'mypass';
+postgres=# grant all privileges on database cactusorchestrator to cactususer;
+postgres=# alter database cactusorchestrator owner to cactususer;
+```
+
+Apply alembic migrations
+```
+export ORCHESTRATOR_DATABASE_URL="postgresql+asyncpg://cactususer:mypass@localhost:5432/cactusorchestrator"
+uv run alembic upgrade head
+```
+
+## Logging
+
+Running pods will write to journald - to access logs:
+
+```
+# Logs for a whole pod
+journalctl CONTAINER_TAG=run-123
+
+# Logs for a specific container
+journalctl CONTAINER_TAG=run-123 CONTAINER_NAME=run-123-envoy
+```

@@ -1,4 +1,3 @@
-import asyncio
 import io
 import json
 import logging
@@ -45,10 +44,12 @@ from sqlalchemy.exc import NoResultFound
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from cactus_orchestrator.api.common import (
+    envoy_dcap_uri,
     map_run_status_to_run_status_response,
     map_run_to_run_response,
     select_user_or_raise,
     select_user_run_group_or_raise,
+    select_user_run_group_run_or_raise,
 )
 from cactus_orchestrator.artifact import PDF_GENERATION_ERRORS_FILE_NAME, regenerate_pdf_report
 from cactus_orchestrator.auth import AuthPerm, UserContext, jwt_validator
@@ -59,69 +60,27 @@ from cactus_orchestrator.crud import (
     delete_runs,
     insert_playlist_runs,
     insert_run_for_run_group,
-    select_active_runs_for_user,
     select_next_playlist_run,
     select_passed_runs_for_user,
     select_playlist_runs,
     select_playlist_runs_with_status,
     select_run_group_for_user,
     select_runs_for_group,
-    select_user_run,
     select_user_run_with_artifact,
     select_user_runs_with_artifacts,
     update_run_run_status,
     update_run_with_runartifact_and_finalise,
     update_runartifact_with_file_data,
 )
-from cactus_orchestrator.k8s.resource import (
-    RunResourceNames,
-    generate_dynamic_test_stack_id,
-    generate_envoy_dcap_uri,
-    generate_static_test_stack_id,
-    get_resource_names,
-    get_template_names,
-)
-from cactus_orchestrator.k8s.resource.create import add_ingress_rule, clone_service, clone_statefulset, wait_for_pod
-from cactus_orchestrator.k8s.resource.delete import delete_service, delete_statefulset, remove_ingress_rule
 from cactus_orchestrator.model import Run, RunArtifact, RunStatus, User
+from cactus_orchestrator.pod.manager import create_pod_run, destroy_pod_resources, ensure_images
+from cactus_orchestrator.pod.models import PodPKI, PodResources, PodRoutes
 from cactus_orchestrator.settings import CactusOrchestratorError, get_current_settings
 
 logger = logging.getLogger(__name__)
 
 
 router = APIRouter()
-
-
-async def prepare_run_for_delete(run: Run) -> None:
-    if run.run_status in ACTIVE_RUN_STATUSES:
-        try:
-            resource_names = get_resource_names(run.teststack_id)
-            await teardown_teststack(resource_names)
-        except Exception as exc:
-            logger.error(f"Error tearing down test stack for run {run.run_id}", exc_info=exc)
-
-
-async def wait_for_runner_health(s: ClientSession) -> None:
-    """Executes the RunnerClient.health function (which works pre-init) until it successfully connects (or enough
-    attempts have passed). This is primarily to avoid situations where k8's says a pod is ready to go but the runner
-    is either not fully up or networking isn't routing"""
-
-    MAX_ATTEMPTS = 15  # noqa: N806
-
-    for attempt in range(MAX_ATTEMPTS):
-        try:
-            if await RunnerClient.health(s):
-                logger.debug(f"Runner is healthy after attempt {attempt}")
-                return
-        except Exception as exc:
-            logger.error(f"Failure accessing RunnerClient.health attempt {attempt}", exc_info=exc)
-
-        # Add a slight delay to give the pod a chance to standup
-        await asyncio.sleep(2)
-
-    raise CactusOrchestratorError(
-        f"Unable to fetch health from RunnerClient after {attempt + 1} attempts. Will be treated as a failed start."
-    )
 
 
 async def get_run_artifact_response_for_user(user: User, run_id: int) -> Response:
@@ -183,13 +142,28 @@ async def get_group_runs_paginated(
     created_after: datetime = Query(default=None),  # noqa: B008
 ) -> Page[RunResponse]:
     # check permissions
-    await select_user_run_group_or_raise(db.session, user_context, run_group_id)
+    _, run_group = await select_user_run_group_or_raise(db.session, user_context, run_group_id)
 
     # get runs
     runs = await select_runs_for_group(db.session, run_group_id, finalised=finalised, created_at_gte=created_after)
 
+    settings = get_current_settings()
     if runs:
-        resp = [map_run_to_run_response(run) for run in runs if run]
+        resp = [
+            map_run_to_run_response(
+                run,
+                PodRoutes.from_run(
+                    settings.cactus_fqdn,
+                    settings.envoy_prefix,
+                    settings.podman_runner_port,
+                    PodResources.from_run(settings.podman_network, run),
+                    run_group,
+                    run,
+                ),
+            )
+            for run in runs
+            if run
+        ]
     else:
         resp = []
     return paginate(resp)
@@ -243,73 +217,87 @@ async def spawn_teststack_and_init_run(  # noqa: C901
             detail="Your certificate has expired. Please regenerate your certificate and try again.",
         )
 
-    # Discover the test stack ID - check for potential conflicts
-    teststack_id: str | None = None
-    if user.is_static_uri:
-        teststack_id = generate_static_test_stack_id(user)
+    # Ensure the CSIP-Aus version images are loaded
+    settings = get_current_settings()
+    pod_images = settings.images.get(run_group.csip_aus_version)
+    if pod_images is None:
+        raise HTTPException(
+            HTTPStatus.BAD_REQUEST,
+            detail=f"RunGroup {run_group.run_group_id} '{run_group.name}' has version '{run_group.csip_aus_version}'"
+            + " but this orchestrator has no pod images configured for that version.",
+        )
+    await ensure_images(settings.podman_socket, pod_images)
 
+    # check for potential conflicts
+    if run_group.is_static_uri:
         # Because this is a static URI - we need to make sure there are no running test instances with this value set
         # (otherwise we are going to cause a collision and problems)
         # This is a limitation of enabling static URIs and the user will be warned about it when enabling things
-        active_runs = await select_active_runs_for_user(db.session, user.user_id)
+        active_runs = await select_runs_for_group(
+            db.session, run_group.run_group_id, finalised=False, created_at_gte=None
+        )
         if len(active_runs) > 0:
             run_ids_str = ",".join(str(r.run_id) for r in active_runs)
             raise HTTPException(
                 HTTPStatus.CONFLICT,
-                detail=f"Static URIs are enabled therefore only a single run can be active. The following run IDs are still active and will need to be finalised first: {run_ids_str}.",  # noqa: E501
+                detail=f"Static URIs for group {run_group.run_group_id} are enabled therefore only a single run can be active. The following run IDs are still active and will need to be finalised first: {run_ids_str}.",  # noqa: E501
             )
 
-    else:
-        teststack_id = generate_dynamic_test_stack_id(user)
-
-    run_resource_names = get_resource_names(teststack_id)
-    template_resource_names = get_template_names(run_group.csip_aus_version)
-
     # Create Run records - either single or playlist
-    runs: list[Run] | None = None
     if is_playlist:
         runs = await insert_playlist_runs(
             db.session,
             run_group_id,
-            teststack_id,
             playlist_execution_id,  # type: ignore  # We know it's not None when is_playlist
             [p.value for p in procedure_ids],  # Convert TestProcedureId enums to strings
             run_group.is_device_cert,
             start_index,
         )
         # First active run is at start_index
-        first_run_id = runs[start_index].run_id
+        first_run = runs[start_index]
     else:
-        first_run_id = await insert_run_for_run_group(
+        first_run = await insert_run_for_run_group(
             db.session,
             run_group_id,
-            teststack_id,
             procedure_ids[0].value,
             RunStatus.provisioning,
             run_group.is_device_cert,
         )
+        runs = [first_run]
 
-    settings = get_current_settings()
+    pod_resources = PodResources.from_run(settings.podman_network, first_run)
+    pod_routes = PodRoutes.from_run(
+        settings.cactus_fqdn,
+        settings.envoy_prefix,
+        settings.podman_runner_port,
+        pod_resources,
+        run_group,
+        first_run,
+    )
 
+    # create a new pod
     try:
-        # duplicate resources
         user_identifier = user.user_name or user.subject_id
-        pod_start_time = datetime.now(UTC)
-        await clone_statefulset(template_resource_names, run_resource_names, user_identifier)
-        await clone_service(template_resource_names, run_resource_names, user_identifier)
+        # Global static utility-server (envoy / DNSP) notification mTLS material - envoy presents this when POSTing
+        # notifications (and verifies the OEM webhook's chain to SERCA). Required: pod creation fails without it.
+        envoy_pki_paths = (
+            settings.cert_serca_path,
+            settings.cert_envoy_ee_fullchain_path,
+            settings.cert_envoy_ee_key_path,
+        )
+        pod_pki = PodPKI.from_paths(*envoy_pki_paths) if all(envoy_pki_paths) else None
+        pod_name = await create_pod_run(settings.podman_socket, pod_images, pod_resources, pod_routes, pod_pki)
+    except Exception as exc:
+        logger.error(f"Failed to create new pod for run_group {run_group_id}", exc_info=exc)
+        raise HTTPException(HTTPStatus.INTERNAL_SERVER_ERROR, detail="Internal Server Error") from exc
 
-        # wait for statefulset's pod
-        await wait_for_pod(run_resource_names)
-
+    # Initialise the runner instance in the new pod
+    try:
         # inject initial state with either the device or aggregator cert data
         async with ClientSession(
-            base_url=run_resource_names.runner_base_url,
-            timeout=ClientTimeout(settings.test_execution_comms_timeout_seconds),
+            base_url=pod_routes.internal_base_url,
+            timeout=ClientTimeout(settings.comms_timeout_seconds),
         ) as session:
-            await wait_for_runner_health(session)
-            pod_startup_seconds = (datetime.now(UTC) - pod_start_time).total_seconds()
-            logger.info(f"Pod {run_resource_names.stateful_set} ready in {pod_startup_seconds:.1f}s")
-
             # Build RunRequest objects for all tests
             run_requests: list[RunRequest] = []
             if is_playlist and runs:
@@ -320,8 +308,8 @@ async def spawn_teststack_and_init_run(  # noqa: C901
                         run_id=str(run.run_id),
                         test_definition=TestDefinition(test_procedure_id=test_proc_id, yaml_definition=yaml_definition),
                         run_group=RunRequestRunGroup(
-                            run_group_id="1",
-                            name="group 1",
+                            run_group_id=str(run_group.run_group_id),
+                            name=run_group.name,
                             csip_aus_version=CSIPAusVersion(run_group.csip_aus_version),
                             test_certificates=TestCertificates(
                                 aggregator=None if run_group.is_device_cert else run_group.certificate_pem.decode(),
@@ -329,19 +317,21 @@ async def spawn_teststack_and_init_run(  # noqa: C901
                             ),
                         ),
                         test_config=TestConfig(
-                            pen=user.pen, subscription_domain=user.subscription_domain, is_static_url=user.is_static_uri
+                            pen=user.pen,
+                            subscription_domain=user.subscription_domain,
+                            is_static_url=run_group.is_static_uri,
                         ),
-                        test_user=TestUser(user_id=str(user.user_id), name="user1"),
+                        test_user=TestUser(user_id=str(user.user_id), name=user_identifier),
                     )
                     run_requests.append(run_request)
             else:
                 yaml_definition = get_yaml_contents(procedure_ids[0])
                 run_request = RunRequest(
-                    run_id=str(first_run_id),
+                    run_id=str(first_run.run_id),
                     test_definition=TestDefinition(test_procedure_id=procedure_ids[0], yaml_definition=yaml_definition),
                     run_group=RunRequestRunGroup(
-                        run_group_id="1",
-                        name="group 1",
+                        run_group_id=str(run_group.run_group_id),
+                        name=run_group.name,
                         csip_aus_version=CSIPAusVersion(run_group.csip_aus_version),
                         test_certificates=TestCertificates(
                             aggregator=None if run_group.is_device_cert else run_group.certificate_pem.decode(),
@@ -349,9 +339,11 @@ async def spawn_teststack_and_init_run(  # noqa: C901
                         ),
                     ),
                     test_config=TestConfig(
-                        pen=user.pen, subscription_domain=user.subscription_domain, is_static_url=user.is_static_uri
+                        pen=user.pen,
+                        subscription_domain=user.subscription_domain,
+                        is_static_url=run_group.is_static_uri,
                     ),
-                    test_user=TestUser(user_id=str(user.user_id), name="user1"),
+                    test_user=TestUser(user_id=str(user.user_id), name=user_identifier),
                 )
                 run_requests.append(run_request)
 
@@ -368,24 +360,20 @@ async def spawn_teststack_and_init_run(  # noqa: C901
                 init_kwargs["start_index"] = start_index
             init_result = await RunnerClient.initialise(**init_kwargs)
 
-        # finally, include new service in ingress rule
-        await add_ingress_rule(run_resource_names, user_identifier)
+    except (CactusOrchestratorError, RunnerClientError) as exc:
+        logger.info("Failure to initialise runner. Will teardown any resources.", exc_info=exc)
+        await destroy_pod_resources(settings.podman_socket, pod_resources)
+        raise HTTPException(HTTPStatus.INTERNAL_SERVER_ERROR, detail="Internal Server Error") from exc
 
-    except (CactusOrchestratorError, RunnerClientError) as err:
-        logger.error(f"Failure to initialise runner. Will teardown any resources. Source: {err}")
-        try:
-            await teardown_teststack(run_resource_names)
-        except Exception as teardown_err:
-            logger.error(f"Failure to teardown resources. {teardown_err}")
-        raise HTTPException(HTTPStatus.INTERNAL_SERVER_ERROR, detail="Internal Server Error") from err
-
-    # commit DB changes - update first run status
+    # commit DB changes - update first run status and the pod names
     new_run_status = RunStatus.started if init_result.is_started else RunStatus.initialised
-    await update_run_run_status(db.session, first_run_id, new_run_status)
+    await update_run_run_status(db.session, first_run.run_id, new_run_status)
+    for run in runs:
+        run.pod_name = pod_name
     await db.session.commit()
 
     # set location header
-    response.headers["Location"] = f"/run/{first_run_id}"
+    response.headers["Location"] = f"/run/{first_run.run_id}"
 
     # Build response with playlist info if applicable
     if is_playlist and runs:
@@ -398,13 +386,13 @@ async def spawn_teststack_and_init_run(  # noqa: C901
             for run in runs
         ]
         return InitRunResponse(
-            run_id=first_run_id,
-            test_url=generate_envoy_dcap_uri(run_resource_names),
+            run_id=first_run.run_id,
+            test_url=envoy_dcap_uri(pod_routes),
             playlist_execution_id=playlist_execution_id,
             playlist_runs=playlist_runs,
         )
     else:
-        return InitRunResponse(run_id=first_run_id, test_url=generate_envoy_dcap_uri(run_resource_names))
+        return InitRunResponse(run_id=first_run.run_id, test_url=envoy_dcap_uri(pod_routes))
 
 
 @router.post(
@@ -419,14 +407,7 @@ async def start_run(
 
     For playlist runs, only the currently active test can be started.
     """
-    # get user
-    user = await select_user_or_raise(db.session, user_context)
-
-    # get run
-    try:
-        run = await select_user_run(db.session, user.user_id, run_id)
-    except NoResultFound as err:
-        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Not Found") from err
+    user, run_group, run = await select_user_run_group_run_or_raise(db.session, user_context, run_id)
 
     # For playlist runs, validate this is the current active test
     if run.playlist_execution_id:
@@ -443,14 +424,16 @@ async def start_run(
                 f"Run {current_active_run.run_id} is the current active test in this playlist.",
             )
 
-    # resource ids
-    run_resource_names = get_resource_names(run.teststack_id)
+    settings = get_current_settings()
+    pod_resources = PodResources.from_run(settings.podman_network, run)
+    pod_routes = PodRoutes.from_run(
+        settings.cactus_fqdn, settings.envoy_prefix, settings.podman_runner_port, pod_resources, run_group, run
+    )
 
     # request runner starts run
-    settings = get_current_settings()
     async with ClientSession(
-        base_url=run_resource_names.runner_base_url,
-        timeout=ClientTimeout(settings.test_execution_comms_timeout_seconds),
+        base_url=pod_routes.internal_base_url,
+        timeout=ClientTimeout(settings.comms_timeout_seconds),
     ) as s:
         try:
             await RunnerClient.start(s)
@@ -477,17 +460,7 @@ async def start_run(
     await update_run_run_status(session=db.session, run_id=run.run_id, run_status=RunStatus.started)
     await db.session.commit()
 
-    return StartRunResponse(test_url=generate_envoy_dcap_uri(run_resource_names))
-
-
-async def teardown_teststack(run_resource_names: RunResourceNames) -> None:
-    """Tears down the envoy teststack (ingress rule + service + statefulset)"""
-    # Remove ingress rule
-    await remove_ingress_rule(run_resource_names)
-
-    # Remove resources
-    await delete_service(run_resource_names)
-    await delete_statefulset(run_resource_names)
+    return StartRunResponse(test_url=envoy_dcap_uri(pod_routes))
 
 
 def is_all_criteria_met(runner_status: RunnerStatus | None) -> bool | None:
@@ -576,14 +549,13 @@ async def get_individual_run(
     user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.user_all}))],
 ) -> RunResponse:
 
-    # get user
-    user = await select_user_or_raise(db.session, user_context)
-
     # get run
-    try:
-        run = await select_user_run(db.session, user.user_id, run_id)
-    except NoResultFound as err:
-        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Not Found") from err
+    _, run_group, run = await select_user_run_group_run_or_raise(db.session, user_context, run_id)
+    settings = get_current_settings()
+    pod_resources = PodResources.from_run(settings.podman_network, run)
+    pod_routes = PodRoutes.from_run(
+        settings.cactus_fqdn, settings.envoy_prefix, settings.podman_runner_port, pod_resources, run_group, run
+    )
 
     # Fetch playlist_runs if this is a playlist run
     playlist_runs = None
@@ -594,7 +566,7 @@ async def get_individual_run(
             status = map_run_status_to_run_status_response(r.run_status)
             playlist_runs.append(PlaylistRunInfo(run_id=r.run_id, test_procedure_id=r.testprocedure_id, status=status))
 
-    return map_run_to_run_response(run, playlist_runs)
+    return map_run_to_run_response(run, pod_routes, playlist_runs)
 
 
 @router.delete(uri.Run, status_code=HTTPStatus.NO_CONTENT)
@@ -606,27 +578,24 @@ async def delete_individual_run(
     since they share a teststack."""
 
     # get user
-    user = await select_user_or_raise(db.session, user_context)
-
-    # get run
-    try:
-        run = await select_user_run(db.session, user.user_id, run_id)
-    except NoResultFound as err:
-        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Not Found") from err
-
+    user, run_group, run = await select_user_run_group_run_or_raise(db.session, user_context, run_id)
     logger.info(f"Delete requested for run {run_id} by user {user.subject_id}")
+
+    settings = get_current_settings()
+    pod_resources = PodResources.from_run(settings.podman_network, run)
 
     # For playlist runs, delete all siblings
     if run.playlist_execution_id:
         playlist_runs = await select_playlist_runs(db.session, run.playlist_execution_id)
         run_ids = [r.run_id for r in playlist_runs]
         # Teardown shared teststack (only need once)
-        await prepare_run_for_delete(run)
+        await destroy_pod_resources(settings.podman_socket, pod_resources)
         # Delete all runs in the playlist
         await delete_runs(db.session, list(playlist_runs))
         logger.info(f"Deleted playlist runs {run_ids} for user {user.subject_id}")
     else:
-        await prepare_run_for_delete(run)
+        if run.run_status in ACTIVE_RUN_STATUSES:
+            await destroy_pod_resources(settings.podman_socket, pod_resources)
         await delete_runs(db.session, [run])
         logger.info(f"Deleted run {run_id} for user {user.subject_id}")
 
@@ -646,29 +615,29 @@ async def finalise_run_and_teardown_teststack(  # noqa: C901
     The teststack is only torn down after the last test in the playlist completes.
     """
     # get user
-    user = await select_user_or_raise(db.session, user_context)
+    user, run_group, run = await select_user_run_group_run_or_raise(
+        db.session, user_context, run_id, with_artifact=True
+    )
+    logger.info(f"Finalise requested for run {run_id} by user {user.subject_id}")
 
-    # get run
-    try:
-        run = await select_user_run_with_artifact(db.session, user.user_id, run_id)
-    except NoResultFound as err:
-        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Not Found") from err
+    settings = get_current_settings()
+    pod_resources = PodResources.from_run(settings.podman_network, run)
+    pod_routes = PodRoutes.from_run(
+        settings.cactus_fqdn, settings.envoy_prefix, settings.podman_runner_port, pod_resources, run_group, run
+    )
 
     # Don't attempt to cleanup / teardown if this has already been finalised
     if run.run_status in ACTIVE_RUN_STATUSES:
         settings = get_current_settings()
 
-        # get resource names
-        run_resource_names = get_resource_names(run.teststack_id)
-
         # finalise
         artifact = await finalise_run(
             run,
-            run_resource_names.runner_base_url,
+            pod_routes.internal_base_url,
             db.session,
             RunStatus.finalised_by_client,
             datetime.now(UTC),
-            settings.test_execution_comms_timeout_seconds,
+            settings.comms_timeout_seconds,
         )
         await db.session.commit()
 
@@ -679,8 +648,8 @@ async def finalise_run_and_teardown_teststack(  # noqa: C901
             next_run = await select_next_playlist_run(db.session, run.playlist_execution_id, run.playlist_order)
             if next_run:
                 async with ClientSession(
-                    base_url=run_resource_names.runner_base_url,
-                    timeout=ClientTimeout(settings.test_execution_comms_timeout_seconds),
+                    base_url=pod_routes.internal_base_url,
+                    timeout=ClientTimeout(settings.comms_timeout_seconds),
                 ) as session:
                     try:
                         runner_status = await RunnerClient.status(session)
@@ -714,7 +683,7 @@ async def finalise_run_and_teardown_teststack(  # noqa: C901
                         # If we can't check status, assume playlist failed and teardown
 
         if should_teardown:
-            await teardown_teststack(run_resource_names)
+            await destroy_pod_resources(settings.podman_socket, pod_resources)
     else:
         artifact = run.run_artifact
 
@@ -742,29 +711,26 @@ async def finalise_playlist(
 
     Returns the artifact from the current test if available.
     """
-    user = await select_user_or_raise(db.session, user_context)
-
-    try:
-        run = await select_user_run_with_artifact(db.session, user.user_id, run_id)
-    except NoResultFound as err:
-        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Not Found") from err
+    _, run_group, run = await select_user_run_group_run_or_raise(db.session, user_context, run_id)
 
     if not run.playlist_execution_id:
         raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail="Run is not part of a playlist")
 
-    artifact = None
     settings = get_current_settings()
-    run_resource_names = get_resource_names(run.teststack_id)
+    pod_resources = PodResources.from_run(settings.podman_network, run)
+    pod_routes = PodRoutes.from_run(
+        settings.cactus_fqdn, settings.envoy_prefix, settings.podman_runner_port, pod_resources, run_group, run
+    )
 
     # Finalize current test if it's active
     if run.run_status in ACTIVE_RUN_STATUSES:
         artifact = await finalise_run(
             run,
-            run_resource_names.runner_base_url,
+            pod_routes.internal_base_url,
             db.session,
             RunStatus.finalised_by_client,
             datetime.now(UTC),
-            settings.test_execution_comms_timeout_seconds,
+            settings.comms_timeout_seconds,
         )
     else:
         artifact = run.run_artifact
@@ -777,8 +743,7 @@ async def finalise_playlist(
     await db.session.commit()
 
     # Teardown the teststack
-    await teardown_teststack(run_resource_names)
-
+    await destroy_pod_resources(settings.podman_socket, pod_resources)
     logger.info(f"Playlist skipped: run {run.run_id} finalized, remaining runs marked as skipped")
 
     if artifact is None:
@@ -879,13 +844,8 @@ async def get_run_status(
 
     returns HTTP 200 on success with"""
 
-    user = await select_user_or_raise(db.session, user_context)
-
     # get the run - make sure it's still "running"
-    try:
-        run = await select_user_run(db.session, user.user_id, run_id)
-    except NoResultFound as err:
-        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Run does not exist.") from err
+    _, run_group, run = await select_user_run_group_run_or_raise(db.session, user_context, run_id)
     if run.run_status not in ACTIVE_RUN_STATUSES:
         raise HTTPException(
             status_code=HTTPStatus.GONE,
@@ -893,17 +853,20 @@ async def get_run_status(
         )
 
     # Connect to the pod and talk to the runner's "status" endpoint. Forward the result along
-    run_resource_names = get_resource_names(run.teststack_id)
     settings = get_current_settings()
+    pod_resources = PodResources.from_run(settings.podman_network, run)
+    pod_routes = PodRoutes.from_run(
+        settings.cactus_fqdn, settings.envoy_prefix, settings.podman_runner_port, pod_resources, run_group, run
+    )
     async with ClientSession(
-        base_url=run_resource_names.runner_base_url,
-        timeout=ClientTimeout(settings.test_execution_comms_timeout_seconds),
+        base_url=pod_routes.internal_base_url,
+        timeout=ClientTimeout(settings.comms_timeout_seconds),
     ) as s:
         try:
             return await RunnerClient.status(s)
         except Exception as err:
             logger.error(
-                f"Error fetching runner status for run {run.run_id} @ {run_resource_names.runner_base_url}.",
+                f"Error fetching runner status for run {run.run_id} @ {pod_routes.internal_base_url}.",
             )
             raise HTTPException(
                 status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
@@ -920,13 +883,8 @@ async def get_run_request_list(
 
     returns HTTP 200 on success with a RequestList model"""
 
-    user = await select_user_or_raise(db.session, user_context)
-
     # get the run - make sure it's still "running"
-    try:
-        run = await select_user_run(db.session, user.user_id, run_id)
-    except NoResultFound as err:
-        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Run does not exist.") from err
+    _, run_group, run = await select_user_run_group_run_or_raise(db.session, user_context, run_id)
     if run.run_status not in ACTIVE_RUN_STATUSES:
         raise HTTPException(
             status_code=HTTPStatus.GONE,
@@ -934,17 +892,20 @@ async def get_run_request_list(
         )
 
     # Connect to the pod and talk to the runner's "status" endpoint. Forward the result along
-    run_resource_names = get_resource_names(run.teststack_id)
     settings = get_current_settings()
+    pod_resources = PodResources.from_run(settings.podman_network, run)
+    pod_routes = PodRoutes.from_run(
+        settings.cactus_fqdn, settings.envoy_prefix, settings.podman_runner_port, pod_resources, run_group, run
+    )
     async with ClientSession(
-        base_url=run_resource_names.runner_base_url,
-        timeout=ClientTimeout(settings.test_execution_comms_timeout_seconds),
+        base_url=pod_routes.internal_base_url,
+        timeout=ClientTimeout(settings.comms_timeout_seconds),
     ) as s:
         try:
             return await RunnerClient.list_requests(s)
         except Exception as err:
             logger.error(
-                f"Error fetching runner request list for run {run.run_id} @ {run_resource_names.runner_base_url}.",
+                f"Error fetching runner request list for run {run.run_id} @ {pod_routes.internal_base_url}.",
             )
             raise HTTPException(
                 status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
@@ -963,13 +924,8 @@ async def get_run_request_data(
 
     returns HTTP 200 on success with a RequestData model"""
 
-    user = await select_user_or_raise(db.session, user_context)
-
     # get the run - make sure it's still "running"
-    try:
-        run = await select_user_run(db.session, user.user_id, run_id)
-    except NoResultFound as err:
-        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Run does not exist.") from err
+    _, run_group, run = await select_user_run_group_run_or_raise(db.session, user_context, run_id)
     if run.run_status not in ACTIVE_RUN_STATUSES:
         raise HTTPException(
             status_code=HTTPStatus.GONE,
@@ -977,17 +933,20 @@ async def get_run_request_data(
         )
 
     # Connect to the pod and talk to the runner's "status" endpoint. Forward the result along
-    run_resource_names = get_resource_names(run.teststack_id)
     settings = get_current_settings()
+    pod_resources = PodResources.from_run(settings.podman_network, run)
+    pod_routes = PodRoutes.from_run(
+        settings.cactus_fqdn, settings.envoy_prefix, settings.podman_runner_port, pod_resources, run_group, run
+    )
     async with ClientSession(
-        base_url=run_resource_names.runner_base_url,
-        timeout=ClientTimeout(settings.test_execution_comms_timeout_seconds),
+        base_url=pod_routes.internal_base_url,
+        timeout=ClientTimeout(settings.comms_timeout_seconds),
     ) as s:
         try:
             return await RunnerClient.get_request(s, request_id)
         except Exception as err:
             logger.error(
-                f"Error fetching runner req {request_id} for run {run.run_id} @ {run_resource_names.runner_base_url}.",
+                f"Error fetching runner req {request_id} for run {run.run_id} @ {pod_routes.internal_base_url}.",
             )
             raise HTTPException(
                 status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
@@ -1003,24 +962,22 @@ async def proceed_proxy(
     """Forwards the proceed request to the appropriate runner instance and returns the runners response back
     to the client.
     """
-    user = await select_user_or_raise(db.session, user_context)
 
     # get the run - make sure it's still "running"
-    try:
-        run = await select_user_run(db.session, user.user_id, run_id)
-    except NoResultFound as err:
-        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Run does not exist.") from err
-
+    _, run_group, run = await select_user_run_group_run_or_raise(db.session, user_context, run_id)
     if run.run_status not in ACTIVE_RUN_STATUSES:
         raise HTTPException(
             status_code=HTTPStatus.GONE, detail="Run {run_id} has terminated. Unable to send proceed signal."
         )
 
-    run_resource_names = get_resource_names(run.teststack_id)
     settings = get_current_settings()
+    pod_resources = PodResources.from_run(settings.podman_network, run)
+    pod_routes = PodRoutes.from_run(
+        settings.cactus_fqdn, settings.envoy_prefix, settings.podman_runner_port, pod_resources, run_group, run
+    )
     async with ClientSession(
-        base_url=run_resource_names.runner_base_url,
-        timeout=ClientTimeout(settings.test_execution_comms_timeout_seconds),
+        base_url=pod_routes.internal_base_url,
+        timeout=ClientTimeout(settings.comms_timeout_seconds),
     ) as s:
         try:
             return await RunnerClient.proceed(s)
@@ -1050,12 +1007,21 @@ async def get_run_list(
         raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail=msg)
 
     user = await select_user_or_raise(db.session, user_context)
-
     runs = await select_passed_runs_for_user(db.session, user_id=user.user_id)
 
-    if runs:
-        resp = [map_run_to_run_response(run) for run in runs if run]
-    else:
-        resp = []
+    settings = get_current_settings()
 
-    return resp
+    run_responses: list[RunResponse] = []
+    for run in runs:
+        pod_resources = PodResources.from_run(settings.podman_network, run)
+        pod_routes = PodRoutes.from_run(
+            settings.cactus_fqdn,
+            settings.envoy_prefix,
+            settings.podman_runner_port,
+            pod_resources,
+            run.run_group,
+            run,
+        )
+        run_responses.append(map_run_to_run_response(run, pod_routes))
+
+    return run_responses

@@ -1,9 +1,8 @@
 import base64
-import inspect
 import os
 from collections.abc import Generator
 from datetime import UTC, datetime, timedelta
-from unittest.mock import AsyncMock, MagicMock, Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import jwt
 import pytest
@@ -16,14 +15,14 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec, rsa
 from cryptography.x509.oid import NameOID
 from envoy.server.alembic import upgrade as envoy_upgrade
-from kubernetes.client import V1Secret
 from psycopg import Connection
 from sqlalchemy import NullPool, create_engine
 
 from cactus_orchestrator.auth import jwt_validator
-from cactus_orchestrator.k8s.certificate.create import (
+from cactus_orchestrator.certificate.create import (
     calculate_rfc5280_subject_key_identifier_method_2,
-    generate_client_p12_ec,
+    generate_aggregator_certificate,
+    generate_device_certificate,
 )
 from cactus_orchestrator.model import Base
 from cactus_orchestrator.settings import _reset_current_settings, get_current_settings
@@ -40,7 +39,26 @@ def base_environment(preserved_environment, request):
 
     os.environ["IDLETEARDOWNTASK_ENABLE"] = "false"
     os.environ["JWTAUTH_ISSUER"] = "https://test-cactus-issuer.example.com"
-    os.environ["TEST_EXECUTION_FQDN"] = "cactus-testing.test.fqdn"
+    os.environ["CACTUS_FQDN"] = "cactus-testing.test.fqdn"
+
+    # Install images
+    os.environ["CACTUS_IMAGE__V12__CSIP_AUS_VERSION"] = "v1.2"
+    os.environ["CACTUS_IMAGE__V12__POSTGRES"] = "postgres:12"
+    os.environ["CACTUS_IMAGE__V12__INIT"] = "init:12"
+    os.environ["CACTUS_IMAGE__V12__ENVOY"] = "envoy:12"
+    os.environ["CACTUS_IMAGE__V12__RUNNER"] = "runner:12"
+
+    os.environ["CACTUS_IMAGE__V13__CSIP_AUS_VERSION"] = "v1.3"
+    os.environ["CACTUS_IMAGE__V13__POSTGRES"] = "postgres:13"
+    os.environ["CACTUS_IMAGE__V13__INIT"] = "init:13"
+    os.environ["CACTUS_IMAGE__V13__ENVOY"] = "envoy:13"
+    os.environ["CACTUS_IMAGE__V13__RUNNER"] = "runner:13"
+
+    os.environ["CACTUS_IMAGE__V13BETA__CSIP_AUS_VERSION"] = "v1.3-beta/storage"
+    os.environ["CACTUS_IMAGE__V13BETA__POSTGRES"] = "postgres:13-beta"
+    os.environ["CACTUS_IMAGE__V13BETA__INIT"] = "init:13-beta"
+    os.environ["CACTUS_IMAGE__V13BETA__ENVOY"] = "envoy:13-beta"
+    os.environ["CACTUS_IMAGE__V13BETA__RUNNER"] = "runner:13-beta"
 
     idleteardowntask_enable = request.node.get_closest_marker("idleteardowntask_enable")
     if idleteardowntask_enable:
@@ -68,82 +86,109 @@ def pg_empty_config(postgresql, preserved_environment) -> Generator[Connection, 
     Base.metadata.drop_all(engine)
 
 
-@pytest.fixture(scope="session")
-def serca_cert_key_pair() -> tuple[x509.Certificate, ec.EllipticCurvePrivateKey]:
-    # This isn't a fully compliant 2030.5 SERCA cert but is close enough for our tests
-    serca_key: ec.EllipticCurvePrivateKey = ec.generate_private_key(ec.SECP256R1())
-    subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Test SERCA")])
-    ski = x509.SubjectKeyIdentifier(calculate_rfc5280_subject_key_identifier_method_2(serca_key.public_key()))
+# keyUsage asserted on every CA certificate, matching the NEPKI CA profile (cactus-deploy pki/create-cert.sh)
+_CA_KEY_USAGE = x509.KeyUsage(
+    digital_signature=False,
+    content_commitment=False,
+    key_encipherment=False,
+    data_encipherment=False,
+    key_agreement=False,
+    key_cert_sign=True,
+    crl_sign=True,
+    encipher_only=False,
+    decipher_only=False,
+)
 
-    ca_cert = (
+
+def _build_ca_cert(
+    common_name: str,
+    subject_key: ec.EllipticCurvePrivateKey,
+    path_length: int | None,
+    issuer: tuple[x509.Certificate, ec.EllipticCurvePrivateKey] | None = None,
+) -> x509.Certificate:
+    """Builds a CA certificate mirroring the structural NEPKI CA profile (cactus-deploy pki/create-cert.sh): a
+    C=AU,O=CACTUS,CN=<common_name> subject, critical CA basicConstraints with the supplied pathlen, keyCertSign+cRLSign
+    keyUsage and a method-2 subjectKeyIdentifier. issuer=None yields a self-signed root (SERCA); otherwise the cert is
+    signed by the issuer and carries the matching authorityKeyIdentifier."""
+    subject = x509.Name(
+        [
+            x509.NameAttribute(NameOID.COUNTRY_NAME, "AU"),
+            x509.NameAttribute(NameOID.ORGANIZATION_NAME, "CACTUS"),
+            x509.NameAttribute(NameOID.COMMON_NAME, common_name),
+        ]
+    )
+    issuer_cert, signing_key = issuer if issuer is not None else (None, subject_key)
+    ski = x509.SubjectKeyIdentifier(calculate_rfc5280_subject_key_identifier_method_2(subject_key.public_key()))
+
+    builder = (
         x509.CertificateBuilder()
         .subject_name(subject)
-        .issuer_name(subject)
-        .public_key(serca_key.public_key())
+        .issuer_name(issuer_cert.subject if issuer_cert is not None else subject)
+        .public_key(subject_key.public_key())
         .serial_number(x509.random_serial_number())
         .not_valid_before(datetime.now(UTC))
         .not_valid_after(datetime.now(UTC) + timedelta(days=365))
-        .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
+        .add_extension(x509.BasicConstraints(ca=True, path_length=path_length), critical=True)
+        .add_extension(_CA_KEY_USAGE, critical=True)
         .add_extension(ski, critical=False)
-        .sign(serca_key, hashes.SHA256())  # Self signed
     )
-    return (ca_cert, serca_key)
+    if issuer_cert is not None:
+        issuer_ski = issuer_cert.extensions.get_extension_for_class(x509.SubjectKeyIdentifier)
+        builder = builder.add_extension(
+            x509.AuthorityKeyIdentifier.from_issuer_subject_key_identifier(issuer_ski.value), critical=False
+        )
+
+    return builder.sign(signing_key, hashes.SHA256())
+
+
+@pytest.fixture(scope="session")
+def serca_cert_key_pair() -> tuple[x509.Certificate, ec.EllipticCurvePrivateKey]:
+    """Shared self-signed root trust anchor (SERCA)."""
+    serca_key: ec.EllipticCurvePrivateKey = ec.generate_private_key(ec.SECP256R1())
+    return (_build_ca_cert("IEEE 2030.5 Root", serca_key, path_length=None), serca_key)
 
 
 @pytest.fixture(scope="session")
 def mca_cert_key_pair(serca_cert_key_pair) -> tuple[x509.Certificate, ec.EllipticCurvePrivateKey]:
-    # This isn't a fully compliant 2030.5 MCA cert but is close enough for our tests
-    serca_cert, serca_key = serca_cert_key_pair
-
+    """Device chain level-2 CA (MCA), signed by SERCA."""
     mca_key: ec.EllipticCurvePrivateKey = ec.generate_private_key(ec.SECP256R1())
-    subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Test MCA")])
-
-    ski = x509.SubjectKeyIdentifier(calculate_rfc5280_subject_key_identifier_method_2(mca_key.public_key()))
-    issuer_ski = serca_cert.extensions.get_extension_for_class(x509.SubjectKeyIdentifier)
-    aki = x509.AuthorityKeyIdentifier.from_issuer_subject_key_identifier(issuer_ski.value)
-
-    ca_cert = (
-        x509.CertificateBuilder()
-        .subject_name(subject)
-        .issuer_name(subject)
-        .public_key(mca_key.public_key())
-        .serial_number(x509.random_serial_number())
-        .not_valid_before(datetime.now(UTC))
-        .not_valid_after(datetime.now(UTC) + timedelta(days=365))
-        .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
-        .add_extension(ski, critical=False)
-        .add_extension(aki, critical=False)
-        .sign(serca_key, hashes.SHA256())
-    )
-    return (ca_cert, mca_key)
+    return (_build_ca_cert("IEEE 2030.5 MCA", mca_key, path_length=1, issuer=serca_cert_key_pair), mca_key)
 
 
 @pytest.fixture(scope="session")
 def mica_cert_key_pair(mca_cert_key_pair) -> tuple[x509.Certificate, ec.EllipticCurvePrivateKey]:
-    # This isn't a fully compliant 2030.5 MICA cert but is close enough for our tests
-    mca_cert, mca_key = mca_cert_key_pair
-
+    """Device chain level-3 CA (MICA), signs device EE certs."""
     mica_key: ec.EllipticCurvePrivateKey = ec.generate_private_key(ec.SECP256R1())
-    subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Test MICA")])
+    return (_build_ca_cert("IEEE 2030.5 MICA", mica_key, path_length=0, issuer=mca_cert_key_pair), mica_key)
 
-    ski = x509.SubjectKeyIdentifier(calculate_rfc5280_subject_key_identifier_method_2(mica_key.public_key()))
-    issuer_ski = mca_cert.extensions.get_extension_for_class(x509.SubjectKeyIdentifier)
-    aki = x509.AuthorityKeyIdentifier.from_issuer_subject_key_identifier(issuer_ski.value)
 
-    mica_cert = (
-        x509.CertificateBuilder()
-        .subject_name(subject)
-        .issuer_name(subject)
-        .public_key(mica_key.public_key())
-        .serial_number(x509.random_serial_number())
-        .not_valid_before(datetime.now(UTC))
-        .not_valid_after(datetime.now(UTC) + timedelta(days=365))
-        .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
-        .add_extension(ski, critical=False)
-        .add_extension(aki, critical=False)
-        .sign(mca_key, hashes.SHA256())
-    )
-    return (mica_cert, mica_key)
+@pytest.fixture(scope="session")
+def services_pca_cert_key_pair(serca_cert_key_pair) -> tuple[x509.Certificate, ec.EllipticCurvePrivateKey]:
+    """Shared Services PCA, signed by SERCA - the common parent of the Aggregator and DNSP ICAs."""
+    pca_key: ec.EllipticCurvePrivateKey = ec.generate_private_key(ec.SECP256R1())
+    return (_build_ca_cert("CACTUS Services PCA", pca_key, path_length=1, issuer=serca_cert_key_pair), pca_key)
+
+
+@pytest.fixture(scope="session")
+def agg_ica_cert_key_pair(services_pca_cert_key_pair) -> tuple[x509.Certificate, ec.EllipticCurvePrivateKey]:
+    """Aggregator chain level-3 CA, signs aggregator EE certs."""
+    ica_key: ec.EllipticCurvePrivateKey = ec.generate_private_key(ec.SECP256R1())
+    return (_build_ca_cert("CACTUS Aggregator ICA", ica_key, path_length=0, issuer=services_pca_cert_key_pair), ica_key)
+
+
+@pytest.fixture(scope="session")
+def dnsp_ica_cert_key_pair(services_pca_cert_key_pair) -> tuple[x509.Certificate, ec.EllipticCurvePrivateKey]:
+    """Utility-server (DNSP) chain level-3 CA, signs the envoy EE cert."""
+    ica_key: ec.EllipticCurvePrivateKey = ec.generate_private_key(ec.SECP256R1())
+    return (_build_ca_cert("CACTUS DNSP ICA", ica_key, path_length=0, issuer=services_pca_cert_key_pair), ica_key)
+
+
+@pytest.fixture(scope="session")
+def envoy_ee_cert_key_pair(dnsp_ica_cert_key_pair) -> tuple[x509.Certificate, ec.EllipticCurvePrivateKey]:
+    """Utility-server (envoy) EE cert with a wildcard SAN, signed by the DNSP ICA. Uses the services EE profile."""
+    ica_cert, ica_key = dnsp_ica_cert_key_pair
+    envoy_key, envoy_cert = generate_aggregator_certificate(ica_key, ica_cert, 0, "envoy", "*.cactus-testing.test.fqdn")
+    return (envoy_cert, envoy_key)
 
 
 @pytest.fixture(scope="session")
@@ -151,7 +196,7 @@ def client_cert_key_pair(mica_cert_key_pair) -> tuple[x509.Certificate, ec.Ellip
     # This isn't a fully compliant 2030.5 client cert but is close enough for our tests
     mica_cert, mica_key = mica_cert_key_pair
 
-    client_key, client_cert = generate_client_p12_ec(mica_key, mica_cert, 123, "ID 123")
+    client_key, client_cert = generate_device_certificate(mica_key, mica_cert, 123, "ID 123")
     return (client_cert, client_key)
 
 
@@ -165,7 +210,7 @@ def client_cert_key_pair_expired(mica_cert_key_pair) -> tuple[x509.Certificate, 
     # This isn't a fully compliant 2030.5 client cert but is close enough for our tests
     mica_cert, mica_key = mica_cert_key_pair
 
-    client_key, client_cert = generate_client_p12_ec(
+    client_key, client_cert = generate_device_certificate(
         mica_key,
         mica_cert,
         456,
@@ -281,41 +326,6 @@ def valid_jwt_no_user(mock_jwt_validator_jwks_cache, rsa_key) -> str:
 def valid_jwt_admin1(mock_jwt_validator_jwks_cache, rsa_key) -> str:
     kid = list(mock_jwt_validator_jwks_cache.keys())[0]
     return valid_token_for_user("admin-user", rsa_key, kid, "user:all", ["admin:all", "user:all"])
-
-
-@pytest.fixture
-def mock_k8s_tls_secret(mica_cert_key_pair):
-    cert_pem, cert_key = mica_cert_key_pair
-    secret_mock = MagicMock(spec=V1Secret)
-    secret_mock.data = {
-        "tls.crt": base64.b64encode(
-            cert_pem.public_bytes(
-                encoding=serialization.Encoding.PEM,
-            )
-        ).decode(),
-        "tls.key": base64.b64encode(
-            cert_key.private_bytes(
-                encoding=serialization.Encoding.PEM,
-                format=serialization.PrivateFormat.TraditionalOpenSSL,
-                encryption_algorithm=serialization.NoEncryption(),
-            )
-        ).decode(),
-    }
-    return secret_mock
-
-
-@pytest.fixture
-def generate_k8s_class_instance():
-    def func(t: type, **kwargs):
-        def get_init_params(t):
-            for i in inspect.signature(t.__init__).parameters.keys():
-                if i != "self":
-                    yield i
-
-        members = {k: MagicMock() for k in get_init_params(t)} | kwargs
-        return t(**members)
-
-    return func
 
 
 def execute_test_sql_file(cfg: Connection, path_to_sql_file: str) -> None:

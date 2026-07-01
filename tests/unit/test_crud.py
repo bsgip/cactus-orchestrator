@@ -32,10 +32,12 @@ from cactus_orchestrator.crud import (
     select_nonfinalised_runs,
     select_passed_runs_for_user,
     select_playlist_runs,
+    select_run_for_group,
     select_run_group_counts_for_user,
     select_run_group_for_user,
     select_run_groups_by_user,
     select_run_groups_for_user,
+    select_run_with_run_group_for_user,
     select_runs_for_group,
     select_user,
     select_user_compliance_request,
@@ -75,7 +77,6 @@ async def test_insert_user(pg_empty_config):
 
         assert user1.user_id == 1
         assert user1.subscription_domain is None
-        assert isinstance(user1.is_static_uri, bool)
         assert user1.subject_id == uc1.subject_id
         assert user1.issuer_id == uc1.issuer_id
 
@@ -87,7 +88,6 @@ async def test_insert_user(pg_empty_config):
 
         assert user2.user_id == 2
         assert user2.subscription_domain is None
-        assert isinstance(user2.is_static_uri, bool)
         assert user2.subject_id == uc2.subject_id
         assert user2.issuer_id == uc2.issuer_id
 
@@ -103,7 +103,6 @@ async def test_insert_user(pg_empty_config):
 
         assert user3.user_id == 4, "The sequence would have been incremented for the above two insert attempts"
         assert user3.subscription_domain is None
-        assert isinstance(user3.is_static_uri, bool)
         assert user3.subject_id == uc2.subject_id
         assert user3.issuer_id == uc2.issuer_id
 
@@ -124,10 +123,13 @@ async def test_insert_run_group(pg_base_config):
 
     # Act
     async with generate_async_session(pg_base_config) as s:
-        group1 = await insert_run_group(s, user_id=2, csip_aus_version=CSIPAusVersion.RELEASE_1_2.value)
+        group1 = await insert_run_group(
+            s, user_id=2, csip_aus_version=CSIPAusVersion.RELEASE_1_2.value, is_static_uri=True
+        )
 
         assert group1.run_group_id == 4
         assert group1.user_id == 2
+        assert group1.is_static_uri is True
         assert group1.name and isinstance(group1.name, str)
         assert group1.csip_aus_version == CSIPAusVersion.RELEASE_1_2.value
         assert_nowish(group1.created_at)
@@ -135,10 +137,13 @@ async def test_insert_run_group(pg_base_config):
 
     # Test we can rollback
     async with generate_async_session(pg_base_config) as s:
-        group2 = await insert_run_group(s, user_id=2, csip_aus_version=CSIPAusVersion.BETA_1_3_STORAGE.value)
+        group2 = await insert_run_group(
+            s, user_id=2, csip_aus_version=CSIPAusVersion.BETA_1_3_STORAGE.value, is_static_uri=False
+        )
 
         assert group2.run_group_id == 5
         assert group2.user_id == 2
+        assert group2.is_static_uri is False
         assert group2.name and isinstance(group2.name, str)
         assert group2.csip_aus_version == CSIPAusVersion.BETA_1_3_STORAGE.value
         assert_nowish(group2.created_at)
@@ -146,10 +151,13 @@ async def test_insert_run_group(pg_base_config):
 
     # Test we can insert as expected
     async with generate_async_session(pg_base_config) as s:
-        group3 = await insert_run_group(s, user_id=2, csip_aus_version=CSIPAusVersion.RELEASE_1_2.value)
+        group3 = await insert_run_group(
+            s, user_id=2, csip_aus_version=CSIPAusVersion.RELEASE_1_2.value, is_static_uri=False
+        )
 
         assert group3.run_group_id == 6
         assert group3.user_id == 2
+        assert group3.is_static_uri is False
         assert group3.name and isinstance(group3.name, str)
         assert group3.csip_aus_version == CSIPAusVersion.RELEASE_1_2.value
         assert_nowish(group3.created_at)
@@ -273,6 +281,57 @@ async def test_select_passed_runs_for_user(pg_base_config):
         assert_list_type(Run, user_3_runs, 0)
 
 
+@pytest.mark.parametrize(
+    "user_id, run_id, expected_run_id, expected_run_group_id, expected_cert_bytes",
+    [
+        (1, 1, 1, 1, bytes([1])),
+        (1, 2, 2, 1, bytes([1])),
+        (1, 5, 5, 2, None),
+        (2, 6, 6, 3, bytes([3])),
+        (2, 1, None, None, None),  # Wrong user
+        (99, 1, None, None, None),  # Wrong user
+        (1, 99, None, None, None),  # Wrong run id
+    ],
+)
+async def test_select_run_with_run_group_for_user(
+    pg_base_config,
+    user_id: int,
+    run_id: int,
+    expected_run_id: int | None,
+    expected_run_group_id: int | None,
+    expected_cert_bytes: bytes | None,
+):
+    for with_cert in [True, False]:
+        for with_artifact in [True, False]:
+            async with generate_async_session(pg_base_config) as session:
+                run = await select_run_with_run_group_for_user(session, user_id, run_id, with_cert, with_artifact)
+
+                if expected_run_id is None or expected_run_group_id is None:
+                    assert run is None
+                else:
+                    assert run is not None and isinstance(run, Run)
+                    assert run.run_id == expected_run_id
+
+                    assert run.run_group is not None and isinstance(run.run_group, RunGroup)
+                    assert run.run_group_id == expected_run_group_id
+                    assert run.run_group.run_group_id == expected_run_group_id
+
+                    if with_artifact:
+                        if run.run_artifact_id is not None:
+                            assert isinstance(run.run_artifact, RunArtifact)
+                        else:
+                            assert run.run_artifact is None
+                    else:
+                        with pytest.raises(Exception):  # noqa: B017
+                            _ = run.run_artifact
+
+                    if with_cert:
+                        assert run.run_group.certificate_pem == expected_cert_bytes
+                    else:
+                        with pytest.raises(Exception):  # noqa: B017
+                            _ = run.run_group.certificate_pem
+
+
 @pytest.mark.parametrize("with_cert", [True, False])
 @pytest.mark.asyncio
 async def test_select_run_group_user(pg_base_config, with_cert: bool):
@@ -292,6 +351,11 @@ async def test_select_run_group_user(pg_base_config, with_cert: bool):
         assert isinstance(run_group_2, RunGroup)
         assert run_group_2.run_group_id == 2
         assert run_group_2.is_device_cert is None
+        run_group_3 = await select_run_group_for_user(session, 2, 3, with_cert)
+        assert isinstance(run_group_3, RunGroup)
+        assert run_group_3.run_group_id == 3
+        assert run_group_3.is_device_cert is False
+        assert run_group_3.certificate_id == 33
         run_group_3 = await select_run_group_for_user(session, 2, 3, with_cert)
         assert isinstance(run_group_3, RunGroup)
         assert run_group_3.run_group_id == 3
@@ -328,6 +392,20 @@ async def test_insert_user_unique_constraint(pg_base_config):
 
 
 @pytest.mark.parametrize(
+    "run_group_id, run_id, expected_run_id",
+    [(1, 1, 1), (1, 2, 2), (3, 6, 6), (1, 6, None), (99, 6, None), (1, 99, None)],
+)
+async def test_select_run_for_group(pg_base_config, run_group_id: int, run_id: int, expected_run_id: int | None):
+    async with generate_async_session(pg_base_config) as session:
+        run = await select_run_for_group(session, run_group_id, run_id)
+        if expected_run_id is None:
+            assert run is None
+        else:
+            assert run is not None and isinstance(run, Run)
+            assert run.run_id == expected_run_id
+
+
+@pytest.mark.parametrize(
     "run_id, finalised, created_at, expected_run_ids",
     [
         (1, None, None, [8, 7, 4, 3, 2, 1]),
@@ -361,8 +439,9 @@ async def test_insert_run_for_run_group(pg_base_config):
 
     # Act
     async with generate_async_session(pg_base_config) as session:
-        run_id = await insert_run_for_run_group(session, 2, "teststack-new", "ALL_20", RunStatus.initialised, True)
-        assert isinstance(run_id, int)
+        run = await insert_run_for_run_group(session, 2, "ALL_20", RunStatus.initialised, True)
+        assert isinstance(run, Run)
+        run_id = run.run_id
         await session.commit()
 
     # Assert
@@ -371,7 +450,7 @@ async def test_insert_run_for_run_group(pg_base_config):
         assert count_after == (count_before + 1)
 
         new_run = (await session.execute(select(Run).where(Run.run_id == run_id))).scalar_one()
-        assert new_run.teststack_id == "teststack-new"
+        assert new_run.pod_name is None
         assert new_run.testprocedure_id == "ALL_20"
         assert new_run.run_status == RunStatus.initialised
         assert new_run.is_device_cert is True
@@ -387,6 +466,7 @@ async def test_select_nonfinalised_runs(pg_base_config):
         runs = await select_nonfinalised_runs(session)
         assert [1, 5, 6, 8] == [r.run_id for r in runs]
         assert_list_type(Run, runs, 4)
+        assert all([isinstance(r.run_group, RunGroup) for r in runs])
 
 
 @pytest.mark.parametrize(
@@ -528,47 +608,21 @@ async def test_select_group_runs_aggregated_by_procedure(pg_base_config):
 
         runs = [
             Run(
-                run_group_id=1, teststack_id="", testprocedure_id="NOT-A-TEST", run_status=1, all_criteria_met=True
+                run_group_id=1, testprocedure_id="NOT-A-TEST", run_status=1, all_criteria_met=True
             ),  # run 9 (8 runs comes from the pg_base_config)
-            Run(
-                run_group_id=1, teststack_id="", testprocedure_id="ALL-01", run_status=1, all_criteria_met=True
-            ),  # run 10
-            Run(
-                run_group_id=1, teststack_id="", testprocedure_id="ALL-01", run_status=1, all_criteria_met=False
-            ),  # run 11
-            Run(
-                run_group_id=1, teststack_id="", testprocedure_id="ALL-02", run_status=1, all_criteria_met=None
-            ),  # run 12
-            Run(
-                run_group_id=1, teststack_id="", testprocedure_id="ALL-03", run_status=1, all_criteria_met=True
-            ),  # run 13
-            Run(
-                run_group_id=1, teststack_id="", testprocedure_id="ALL-04", run_status=1, all_criteria_met=None
-            ),  # run 14
-            Run(
-                run_group_id=1, teststack_id="", testprocedure_id="ALL-04", run_status=1, all_criteria_met=True
-            ),  # run 15
-            Run(
-                run_group_id=1, teststack_id="", testprocedure_id="ALL-05", run_status=1, all_criteria_met=True
-            ),  # run 16
-            Run(
-                run_group_id=1, teststack_id="", testprocedure_id="ALL-05", run_status=1, all_criteria_met=True
-            ),  # run 17
-            Run(
-                run_group_id=1, teststack_id="", testprocedure_id="ALL-06", run_status=1, all_criteria_met=True
-            ),  # run 18
-            Run(
-                run_group_id=1, teststack_id="", testprocedure_id="ALL-06", run_status=1, all_criteria_met=None
-            ),  # run 19
-            Run(
-                run_group_id=2, teststack_id="", testprocedure_id="ALL-01", run_status=1, all_criteria_met=False
-            ),  # run 20
-            Run(
-                run_group_id=2, teststack_id="", testprocedure_id="ALL-01", run_status=1, all_criteria_met=None
-            ),  # run 21
-            Run(
-                run_group_id=2, teststack_id="", testprocedure_id="ALL-01", run_status=1, all_criteria_met=True
-            ),  # run 22
+            Run(run_group_id=1, testprocedure_id="ALL-01", run_status=1, all_criteria_met=True),  # run 10
+            Run(run_group_id=1, testprocedure_id="ALL-01", run_status=1, all_criteria_met=False),  # run 11
+            Run(run_group_id=1, testprocedure_id="ALL-02", run_status=1, all_criteria_met=None),  # run 12
+            Run(run_group_id=1, testprocedure_id="ALL-03", run_status=1, all_criteria_met=True),  # run 13
+            Run(run_group_id=1, testprocedure_id="ALL-04", run_status=1, all_criteria_met=None),  # run 14
+            Run(run_group_id=1, testprocedure_id="ALL-04", run_status=1, all_criteria_met=True),  # run 15
+            Run(run_group_id=1, testprocedure_id="ALL-05", run_status=1, all_criteria_met=True),  # run 16
+            Run(run_group_id=1, testprocedure_id="ALL-05", run_status=1, all_criteria_met=True),  # run 17
+            Run(run_group_id=1, testprocedure_id="ALL-06", run_status=1, all_criteria_met=True),  # run 18
+            Run(run_group_id=1, testprocedure_id="ALL-06", run_status=1, all_criteria_met=None),  # run 19
+            Run(run_group_id=2, testprocedure_id="ALL-01", run_status=1, all_criteria_met=False),  # run 20
+            Run(run_group_id=2, testprocedure_id="ALL-01", run_status=1, all_criteria_met=None),  # run 21
+            Run(run_group_id=2, testprocedure_id="ALL-01", run_status=1, all_criteria_met=True),  # run 22
         ]
         session.add_all(runs)
         await session.commit()
@@ -871,7 +925,6 @@ async def test_insert_playlist_runs(pg_base_config):
         runs = await insert_playlist_runs(
             session,
             run_group_id=1,
-            teststack_id="test-stack-playlist",
             playlist_execution_id=playlist_execution_id,
             test_procedure_ids=test_procedure_ids,
             is_device_cert=True,
@@ -883,7 +936,7 @@ async def test_insert_playlist_runs(pg_base_config):
         assert runs[2].run_status == RunStatus.initialised
         assert all(r.playlist_execution_id == playlist_execution_id for r in runs)
         assert [r.playlist_order for r in runs] == [0, 1, 2]
-        assert all(r.teststack_id == "test-stack-playlist" for r in runs)
+        assert all(r.pod_name is None for r in runs)
         assert [r.testprocedure_id for r in runs] == test_procedure_ids
         assert all(r.is_device_cert is True for r in runs)
 
@@ -899,7 +952,6 @@ async def test_select_playlist_runs(pg_base_config):
         await insert_playlist_runs(
             session,
             run_group_id=1,
-            teststack_id="test-stack",
             playlist_execution_id=playlist_execution_id,
             test_procedure_ids=["ALL-03", "ALL-02", "ALL-01"],  # Insert in mixed order
             is_device_cert=False,
@@ -923,7 +975,6 @@ async def test_count_playlist_runs(pg_base_config):
         await insert_playlist_runs(
             session,
             run_group_id=1,
-            teststack_id="test-stack",
             playlist_execution_id=playlist_execution_id,
             test_procedure_ids=["ALL-01", "ALL-02", "ALL-03", "ALL-04"],
             is_device_cert=False,
@@ -944,7 +995,6 @@ async def test_select_next_playlist_run(pg_base_config):
         runs = await insert_playlist_runs(
             session,
             run_group_id=1,
-            teststack_id="test-stack",
             playlist_execution_id=playlist_execution_id,
             test_procedure_ids=["ALL-01", "ALL-02", "ALL-03"],
             is_device_cert=False,
@@ -975,14 +1025,14 @@ async def test_select_next_playlist_run(pg_base_config):
 @pytest.mark.asyncio
 async def test_playlist_backward_compatibility_single_runs(pg_base_config):
     async with generate_async_session(pg_base_config) as session:
-        run_id = await insert_run_for_run_group(
+        run = await insert_run_for_run_group(
             session,
             run_group_id=1,
-            teststack_id="single-stack",
             testprocedure_id="ALL-01",
             run_status=RunStatus.initialised,
             is_device_cert=True,
         )
+        run_id = run.run_id
         await session.commit()
 
     async with generate_async_session(pg_base_config) as session:

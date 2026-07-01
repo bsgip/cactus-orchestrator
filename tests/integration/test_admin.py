@@ -1,7 +1,9 @@
 import io
 import zipfile
+from collections.abc import Generator
+from dataclasses import dataclass
 from http import HTTPStatus
-from unittest.mock import patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 from assertical.asserts.type import assert_list_type
@@ -29,7 +31,65 @@ from cactus_orchestrator.artifact import regenerate_pdf_report
 from cactus_orchestrator.main import generate_app
 from cactus_orchestrator.model import RunArtifact
 from cactus_orchestrator.settings import get_current_settings
-from tests.integration import MockedK8s
+
+
+@dataclass
+class MockedPod:
+    # Podman lifecycle
+    create_pod_run: AsyncMock
+    destroy_pod_resources: AsyncMock
+    ensure_images: AsyncMock
+
+    # Runner client
+    init: Mock
+    start: Mock
+    finalize: Mock
+    status: Mock
+    health: Mock
+    last_interaction: Mock
+    list_requests: Mock
+    get_request: Mock
+    proceed: Mock
+
+
+@pytest.fixture
+def mocked_pod() -> Generator[MockedPod, None, None]:
+    with (
+        patch("cactus_orchestrator.api.run.create_pod_run", new_callable=AsyncMock) as mock_create_pod_run,
+        patch(
+            "cactus_orchestrator.api.run.destroy_pod_resources", new_callable=AsyncMock
+        ) as mock_destroy_pod_resources,
+        patch("cactus_orchestrator.api.run.ensure_images", new_callable=AsyncMock) as mock_ensure_images,
+        patch("cactus_orchestrator.api.run.RunnerClient.initialise") as init,
+        patch("cactus_orchestrator.api.run.RunnerClient.start") as start,
+        patch("cactus_orchestrator.api.run.RunnerClient.finalize") as finalize,
+        patch("cactus_orchestrator.api.run.RunnerClient.status") as status,
+        patch("cactus_orchestrator.api.run.RunnerClient.last_interaction") as last_interaction,
+        patch("cactus_orchestrator.api.run.RunnerClient.health") as health,
+        patch("cactus_orchestrator.api.run.RunnerClient.list_requests") as list_requests,
+        patch("cactus_orchestrator.api.run.RunnerClient.get_request") as get_request,
+        patch("cactus_orchestrator.api.run.RunnerClient.proceed") as proceed,
+    ):
+        # create_pod_run returns pod_name
+        async def create_pod_run_side_effect(podman_socket: str, images, resources, routes, pki=None):
+            return resources.pod_name
+
+        mock_create_pod_run.side_effect = create_pod_run_side_effect
+
+        yield MockedPod(
+            create_pod_run=mock_create_pod_run,
+            destroy_pod_resources=mock_destroy_pod_resources,
+            ensure_images=mock_ensure_images,
+            init=init,
+            start=start,
+            finalize=finalize,
+            status=status,
+            last_interaction=last_interaction,
+            health=health,
+            list_requests=list_requests,
+            get_request=get_request,
+            proceed=proceed,
+        )
 
 
 @pytest.mark.asyncio
@@ -183,7 +243,7 @@ async def test_get_groups_paginated(
         (1, TestProcedureId.ALL_02, [3]),
         (1, TestProcedureId.ALL_20, []),
         (3, TestProcedureId.GEN_02, [6]),
-        (99, TestProcedureId.ALL_01, []),
+        (99, TestProcedureId.ALL_01, None),
     ],
 )
 @pytest.mark.asyncio
@@ -193,7 +253,7 @@ async def test_admin_get_runs_for_procedure_in_group(
     valid_jwt_admin1,
     run_group_id: int,
     procedure: TestProcedureId,
-    expected_run_ids: list[int],
+    expected_run_ids: list[int] | None,
 ):
     """Test retrieving paginated user runs (underneath a procedure)"""
 
@@ -204,12 +264,15 @@ async def test_admin_get_runs_for_procedure_in_group(
     )
 
     # Assert
-    assert res.status_code == HTTPStatus.OK
-    data = res.json()
-    assert isinstance(data, dict)
-    assert "items" in data
-    assert len(data["items"]) == len(expected_run_ids)
-    assert expected_run_ids == [d["run_id"] for d in data["items"]]
+    if expected_run_ids is None:
+        assert res.status_code == HTTPStatus.NOT_FOUND
+    else:
+        assert res.status_code == HTTPStatus.OK
+        data = res.json()
+        assert isinstance(data, dict)
+        assert "items" in data
+        assert len(data["items"]) == len(expected_run_ids)
+        assert expected_run_ids == [d["run_id"] for d in data["items"]]
 
 
 @pytest.mark.parametrize(
@@ -260,13 +323,13 @@ async def test_admin_get_group_runs_paginated(
     ],
 )
 async def test_admin_get_run_status(
-    k8s_mock: MockedK8s, client, pg_base_config, valid_jwt_admin1, run_id, expected_status
+    mocked_pod: MockedPod, client, pg_base_config, valid_jwt_admin1, run_id, expected_status
 ):
     """Does fetching the run status work under success conditions"""
 
     # Act
     status_response_data = generate_class_instance(RunnerStatus, generate_relationships=True, step_status={})
-    k8s_mock.status.return_value = status_response_data
+    mocked_pod.status.return_value = status_response_data
 
     res = await client.get(f"/admin/run/{run_id}/status", headers={"Authorization": f"Bearer {valid_jwt_admin1}"})
 
@@ -275,9 +338,9 @@ async def test_admin_get_run_status(
     if expected_status == HTTPStatus.OK:
         actual_status = RunnerStatus.from_dict(res.json())
         assert actual_status == status_response_data
-        k8s_mock.status.assert_called_once()
+        mocked_pod.status.assert_called_once()
     else:
-        k8s_mock.status.assert_not_called()
+        mocked_pod.status.assert_not_called()
 
 
 @pytest.mark.parametrize(
@@ -293,11 +356,11 @@ async def test_admin_get_run_status(
 )
 @pytest.mark.asyncio
 async def test_admin_proceed_proxy(
-    k8s_mock: MockedK8s, client, pg_base_config, valid_jwt_admin1, valid_jwt_user1, run_id, handled, expected_status
+    mocked_pod: MockedPod, client, pg_base_config, valid_jwt_admin1, valid_jwt_user1, run_id, handled, expected_status
 ):
     # Arrange
     expected_proceed_data = ProceedResponse(handled=handled)
-    k8s_mock.proceed.return_value = expected_proceed_data
+    mocked_pod.proceed.return_value = expected_proceed_data
 
     # Act
     res = await client.get(f"/admin/run/{run_id}/proceed", headers={"Authorization": f"Bearer {valid_jwt_admin1}"})
@@ -307,17 +370,17 @@ async def test_admin_proceed_proxy(
     if expected_status == HTTPStatus.OK:
         actual_proceed_data = ProceedResponse.from_json(res.text)
         assert actual_proceed_data == expected_proceed_data
-        k8s_mock.proceed.assert_called_once()
+        mocked_pod.proceed.assert_called_once()
     else:
-        k8s_mock.proceed.assert_not_called()
+        mocked_pod.proceed.assert_not_called()
 
     # Non-admin must be rejected
-    k8s_mock.proceed.reset_mock()
+    mocked_pod.proceed.reset_mock()
     non_admin_res = await client.get(
         f"/admin/run/{run_id}/proceed", headers={"Authorization": f"Bearer {valid_jwt_user1}"}
     )
     assert non_admin_res.status_code == HTTPStatus.UNAUTHORIZED
-    k8s_mock.proceed.assert_not_called()
+    mocked_pod.proceed.assert_not_called()
 
 
 @pytest.mark.parametrize(
@@ -363,7 +426,7 @@ async def test_admin_get_procedure_run_summaries_for_group(client, pg_base_confi
     ],
 )
 async def test_get_run_artifact_data(
-    k8s_mock: MockedK8s,
+    mocked_pod: MockedPod,
     client,
     pg_base_config,
     valid_jwt_admin1,
@@ -411,7 +474,7 @@ async def test_get_run_artifact_data(
     ],
 )
 async def test_regenerate_run_report_and_get_artifact_data(
-    k8s_mock: MockedK8s,
+    mocked_pod: MockedPod,
     client,
     pg_regeneration_config,
     valid_jwt_admin1,

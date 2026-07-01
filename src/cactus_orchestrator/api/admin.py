@@ -34,6 +34,7 @@ from cactus_orchestrator.api.common import (
     map_to_compliance_request_response,
     select_user_or_raise,
     select_user_run_group_or_raise,
+    select_user_run_group_run_or_raise,
     test_procedures_by_id,
 )
 from cactus_orchestrator.api.run import get_run_artifact_response_for_user
@@ -57,14 +58,13 @@ from cactus_orchestrator.crud import (
     select_runs_for_group,
     select_user_from_run,
     select_user_from_run_group,
-    select_user_run,
     select_user_run_with_artifact,
     select_users,
     update_compliance_generation_record_with_file_data,
     update_compliance_request,
 )
-from cactus_orchestrator.k8s.resource import get_resource_names
 from cactus_orchestrator.model import ComplianceRequest, User
+from cactus_orchestrator.pod.models import PodResources, PodRoutes
 from cactus_orchestrator.settings import get_current_settings
 
 logger = logging.getLogger(__name__)
@@ -174,13 +174,23 @@ async def admin_get_users(
     run_groups_by_user = await select_run_groups_by_user(db.session)
     users = await select_users(db.session)
 
+    settings = get_current_settings()
+
     resp = [
         UserWithRunGroupsResponse(
             user_id=user.user_id,
             subject_id=user.subject_id,
             name=user.user_name,
             run_groups=(
-                [map_group_to_group_response(group=rg, total_runs=0) for rg in run_groups_by_user[user.user_id]]
+                [
+                    map_group_to_group_response(
+                        group=rg,
+                        cactus_fqdn=settings.cactus_fqdn,
+                        envoy_href=settings.envoy_prefix,
+                        total_runs=0,
+                    )
+                    for rg in run_groups_by_user[user.user_id]
+                ]
                 if user.user_id in run_groups_by_user
                 else []
             ),
@@ -259,6 +269,7 @@ async def admin_get_groups_paginated(
             f" assumed_user_context={user_context}, {original_user_context=})"
         )
     user = await select_user_or_raise(db.session, user_context)
+    settings = get_current_settings()
 
     # get runs
     run_groups = await select_run_groups_for_user(db.session, user.user_id)
@@ -266,7 +277,9 @@ async def admin_get_groups_paginated(
 
     if run_groups:
         resp = [
-            map_group_to_group_response(group, run_group_counts.get(group.run_group_id, 0))
+            map_group_to_group_response(
+                group, settings.cactus_fqdn, settings.envoy_prefix, run_group_counts.get(group.run_group_id, 0)
+            )
             for group in run_groups
             if group
         ]
@@ -377,37 +390,64 @@ async def admin_get_run_power_limit_chart(
 
 @router.get(uri.AdminRunGroupProcedureRunList, status_code=HTTPStatus.OK)
 async def admin_get_runs_for_procedure_in_group(
-    _: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.admin_all}))],
+    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.admin_all}))],
     run_group_id: int,
     test_procedure_id: str,
 ) -> Page[RunResponse]:
 
     # Get runs
+    user_context, original_user_context = await assume_user_context_from_run_group(
+        session=db.session, user_context=user_context, run_group_id=run_group_id
+    )
+    user, run_group = await select_user_run_group_or_raise(db.session, user_context, run_group_id)
     runs = await select_group_runs_for_procedure(db.session, run_group_id, test_procedure_id)
 
-    if runs:
-        resp = [map_run_to_run_response(run) for run in runs if run]
-    else:
-        resp = []
-    return paginate(resp)
+    settings = get_current_settings()
+    run_responses: list[RunResponse] = []
+    for run in runs:
+        pod_resources = PodResources.from_run(settings.podman_network, run)
+        pod_routes = PodRoutes.from_run(
+            settings.cactus_fqdn,
+            settings.envoy_prefix,
+            settings.podman_runner_port,
+            pod_resources,
+            run_group,
+            run,
+        )
+        run_responses.append(map_run_to_run_response(run, pod_routes))
+
+    return paginate(run_responses)
 
 
 @router.get(uri.AdminRunGroupRunList, status_code=HTTPStatus.OK)
 async def admin_get_group_runs_paginated(
     run_group_id: int,
-    _: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.admin_all}))],
+    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.admin_all}))],
     finalised: bool | None = Query(default=None),
     created_after: datetime = Query(default=None),  # noqa: B008
 ) -> Page[RunResponse]:
 
     # get runs
+    user_context, original_user_context = await assume_user_context_from_run_group(
+        session=db.session, user_context=user_context, run_group_id=run_group_id
+    )
+    user, run_group = await select_user_run_group_or_raise(db.session, user_context, run_group_id)
     runs = await select_runs_for_group(db.session, run_group_id, finalised=finalised, created_at_gte=created_after)
 
-    if runs:
-        resp = [map_run_to_run_response(run) for run in runs if run]
-    else:
-        resp = []
-    return paginate(resp)
+    settings = get_current_settings()
+    run_responses: list[RunResponse] = []
+    for run in runs:
+        pod_resources = PodResources.from_run(settings.podman_network, run)
+        pod_routes = PodRoutes.from_run(
+            settings.cactus_fqdn,
+            settings.envoy_prefix,
+            settings.podman_runner_port,
+            pod_resources,
+            run_group,
+            run,
+        )
+        run_responses.append(map_run_to_run_response(run, pod_routes))
+    return paginate(run_responses)
 
 
 @router.get(uri.AdminRunStatus, status_code=HTTPStatus.OK)
@@ -419,7 +459,7 @@ async def admin_get_run_status(
 
     returns HTTP 200 on success with"""
 
-    # get user
+    # assume user
     user_context, original_user_context = await assume_user_context_from_run(
         session=db.session, user_context=user_context, run_id=run_id
     )
@@ -428,13 +468,9 @@ async def admin_get_run_status(
             f"Failed to assume new user context ({run_id=},"
             f" assumed_user_context={user_context}, {original_user_context=})"
         )
-    user = await select_user_or_raise(db.session, user_context)
 
     # get the run - make sure it's still "running"
-    try:
-        run = await select_user_run(db.session, user.user_id, run_id)
-    except NoResultFound as err:
-        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Run does not exist.") from err
+    _, run_group, run = await select_user_run_group_run_or_raise(db.session, user_context, run_id)
     if run.run_status not in ACTIVE_RUN_STATUSES:
         raise HTTPException(
             status_code=HTTPStatus.GONE,
@@ -442,17 +478,20 @@ async def admin_get_run_status(
         )
 
     # Connect to the pod and talk to the runner's "status" endpoint. Forward the result along
-    run_resource_names = get_resource_names(run.teststack_id)
     settings = get_current_settings()
+    pod_resources = PodResources.from_run(settings.podman_network, run)
+    pod_routes = PodRoutes.from_run(
+        settings.cactus_fqdn, settings.envoy_prefix, settings.podman_runner_port, pod_resources, run_group, run
+    )
     async with ClientSession(
-        base_url=run_resource_names.runner_base_url,
-        timeout=ClientTimeout(settings.test_execution_comms_timeout_seconds),
+        base_url=pod_routes.internal_base_url,
+        timeout=ClientTimeout(settings.comms_timeout_seconds),
     ) as s:
         try:
             return await RunnerClient.status(s)
         except Exception as err:
             logger.error(
-                f"Error fetching runner status for run {run.run_id} @ {run_resource_names.runner_base_url}.",
+                f"Error fetching runner status for run {run.run_id} @ {pod_routes.internal_base_url}.",
             )
             raise HTTPException(
                 status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
@@ -475,23 +514,20 @@ async def admin_proceed_proxy(
             f"Failed to assume new user context ({run_id=},"
             f" assumed_user_context={user_context}, {original_user_context=})"
         )
-    user = await select_user_or_raise(db.session, user_context)
-
-    try:
-        run = await select_user_run(db.session, user.user_id, run_id)
-    except NoResultFound as err:
-        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Run does not exist.") from err
-
+    _, run_group, run = await select_user_run_group_run_or_raise(db.session, user_context, run_id)
     if run.run_status not in ACTIVE_RUN_STATUSES:
         raise HTTPException(
             status_code=HTTPStatus.GONE, detail=f"Run {run_id} has terminated. Unable to send proceed signal."
         )
 
-    run_resource_names = get_resource_names(run.teststack_id)
     settings = get_current_settings()
+    pod_resources = PodResources.from_run(settings.podman_network, run)
+    pod_routes = PodRoutes.from_run(
+        settings.cactus_fqdn, settings.envoy_prefix, settings.podman_runner_port, pod_resources, run_group, run
+    )
     async with ClientSession(
-        base_url=run_resource_names.runner_base_url,
-        timeout=ClientTimeout(settings.test_execution_comms_timeout_seconds),
+        base_url=pod_routes.internal_base_url,
+        timeout=ClientTimeout(settings.comms_timeout_seconds),
     ) as s:
         try:
             return await RunnerClient.proceed(s)
@@ -516,15 +552,14 @@ async def admin_get_individual_run(
             f"Failed to assume new user context ({run_id=},"
             f" assumed_user_context={user_context}, {original_user_context=})"
         )
-    user = await select_user_or_raise(db.session, user_context)
+    _, run_group, run = await select_user_run_group_run_or_raise(db.session, user_context, run_id)
+    settings = get_current_settings()
+    pod_resources = PodResources.from_run(settings.podman_network, run)
+    pod_routes = PodRoutes.from_run(
+        settings.cactus_fqdn, settings.envoy_prefix, settings.podman_runner_port, pod_resources, run_group, run
+    )
 
-    # get run
-    try:
-        run = await select_user_run(db.session, user.user_id, run_id)
-    except NoResultFound as err:
-        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Not Found") from err
-
-    return map_run_to_run_response(run)
+    return map_run_to_run_response(run, pod_routes)
 
 
 @router.get(uri.AdminRunGroupCompliance, status_code=HTTPStatus.OK)
