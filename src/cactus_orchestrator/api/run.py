@@ -282,10 +282,8 @@ async def spawn_teststack_and_init_run(  # noqa: C901
         # notifications (and verifies the OEM webhook's chain to SERCA). Required: pod creation fails without it.
         envoy_pki_paths = (
             settings.cert_serca_path,
-            settings.cert_envoy_ee_crt_path,
+            settings.cert_envoy_ee_fullchain_path,
             settings.cert_envoy_ee_key_path,
-            settings.cert_envoy_ica_path,
-            settings.cert_envoy_pca_path,
         )
         pod_pki = PodPKI.from_paths(*envoy_pki_paths) if all(envoy_pki_paths) else None
         pod_name = await create_pod_run(settings.podman_socket, pod_images, pod_resources, pod_routes, pod_pki)

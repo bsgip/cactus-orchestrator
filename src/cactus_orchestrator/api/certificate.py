@@ -16,9 +16,9 @@ from fastapi_async_sqlalchemy import db
 from cactus_orchestrator.api.common import select_user_run_group_or_raise, select_user_run_groups_or_raise
 from cactus_orchestrator.auth import AuthPerm, UserContext, jwt_validator
 from cactus_orchestrator.certificate.create import generate_aggregator_certificate, generate_device_certificate
-from cactus_orchestrator.certificate.fetch import fetch_certificate_key_pair, fetch_certificate_only
+from cactus_orchestrator.certificate.fetch import fetch_certificate_key_pair, fetch_certificate_only, fetch_pem_bundle
 from cactus_orchestrator.model import User
-from cactus_orchestrator.settings import CactusOrchestratorError, CactusOrchestratorSettings, get_current_settings
+from cactus_orchestrator.settings import CactusOrchestratorSettings, get_current_settings
 
 logger = logging.getLogger(__name__)
 
@@ -129,23 +129,14 @@ async def fetch_utility_server_certificates(
         utility-server-fullchain.pem   # PEM encoded envoy EE + envoy ICA + envoy PCA chain (excluding SERCA)
     """
     settings = get_current_settings()
-    serca_cert = fetch_certificate_only(settings.cert_serca_path)
-    if serca_cert is None:
-        raise CactusOrchestratorError("SERCA certificate not found.")
-    envoy_pca_cert = fetch_certificate_only(settings.cert_envoy_pca_path)
-    envoy_ica_cert = fetch_certificate_only(settings.cert_envoy_ica_path)
-    envoy_ee_cert = fetch_certificate_only(settings.cert_envoy_ee_crt_path)
-
-    fullchain = (
-        envoy_ee_cert.public_bytes(serialization.Encoding.PEM)
-        + envoy_ica_cert.public_bytes(serialization.Encoding.PEM)
-        + envoy_pca_cert.public_bytes(serialization.Encoding.PEM)
-    )
+    serca_pem = fetch_certificate_only(settings.cert_serca_path).public_bytes(serialization.Encoding.PEM)
+    # The fullchain (EE + DNSP ICA + DNSP PCA) is the pre-assembled bundle from create-cert.sh - served verbatim.
+    fullchain_pem = fetch_pem_bundle(settings.cert_envoy_ee_fullchain_path)
 
     zip_buffer = io.BytesIO()
     with zipfile.ZipFile(zip_buffer, "a", zipfile.ZIP_DEFLATED, False) as zip_file:
-        zip_file.writestr("serca.pem", serca_cert.public_bytes(serialization.Encoding.PEM))
-        zip_file.writestr("utility-server-fullchain.pem", fullchain)
+        zip_file.writestr("serca.pem", serca_pem)
+        zip_file.writestr("utility-server-fullchain.pem", fullchain_pem)
 
     return Response(
         status_code=HTTPStatus.OK,

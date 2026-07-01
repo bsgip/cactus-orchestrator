@@ -24,6 +24,7 @@ from cactus_orchestrator.model import RunGroup
 class MockedCertFetch:
     fetch_certificate_key_pair: Mock
     fetch_certificate_only: Mock
+    fetch_pem_bundle: Mock
 
 
 @pytest.fixture
@@ -31,9 +32,12 @@ def k8s_mock() -> Generator[MockedCertFetch, None, None]:
     with (
         patch("cactus_orchestrator.api.certificate.fetch_certificate_key_pair") as fetch_certificate_key_pair,
         patch("cactus_orchestrator.api.certificate.fetch_certificate_only") as fetch_certificate_only,
+        patch("cactus_orchestrator.api.certificate.fetch_pem_bundle") as fetch_pem_bundle,
     ):
         yield MockedCertFetch(
-            fetch_certificate_key_pair=fetch_certificate_key_pair, fetch_certificate_only=fetch_certificate_only
+            fetch_certificate_key_pair=fetch_certificate_key_pair,
+            fetch_certificate_only=fetch_certificate_only,
+            fetch_pem_bundle=fetch_pem_bundle,
         )
 
 
@@ -156,12 +160,18 @@ async def test_fetch_utility_server_certificates(
 ):
     """The /certificate/authority endpoint returns the SERCA + envoy chain bundle as a zip."""
 
-    # Arrange - the endpoint fetches (in order) SERCA, envoy PCA, envoy ICA, envoy EE (paths are mocked)
+    # Arrange - the endpoint reads the SERCA cert and the pre-assembled envoy EE fullchain bundle (paths are mocked)
     serca_cert = serca_cert_key_pair[0]
     envoy_pca_cert = services_pca_cert_key_pair[0]
     envoy_ica_cert = dnsp_ica_cert_key_pair[0]
     envoy_ee_cert = envoy_ee_cert_key_pair[0]
-    k8s_mock.fetch_certificate_only.side_effect = [serca_cert, envoy_pca_cert, envoy_ica_cert, envoy_ee_cert]
+    fullchain = (
+        envoy_ee_cert.public_bytes(Encoding.PEM)
+        + envoy_ica_cert.public_bytes(Encoding.PEM)
+        + envoy_pca_cert.public_bytes(Encoding.PEM)
+    )
+    k8s_mock.fetch_certificate_only.return_value = serca_cert
+    k8s_mock.fetch_pem_bundle.return_value = fullchain
 
     # Act
     response = await client.get("/certificate/authority", headers={"Authorization": f"Bearer {valid_jwt_user1}"})
@@ -174,14 +184,14 @@ async def test_fetch_utility_server_certificates(
     zip = zipfile.ZipFile(io.BytesIO(response.content))
     assert set(zip.namelist()) == {"serca.pem", "utility-server-fullchain.pem"}
     assert x509.load_pem_x509_certificate(zip.read("serca.pem"), default_backend()) == serca_cert
-    # The fullchain is the envoy EE concatenated with its ICA then PCA (SERCA excluded - it's the separate trust anchor)
+    # The fullchain bundle (envoy EE + ICA + PCA, SERCA excluded) is served verbatim
     assert x509.load_pem_x509_certificates(zip.read("utility-server-fullchain.pem")) == [
         envoy_ee_cert,
         envoy_ica_cert,
         envoy_pca_cert,
     ]
-    # serca + envoy pca/ica/ee
-    assert k8s_mock.fetch_certificate_only.call_count == 4
+    k8s_mock.fetch_certificate_only.assert_called_once()  # SERCA
+    k8s_mock.fetch_pem_bundle.assert_called_once()  # envoy fullchain
 
 
 async def test_generate_shared_aggregator_certificate_and_fetch(

@@ -84,10 +84,10 @@ class CactusOrchestratorSettings(BaseSettings):
 
     # Utility-server (envoy / DNSP) chain: SERCA -> envoy PCA -> envoy ICA -> envoy EE. The EE is a fixed wildcard cert
     # that envoy presents as the mTLS client when POSTing notifications, and that OEMs download to trust the utility
-    # server.
-    cert_envoy_pca_path: str = ""  # path to envoy (DNSP) PCA ca.crt PEM file
-    cert_envoy_ica_path: str = ""  # path to envoy (DNSP) ICA ca.crt PEM file
-    cert_envoy_ee_crt_path: str = ""  # path to envoy (DNSP) EE tls.crt PEM file (wildcard SAN)
+    # server. The fullchain (EE + DNSP ICA + DNSP PCA, excluding SERCA) is the pre-assembled bundle emitted by
+    # create-cert.sh - the orchestrator stages it into each pod and serves it verbatim, so it never needs the
+    # intermediates as separate files.
+    cert_envoy_ee_fullchain_path: str = ""  # path to envoy (DNSP) EE + ICA + PCA fullchain PEM file
     cert_envoy_ee_key_path: str = ""  # path to envoy (DNSP) EE tls.key PEM file
 
     # teardown task

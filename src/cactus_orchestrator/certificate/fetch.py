@@ -31,3 +31,9 @@ def fetch_certificate_only(cert_path: str) -> x509.Certificate:
     with open(cert_path, "rb") as f:
         cert_bytes = f.read()
     return x509.load_pem_x509_certificate(cert_bytes, default_backend())
+
+
+def fetch_pem_bundle(path: str) -> bytes:
+    """Reads a PEM file verbatim (e.g. a pre-assembled fullchain of multiple certificates)."""
+    with open(path, "rb") as f:
+        return f.read()
