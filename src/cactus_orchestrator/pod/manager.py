@@ -107,7 +107,7 @@ async def create_pod_run(
     images: PodImages,
     resources: PodResources,
     routes: PodRoutes,
-    pki: PodPKI | None = None,
+    pki: PodPKI,
 ) -> str:
     """Creates a new pod with the specified pod resources using the specified set of images/config options. Will wait
     until the pod is healthy before returning. Raises an exception (and attempts to clean up) on failure.
@@ -239,11 +239,9 @@ def _create_pod_and_containers(
     images: PodImages,
     resources: PodResources,
     routes: PodRoutes,
-    pki: PodPKI | None = None,
+    pki: PodPKI,
 ) -> str:
     """Returns pod-name on success"""
-    if pki is None:
-        raise CactusOrchestratorError("Cannot create pod without PodPKI - notification mTLS material is required")
 
     t0 = time.monotonic()
     timings: list[tuple[str, float]] = []
@@ -268,7 +266,7 @@ def _create_pod_and_containers(
     timings.append(("pod", time.monotonic() - t0))
 
     # 1. Postgres — binds localhost so other teststacks on cactus-net can't reach it
-    postgres_container = _create_and_run_container(
+    _create_and_run_container(
         client,
         image=images.postgres,
         pod=resources.pod_name,
@@ -279,7 +277,7 @@ def _create_pod_and_containers(
     timings.append(("postgres", time.monotonic() - t0))
 
     # 2. teststack-init — polls postgres itself, runs SQL migrations, exits
-    _create_and_run_container(
+    init_container = _create_and_run_container(
         client,
         image=images.init,
         pod=resources.pod_name,
@@ -303,7 +301,7 @@ def _create_pod_and_containers(
             "notif-certs/serca.pem": pki.server_ca_bytes,
         }
     )
-    if not postgres_container.put_archive("/shared", tar_bytes):
+    if not init_container.put_archive("/shared", tar_bytes):
         raise CactusOrchestratorError(f"Failed to stage notification mTLS certs into pod {resources.pod_name}")
     timings.append(("notif-certs", time.monotonic() - t0))
 

@@ -106,15 +106,9 @@ class RunningPod:
 
 @dataclass(frozen=True)
 class PodPKI:
-    """mTLS material envoy presents when POSTing notifications to a client's webhook, plus the SERCA used to verify the
-    client's notification endpoint.
+    """mTLS/PKI details that are injected into a running pod"""
 
-    The notification identity is the global, fixed utility-server (envoy / DNSP) EE certificate - its wildcard SAN
-    covers every pod - so this is loaded straight from the configured cert paths rather than minted per run.
-    server_cert_bytes is the EE + DNSP ICA + DNSP PCA fullchain (minus SERCA): the OEM webhook trusts only SERCA, so
-    envoy must present the intermediates for the peer to build a path to the root. The fullchain is read verbatim from
-    the pre-assembled bundle emitted by create-cert.sh."""
-
+    # The utility server (envoy) keys used for establishing outgoing mTLS connections for subscription/notifications
     server_ca_bytes: bytes
     server_cert_bytes: bytes
     server_key_bytes: bytes

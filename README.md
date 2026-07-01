@@ -19,10 +19,16 @@ Web API for management of the podman platform and orchestration of test executio
 | `CACTUS_IMAGE__XXX__INIT` * | – | Replace `XXX` with a version tag - The db migration script image for version `XXX` |
 | `CACTUS_IMAGE__XXX__ENVOY` * | – | Replace `XXX` with a version tag - The envoy image for version `XXX` |
 | `CACTUS_IMAGE__XXX__RUNNER` * | – | Replace `XXX` with a version tag - The runner image for version `XXX` |
+
 | `CERT_SERCA_PATH` | – | Path on disk to the SERCA ca.crt PEM file - used for showing server signing chain |
-| `CERT_MCA_PATH` | – | Path on disk to the MCA ca.crt PEM file - used for showing server signing chain |
-| `CERT_MICA_CRT_PATH` | – | Path on disk to the MICA tls.crt PEM file - used for generating new client certs |
-| `CERT_MICA_KEY_PATH` | – | Path on disk to the MICA tls.key PEM file - used for generating new client certs |
+| `CERT_DEVICE_MCA_PATH` | – | Path on disk to the MCA ca.crt PEM file - used for showing server signing chain - should be the signing cert for device MICA |
+| `CERT_DEVICE_MICA_CRT_PATH` | – | Path on disk to the MICA tls.crt PEM file - used for generating new client DEVICE certs |
+| `CERT_DEVICE_MICA_KEY_PATH` | – | Path on disk to the MICA tls.key PEM file - used for generating new client DEVICE certs |
+| `CERT_AGG_PCA_PATH` | – | Path on disk to the PCA ca.crt PEM file - used for showing server signing chain - should be the signing cert for agg ICA |
+| `CERT_AGG_ICA_CRT_PATH` | – | Path on disk to the ICA tls.crt PEM file - used for generating new client AGGREGATOR certs |
+| `CERT_AGG_ICA_KEY_PATH` | – | Path on disk to the ICA tls.key PEM file - used for generating new client AGGREGATOR certs |
+| `CERT_ENVOY_EE_FULLCHAIN_PATH` | – | Path on disk to the cert bundle (PEM encoded) file - used by utility server instances when establishing a mTLS subscription/notification conection |
+| `CERT_ENVOY_EE_KEY_PATH` | – | Path on disk to the tls.key PEM file - used by utility server instances when establishing a mTLS subscription/notification conection |
 | `IDLETEARDOWNTASK_ENABLE` | `True` | If `True` - Start a background service for monitoring idle/old test pods |
 | `IDLETEARDOWNTASK_MAX_LIFETIME_SECONDS` | `3600 * 24 * 4` | Test runs older than this will be destroyed |
 | `IDLETEARDOWNTASK_IDLE_TIMEOUT_SECONDS` | `3600 * 2` | Test runs with no comms for longer than this will be destroyed |
