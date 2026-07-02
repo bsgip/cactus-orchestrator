@@ -16,6 +16,7 @@ from cactus_orchestrator.model import (
     ComplianceRecord,
     ComplianceRequest,
     ComplianceRequestClass,
+    ComplianceRequestFinalisation,
     ComplianceRequestRun,
     ComplianceRequestStatus,
     Run,
@@ -433,10 +434,20 @@ async def update_compliance_generation_record_with_file_data(
 async def finalise_compliance_request(
     session: AsyncSession, update_by: int, compliance_request: ComplianceRequest, file_data: bytes
 ) -> None:
+    finalisation_timestamp = datetime.now(UTC)
+
     compliance_request.updated_by = update_by
-    compliance_request.updated_at = datetime.now(UTC)
+    compliance_request.updated_at = finalisation_timestamp
     compliance_request.status = ComplianceRequestStatus.FINALISED
-    compliance_request.file_data = file_data
+
+    await insert_compliance_request_finalisation(
+        session=session,
+        compliance_request_id=compliance_request.compliance_request_id,
+        created_at=finalisation_timestamp,
+        created_by=update_by,
+        file_data=file_data,
+    )
+
     await session.flush()
 
 
@@ -444,7 +455,6 @@ async def select_compliance_request(
     session: AsyncSession,
     compliance_request_id: int,
     include_users: bool = False,
-    include_file_data: bool = False,
 ) -> ComplianceRequest:
     stmt = select(ComplianceRequest).where(ComplianceRequest.compliance_request_id == compliance_request_id)
     stmt = stmt.options(selectinload(ComplianceRequest.classes))
@@ -452,8 +462,6 @@ async def select_compliance_request(
     if include_users:
         stmt = stmt.options(joinedload(ComplianceRequest.created_by_user))
         stmt = stmt.options(joinedload(ComplianceRequest.updated_by_user))
-    if include_file_data:
-        stmt = stmt.options(undefer(ComplianceRequest.file_data))
 
     result = await session.execute(stmt)
     return result.scalar_one()
@@ -463,15 +471,12 @@ async def select_user_compliance_request(
     session: AsyncSession,
     user_id: int,
     compliance_request_id: int,
-    include_file_data: bool = False,
 ) -> ComplianceRequest:
     stmt = select(ComplianceRequest).where(
         ComplianceRequest.compliance_request_id == compliance_request_id, ComplianceRequest.created_by == user_id
     )
     stmt = stmt.options(selectinload(ComplianceRequest.classes))
     stmt = stmt.options(selectinload(ComplianceRequest.runs))
-    if include_file_data:
-        stmt = stmt.options(undefer(ComplianceRequest.file_data))
 
     result = await session.execute(stmt)
     return result.scalar_one()
@@ -573,8 +578,78 @@ async def update_compliance_request(
     await session.flush()
 
 
+async def safe_delete_compliance_request(session: AsyncSession, compliance_request: ComplianceRequest) -> bool:
+    """Delete compliance request safely.
+
+    Only allow deletion of compliance requests that haven't been finalised (at least once)
+
+    Return:
+        bool: Whether the compliance request could be deleted
+    """
+    if compliance_request.status in [ComplianceRequestStatus.FINALISED, ComplianceRequestStatus.REOPENED]:
+        return False
+
+    await delete_compliance_request(session=session, compliance_request=compliance_request)
+
+    return True
+
+
 async def delete_compliance_request(session: AsyncSession, compliance_request: ComplianceRequest) -> None:
     await session.delete(compliance_request)
+
+
+async def select_user_compliance_request_finalisation(
+    session: AsyncSession, user_id: int, compliance_request_id: int
+) -> ComplianceRequestFinalisation | None:
+    """
+    Returns:
+
+
+    Raises:
+        NoResultFound exception if compliance_request_id not associated with user_id
+        NoResultFound exception if no finalisation record associated with compliance_request_id
+    """
+    await select_user_compliance_request(session=session, user_id=user_id, compliance_request_id=compliance_request_id)
+
+    stmt = (
+        select(ComplianceRequestFinalisation)
+        .where(ComplianceRequestFinalisation.compliance_request_id == compliance_request_id)
+        .order_by(ComplianceRequestFinalisation.created_at.desc())
+        .limit(1)
+    )
+
+    resp = await session.execute(stmt)
+    return resp.scalar_one_or_none()
+
+
+async def select_compliance_request_finalisation(
+    session: AsyncSession, compliance_request_id: int
+) -> ComplianceRequestFinalisation | None:
+    stmt = (
+        select(ComplianceRequestFinalisation)
+        .where(ComplianceRequestFinalisation.compliance_request_id == compliance_request_id)
+        .order_by(ComplianceRequestFinalisation.created_at.desc())
+        .limit(1)
+    )
+
+    resp = await session.execute(stmt)
+    return resp.scalar_one_or_none()
+
+
+async def insert_compliance_request_finalisation(
+    session: AsyncSession, compliance_request_id: int, created_at: datetime, created_by: int, file_data: bytes
+) -> ComplianceRequestFinalisation:
+    compliance_request_finalisation = ComplianceRequestFinalisation(
+        compliance_request_id=compliance_request_id,
+        created_at=created_at,
+        created_by=created_by,
+        file_data=file_data,
+    )
+
+    session.add(compliance_request_finalisation)
+    await session.flush()
+
+    return compliance_request_finalisation
 
 
 async def insert_playlist_runs(

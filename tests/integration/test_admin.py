@@ -503,7 +503,7 @@ async def test_admin_get_run_power_limit_chart_ok(mock_chart, client, pg_base_co
 async def test_admin_get_compliance_requests_paginated(client, pg_compliance_config, valid_jwt_admin1):
 
     # Arrange
-    expected_compliance_request_ids = [2, 3, 1]  # newest to oldest compliance requests
+    expected_compliance_request_ids = [2, 3, 4, 1]  # newest to oldest compliance requests
 
     # Act
     res = await client.get("/admin/compliance_request", headers={"Authorization": f"Bearer {valid_jwt_admin1}"})
@@ -533,7 +533,7 @@ async def test_admin_get_compliance_requests_no_requests(client, pg_base_config,
 
 @pytest.mark.parametrize(
     "compliance_request_id, expected_status_code",
-    [(1, HTTPStatus.OK), (2, HTTPStatus.OK), (3, HTTPStatus.OK), (4, HTTPStatus.NOT_FOUND)],
+    [(1, HTTPStatus.OK), (2, HTTPStatus.OK), (3, HTTPStatus.OK), (99, HTTPStatus.NOT_FOUND)],
 )
 @pytest.mark.asyncio
 async def test_admin_get_compliance_request(
@@ -574,7 +574,7 @@ async def test_update_compliance_request(client, pg_compliance_config, valid_jwt
 
 @pytest.mark.parametrize(
     "compliance_request_id, expected_status_code",
-    [(4, HTTPStatus.NOT_FOUND), (1, HTTPStatus.OK)],
+    [(99, HTTPStatus.NOT_FOUND), (1, HTTPStatus.BAD_REQUEST), (2, HTTPStatus.OK)],
 )
 @pytest.mark.asyncio
 async def test_delete_compliance_request(

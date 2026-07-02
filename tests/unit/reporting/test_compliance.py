@@ -86,7 +86,6 @@ def test_determine_compliance():
     }
     compliance_request = generate_class_instance(
         ComplianceRequest,
-        file_data=b"",
         csip_aus_version="v1.2",
         classes={generate_class_instance(ComplianceRequestClass, compliance_class="A")},
         runs={
@@ -120,7 +119,6 @@ def test_determine_compliance():
     submitted_runs[FAILED_RUN] = generate_class_instance(Run, testprocedure_id=FAILED_RUN, all_criteria_met=False)
     compliance_request = generate_class_instance(
         ComplianceRequest,
-        file_data=b"",
         csip_aus_version="v1.2",
         classes={generate_class_instance(ComplianceRequestClass, compliance_class="A")},
         runs={
