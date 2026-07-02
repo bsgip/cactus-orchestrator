@@ -275,17 +275,24 @@ async def spawn_teststack_and_init_run(  # noqa: C901
         first_run,
     )
 
+    # Global static utility-server (envoy / DNSP) notification mTLS material - envoy presents this when POSTing
+    # notifications (and verifies the OEM webhook's chain to SERCA). Required: pod creation fails without it.
+    try:
+        pod_pki = PodPKI.from_paths(
+            serca_path=settings.cert_serca_path,
+            envoy_ee_fullchain_path=settings.cert_envoy_ee_fullchain_path,
+            envoy_ee_key_path=settings.cert_envoy_ee_key_path,
+        )
+    except Exception as exc:
+        logger.error(
+            f"Failed to load pod PKI. {settings.cert_serca_path=} {settings.cert_envoy_ee_fullchain_path=} {settings.cert_envoy_ee_key_path=}",  # noqa: E501
+            exc_info=exc,
+        )
+        raise HTTPException(HTTPStatus.INTERNAL_SERVER_ERROR, detail="Internal Server Error") from exc
+
     # create a new pod
     try:
         user_identifier = user.user_name or user.subject_id
-        # Global static utility-server (envoy / DNSP) notification mTLS material - envoy presents this when POSTing
-        # notifications (and verifies the OEM webhook's chain to SERCA). Required: pod creation fails without it.
-        envoy_pki_paths = (
-            settings.cert_serca_path,
-            settings.cert_envoy_ee_fullchain_path,
-            settings.cert_envoy_ee_key_path,
-        )
-        pod_pki = PodPKI.from_paths(*envoy_pki_paths) if all(envoy_pki_paths) else None
         pod_name = await create_pod_run(settings.podman_socket, pod_images, pod_resources, pod_routes, pod_pki)
     except Exception as exc:
         logger.error(f"Failed to create new pod for run_group {run_group_id}", exc_info=exc)

@@ -43,20 +43,17 @@ def base_environment(preserved_environment, request):
 
     # Install images
     os.environ["CACTUS_IMAGE__V12__CSIP_AUS_VERSION"] = "v1.2"
-    os.environ["CACTUS_IMAGE__V12__POSTGRES"] = "postgres:12"
-    os.environ["CACTUS_IMAGE__V12__INIT"] = "init:12"
+    os.environ["CACTUS_IMAGE__V12__DB"] = "cactus-db:12"
     os.environ["CACTUS_IMAGE__V12__ENVOY"] = "envoy:12"
     os.environ["CACTUS_IMAGE__V12__RUNNER"] = "runner:12"
 
     os.environ["CACTUS_IMAGE__V13__CSIP_AUS_VERSION"] = "v1.3"
-    os.environ["CACTUS_IMAGE__V13__POSTGRES"] = "postgres:13"
-    os.environ["CACTUS_IMAGE__V13__INIT"] = "init:13"
+    os.environ["CACTUS_IMAGE__V13__DB"] = "cactus-db:13"
     os.environ["CACTUS_IMAGE__V13__ENVOY"] = "envoy:13"
     os.environ["CACTUS_IMAGE__V13__RUNNER"] = "runner:13"
 
     os.environ["CACTUS_IMAGE__V13BETA__CSIP_AUS_VERSION"] = "v1.3-beta/storage"
-    os.environ["CACTUS_IMAGE__V13BETA__POSTGRES"] = "postgres:13-beta"
-    os.environ["CACTUS_IMAGE__V13BETA__INIT"] = "init:13-beta"
+    os.environ["CACTUS_IMAGE__V13BETA__DB"] = "cactus-db:13-beta"
     os.environ["CACTUS_IMAGE__V13BETA__ENVOY"] = "envoy:13-beta"
     os.environ["CACTUS_IMAGE__V13BETA__RUNNER"] = "runner:13-beta"
 

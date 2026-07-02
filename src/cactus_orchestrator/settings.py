@@ -30,7 +30,7 @@ class ImagesEnvSource(PydanticBaseSettingsSource):
         for key, val in os.environ.items():
             if not key.upper().startswith(self.PREFIX):
                 continue
-            # CACTUS_IMAGES__V1_2__POSTGRES → ("V1_2", "postgres")
+            # CACTUS_IMAGES__V1_2__DB → ("V1_2", "db")
             remainder = key[len(self.PREFIX) :]
             parts = remainder.split("__", 1)
             if len(parts) != 2:

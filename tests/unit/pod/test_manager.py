@@ -151,10 +151,9 @@ async def test_ensure_images(
     # Arrange
     images = PodImages(
         csip_aus_version="v99",
-        postgres="my/image/postgres",
+        db="my/image/postgres",
         envoy="my/image/envoy",
         runner="my/image/runner",
-        init="my/image/init",
     )
     ALL_IMAGES = [
         "my/image/postgres",
@@ -320,8 +319,8 @@ async def test_create_pod_run_success(mock_client: MockedPodmanClient, health_va
 
     # Our containers are created - noting that we create via the low level API due to startup health checks
     assert mock_client.containers_run.call_count == 0
-    assert mock_client.containers_render_payload.call_count == 5
-    assert mock_client.api_post.call_count == 5
+    assert mock_client.containers_render_payload.call_count == 4
+    assert mock_client.api_post.call_count == 4
     assert all(
         [c.args[0]["pod"] == resources.pod_name for c in mock_client.containers_render_payload.call_args_list]
     ), "Every container should run in pod"
@@ -337,8 +336,7 @@ async def test_create_pod_run_success(mock_client: MockedPodmanClient, health_va
             creation_by_image_name[img_name] = existing + 1
 
     assert creation_by_image_name[images.envoy] == 2, "envoy, admin"
-    assert creation_by_image_name[images.postgres] == 1
-    assert creation_by_image_name[images.init] == 1
+    assert creation_by_image_name[images.db] == 1
     assert creation_by_image_name[images.runner] == 1
 
     assert mock_runner_container.reload.call_count == expected_health_check_count

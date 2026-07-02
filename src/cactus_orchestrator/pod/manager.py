@@ -266,30 +266,15 @@ def _create_pod_and_containers(
     timings.append(("pod", time.monotonic() - t0))
 
     # 1. Postgres — binds localhost so other teststacks on cactus-net can't reach it
-    _create_and_run_container(
+    db_container = _create_and_run_container(
         client,
-        image=images.postgres,
+        image=images.db,
         pod=resources.pod_name,
         name=resources.container_postgres_name,
         command=["-c", "listen_addresses=localhost"],
-        environment={"POSTGRES_PASSWORD": "envoy", "POSTGRES_USER": "envoy", "POSTGRES_DB": "envoy"},  # nosec # This is for internal use only - not exposed
+        volumes=shared_volumes,  # This is only here so we can load up the certs BEFORE starting other containers
     )
-    timings.append(("postgres", time.monotonic() - t0))
-
-    # 2. teststack-init — polls postgres itself, runs SQL migrations, exits
-    init_container = _create_and_run_container(
-        client,
-        image=images.init,
-        pod=resources.pod_name,
-        name=resources.container_init_name,
-        environment={
-            "ENVOY_DATABASE_URL": ENVOY_DATABASE_URL_PLAIN,
-            "MIGRATION_SENTINEL": "/shared/migrations.ready",
-        },
-        volumes=shared_volumes,
-        remove=True,  # This should ONLY run once
-    )
-    timings.append(("init", time.monotonic() - t0))
+    timings.append(("db", time.monotonic() - t0))
 
     # Put envoy's notification mTLS cert + key + SERCA into the shared volume before envoy starts (it reads them once at
     # notification-worker startup). Written via the postgres container - it's up and mounts /shared
@@ -301,11 +286,11 @@ def _create_pod_and_containers(
             "notif-certs/serca.pem": pki.server_ca_bytes,
         }
     )
-    if not init_container.put_archive("/shared", tar_bytes):
+    if not db_container.put_archive("/shared", tar_bytes):
         raise CactusOrchestratorError(f"Failed to stage notification mTLS certs into pod {resources.pod_name}")
     timings.append(("notif-certs", time.monotonic() - t0))
 
-    # 3. Envoy — internal only; binds 127.0.0.1 so the runner (not other teststacks) reaches it
+    # 2. Envoy — internal only; binds 127.0.0.1 so the runner (not other teststacks) reaches it
     _create_and_run_container(
         client,
         images.envoy,
@@ -335,7 +320,7 @@ def _create_pod_and_containers(
     )
     timings.append(("envoy", time.monotonic() - t0))
 
-    # 4. Envoy admin — same image, different entry point
+    # 3. Envoy admin — same image, different entry point
     _create_and_run_container(
         client,
         images.envoy,
@@ -359,7 +344,7 @@ def _create_pod_and_containers(
     )
     timings.append(("envoy-admin", time.monotonic() - t0))
 
-    # 5. Runner — the ingress: the Traefik labels (with a StripPrefix middleware) live here, not on
+    # 4. Runner — the ingress: the Traefik labels (with a StripPrefix middleware) live here, not on
     # envoy, so external device traffic flows through the runner's proxy before reaching envoy.
     traefik_router_rule = f"Host(`{routes.external_host}`) && PathPrefix(`{routes.href_prefix}`)"
     traefik_labels = {

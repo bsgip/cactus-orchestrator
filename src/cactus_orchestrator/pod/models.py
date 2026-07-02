@@ -18,8 +18,7 @@ class PodImages:
 
     csip_aus_version: str  # This is not an image - but a plaintext CSIPAus version that will be encoded into the env
 
-    postgres: str
-    init: str  # For cactus-teststack-init
+    db: str  # For cactus-db - it's postgres with the latest envoy migrations applied
     envoy: str  # This image has envoy-server, envoy-admin and envoy-notification all built in
     runner: str  # For cactus-runner
 

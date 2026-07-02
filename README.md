@@ -15,11 +15,9 @@ Web API for management of the podman platform and orchestration of test executio
 | `PODMAN_NETWORK` | `cactus-net` | Name of a pre-existing podman bridge network that test pods will operate under |
 | `PODMAN_RUNNER_PORT` | `8080` | The exposed port in each test pod that will route to the cactus-runner test harness |
 | `CACTUS_IMAGE__XXX__CSIP_AUS_VERSION` * | – | Replace `XXX` with a version tag - The full CSIP-Aus version tag |
-| `CACTUS_IMAGE__XXX__POSTGRES` * | – | Replace `XXX` with a version tag - The postgres image for version `XXX` |
-| `CACTUS_IMAGE__XXX__INIT` * | – | Replace `XXX` with a version tag - The db migration script image for version `XXX` |
+| `CACTUS_IMAGE__XXX__DB` * | – | Replace `XXX` with a version tag - The cactus-db image for version `XXX` |
 | `CACTUS_IMAGE__XXX__ENVOY` * | – | Replace `XXX` with a version tag - The envoy image for version `XXX` |
 | `CACTUS_IMAGE__XXX__RUNNER` * | – | Replace `XXX` with a version tag - The runner image for version `XXX` |
-
 | `CERT_SERCA_PATH` | – | Path on disk to the SERCA ca.crt PEM file - used for showing server signing chain |
 | `CERT_DEVICE_MCA_PATH` | – | Path on disk to the MCA ca.crt PEM file - used for showing server signing chain - should be the signing cert for device MICA |
 | `CERT_DEVICE_MICA_CRT_PATH` | – | Path on disk to the MICA tls.crt PEM file - used for generating new client DEVICE certs |
@@ -34,8 +32,6 @@ Web API for management of the podman platform and orchestration of test executio
 | `IDLETEARDOWNTASK_IDLE_TIMEOUT_SECONDS` | `3600 * 2` | Test runs with no comms for longer than this will be destroyed |
 | `IDLETEARDOWNTASK_REPEAT_EVERY_SECONDS` | `120` | Check for idle test runs at this frequency |
 | `IDLETEARDOWNTASK_STARTUP_GRACE_SECONDS` | `300` | A pod must be at least this old before it can be declared an orphan |
-
-
 | `PULLTASK_REPEAT_EVERY_SECONDS` | `120` | Check for unpulled podman images at this frequency |
 | `IGNORED_CSIP_AUS_VERSIONS` | - | JSON encoded list of strings - each representing a CSIP-Aus version to be ignored |
 | `IGNORED_TEST_PROCEDURES` | - | JSON encoded list of strings - each representing a TestProcedureID to be ignored |
@@ -44,13 +40,13 @@ Web API for management of the podman platform and orchestration of test executio
 # * All image versions work together as a series of blocks eg:
 
 CACTUS_IMAGE__V1_99__CSIP_AUS_VERSION = "v1.99"
-CACTUS_IMAGE__V1_99__POSTGRES = "postgres:123"
+CACTUS_IMAGE__V1_99__DB = "cactus-db:123"
 CACTUS_IMAGE__V1_99__INIT = "init-script:123"
 CACTUS_IMAGE__V1_99__ENVOY = "envoy:123"
 CACTUS_IMAGE__V1_99__RUNNER = "runner:123"
 
 CACTUS_IMAGE__V1_2__CSIP_AUS_VERSION" = "v1.2"
-CACTUS_IMAGE__V1_2__POSTGRES = "postgres:456"
+CACTUS_IMAGE__V1_2__DB = "cactus-db:456"
 CACTUS_IMAGE__V1_2__INIT = "init-script:456"
 CACTUS_IMAGE__V1_2__ENVOY = "envoy:456"
 CACTUS_IMAGE__V1_2__RUNNER = "runner:456"
