@@ -18,8 +18,8 @@ logger = logging.getLogger(__name__)
 
 SEC = 1_000_000_000  # durations in the podman SpecGenerator are integer NANOSECONDS
 
-POD_READY_MAX_ATTEMPTS = 30
-POD_READY_INTERVAL_SECONDS = 2
+POD_READY_MAX_ATTEMPTS = 180
+POD_READY_INTERVAL_SECONDS = 0.3
 
 # These are NOT security concerns - They are only used internally within a test pod and are not exposed externally
 # We just need some constant passwords for the env
