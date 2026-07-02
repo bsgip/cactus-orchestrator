@@ -307,7 +307,6 @@ def _create_pod_and_containers(
             "ALLOW_DEVICE_REGISTRATION": "True",
             "STATIC_REGISTRATION_PIN": "11111",
             "LOG_CONFIG": "logconf.server.json",
-            "MIGRATION_SENTINEL": "/shared/migrations.ready",
             # Notification mTLS: envoy presents the utility-server EE and verifies the OEM webhook's
             # aggregator chain to SERCA (full peer verification - NOTIFICATION_DISABLE_TLS_VERIFY stays off).
             "NOTIFICATIONS_WITH_MTLS": "True",
@@ -338,7 +337,6 @@ def _create_pod_and_containers(
             "ADMIN_USERNAME": "admin",
             "ADMIN_PASSWORD": "password",  # nosec # This is for internal use only - not exposed
             "LOG_CONFIG": "logconf.admin.json",
-            "MIGRATION_SENTINEL": "/shared/migrations.ready",
         },
         volumes=shared_volumes,
     )
