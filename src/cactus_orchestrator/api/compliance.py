@@ -18,9 +18,10 @@ from sqlalchemy.exc import NoResultFound
 from cactus_orchestrator.api.common import map_to_compliance_request_response, select_user_or_raise
 from cactus_orchestrator.auth import AuthPerm, UserContext, jwt_validator
 from cactus_orchestrator.crud import (
-    delete_compliance_request,
     insert_compliance_request,
+    safe_delete_compliance_request,
     select_user_compliance_request,
+    select_user_compliance_request_finalisation,
     select_user_compliance_requests,
     update_compliance_request,
 )
@@ -39,16 +40,16 @@ async def get_compliance_request_artifact(
         user_context,
     )
 
-    compliance_request = await select_user_compliance_request(
-        session=db.session, user_id=user.user_id, compliance_request_id=compliance_request_id, include_file_data=True
+    finalisation = await select_user_compliance_request_finalisation(
+        session=db.session, user_id=user.user_id, compliance_request_id=compliance_request_id
     )
 
-    if compliance_request is None or compliance_request.file_data is None:
+    if finalisation is None or finalisation.file_data is None:
         raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Not Found")
 
     return Response(
         status_code=HTTPStatus.OK,
-        content=compliance_request.file_data,
+        content=finalisation.file_data,
         media_type="application/pdf",
         headers={"Content-Disposition": f"attachment; filename=ComplianceReport-{compliance_request_id}.pdf"},
     )
@@ -179,7 +180,18 @@ async def delete_compliance_request_endpoint(
         logger.debug(exc)
         raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Not Found") from exc
 
-    await delete_compliance_request(session=db.session, compliance_request=request)
+    try:
+        request_deletable = await safe_delete_compliance_request(session=db.session, compliance_request=request)
+    except Exception as exc:
+        logger.debug(exc)
+        raise HTTPException(
+            status_code=HTTPStatus.INTERNAL_SERVER_ERROR, detail="Failed to delete compliance request"
+        ) from exc
+
+    if not request_deletable:
+        raise HTTPException(
+            status_code=HTTPStatus.BAD_REQUEST, detail="Compliance Request has been finalised. Unable to delete."
+        )
 
     await db.session.commit()
     return Response(status_code=HTTPStatus.OK)
