@@ -12,11 +12,19 @@ from cactus_schema.orchestrator import (
 )
 
 
+@pytest.mark.parametrize(
+    "compliance_request_id, expected_status, expected_content",
+    [(1, HTTPStatus.OK, b"\\x0001"), (2, HTTPStatus.NOT_FOUND, None)],
+)
 @pytest.mark.asyncio
-async def test_get_compliance_request_artifact(client, pg_compliance_config, valid_jwt_user1):
-    # Arrange
-    compliance_request_id = 1
-
+async def test_get_compliance_request_artifact(
+    compliance_request_id: int,
+    expected_status: HTTPStatus,
+    expected_content: bytes,
+    client,
+    pg_compliance_config,
+    valid_jwt_user1,
+):
     # Act
     res = await client.get(
         uri.ComplianceRequestArtifact.format(compliance_request_id=compliance_request_id),
@@ -24,10 +32,11 @@ async def test_get_compliance_request_artifact(client, pg_compliance_config, val
     )
 
     # Assert
-    assert res.status_code == HTTPStatus.OK
-    assert res.content == b"\\x0001"
-    assert res.headers["content-type"] == "application/pdf"
-    assert res.headers["content-disposition"] and "attachment; filename=" in res.headers["content-disposition"]
+    assert res.status_code == expected_status
+    if expected_status == HTTPStatus.OK:
+        assert res.content == expected_content
+        assert res.headers["content-type"] == "application/pdf"
+        assert res.headers["content-disposition"] and "attachment; filename=" in res.headers["content-disposition"]
 
 
 @pytest.mark.asyncio
@@ -89,7 +98,7 @@ async def test_create_compliance_request(client, pg_compliance_config, valid_jwt
     # value
     assert not isinstance(request, list)
 
-    assert request.compliance_request_id == 4
+    assert request.compliance_request_id == 5
     # compare each field of values passed create (request_params) with the same values
     # return by POST (request)
     for field in dataclasses.fields(request_params):
@@ -119,7 +128,12 @@ async def test_update_compliance_request(client, pg_compliance_config, valid_jwt
 
 
 @pytest.mark.parametrize(
-    "compliance_request_id, expected_status_code", [(1, HTTPStatus.OK), (99, HTTPStatus.NOT_FOUND)]
+    "compliance_request_id, expected_status_code",
+    [
+        (1, HTTPStatus.BAD_REQUEST),  # Can't delete a compliance request that has been finalised
+        (2, HTTPStatus.OK),
+        (99, HTTPStatus.NOT_FOUND),
+    ],
 )
 @pytest.mark.asyncio
 async def test_delete_compliance_request(

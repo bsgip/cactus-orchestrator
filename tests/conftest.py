@@ -280,7 +280,7 @@ def valid_jwt_no_user(mock_jwt_validator_jwks_cache, rsa_key) -> str:
 @pytest.fixture(scope="function")
 def valid_jwt_admin1(mock_jwt_validator_jwks_cache, rsa_key) -> str:
     kid = list(mock_jwt_validator_jwks_cache.keys())[0]
-    return valid_token_for_user("admin-user", rsa_key, kid, "user:all", ["admin:all", "user:all"])
+    return valid_token_for_user("admin1", rsa_key, kid, "user:all", ["admin:all", "user:all"])
 
 
 @pytest.fixture
