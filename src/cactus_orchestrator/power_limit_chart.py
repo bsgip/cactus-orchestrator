@@ -10,11 +10,15 @@ Limits are derived from DERControls across all DERPrograms (resolved by primacy)
 with default controls as fallback. Transitions are rendered as linear ramps using
 rampTms (DERControl), DefaultDERControl setGradW, or AS4777 wGra as appropriate.
 
-Receipt timing:
-  - Subscribed programs: device receives controls at created_time (notifications assumed delivered).
-  - Polled programs: device receives the control at the first observed GET to the DERControl
-    list endpoint for that program after the control's created_time. Falls back to
-    the control's start_time if no poll is found.
+Client knowledge replay:
+  - The chart models what the CLIENT knows, not what the server stored. The client's view of a
+    group refreshes only at observation events: successful GETs of the group's DERControl list
+    (or DefaultDERControl) taken from the request history, or - for subscribed groups -
+    server-side changes (notifications assumed delivered at the moment of change).
+  - Between observations the client executes the schedule it last saw: cancellations, value
+    updates and supersessions only take effect at the next observation that reveals them.
+  - Groups with DOEs/defaults but no polls and no subscription fall back to instant knowledge
+    of every server-side change (with a warning) so older/incomplete artifacts still chart.
 """
 
 import logging
@@ -45,6 +49,12 @@ _POST_DISCONNECT_WGRA_SECONDS: float = 6 * 60.0
 
 # Matches /edev/{n}/derp/{group_id}/derc (with optional query string)
 _DERC_PATH_RE = re.compile(r"/edev/\d+/derp/(\d+)/derc")
+
+# Matches /edev/{n}/derp/{group_id}/dderc (with optional query string)
+_DDERC_PATH_RE = re.compile(r"/edev/\d+/derp/(\d+)/dderc")
+
+# Sentinel for "still current" windows; comparisons work across tzinfo values
+_FAR_FUTURE = datetime(9999, 1, 1, tzinfo=UTC)
 
 # Cycling colour palette for step-name bands (semi-transparent fills)
 _STEP_PALETTE = [
@@ -117,8 +127,46 @@ class _RawDefault:
 
 # ─── Internal data types ──────────────────────────────────────────────────────
 
+
+@dataclass
+class _KnownDefault:
+    """A group's default control as the client knew it during [known_from, known_until)."""
+
+    row: _RawDefault
+    known_from: datetime
+    known_until: datetime
+
+    @property
+    def site_control_group_id(self) -> int:
+        return self.row.site_control_group_id
+
+    @property
+    def export_limit_active_watts(self) -> float | None:
+        return self.row.export_limit_active_watts
+
+    @property
+    def generation_limit_active_watts(self) -> float | None:
+        return self.row.generation_limit_active_watts
+
+    @property
+    def import_limit_active_watts(self) -> float | None:
+        return self.row.import_limit_active_watts
+
+    @property
+    def load_limit_active_watts(self) -> float | None:
+        return self.row.load_limit_active_watts
+
+    @property
+    def storage_target_active_watts(self) -> float | None:
+        return self.row.storage_target_active_watts
+
+    @property
+    def ramp_rate_percent_per_second(self) -> int | None:
+        return self.row.ramp_rate_percent_per_second
+
+
 # Type alias kept for readability in function signatures.
-_DefaultLike = _RawDefault
+_DefaultLike = _KnownDefault
 
 
 @dataclass
@@ -215,13 +263,15 @@ async def _get_control_groups(session: AsyncSession) -> list[_RawControlGroup]:
     return [_RawControlGroup(site_control_group_id=row.site_control_group_id, primacy=row.primacy) for row in result]
 
 
-async def _get_subscribed_group_ids(session: AsyncSession) -> set[int]:
-    """Returns site_control_group_ids for which an active DERControl subscription exists.
+async def _get_subscribed_group_ids(
+    session: AsyncSession, resource: SubscriptionResource = SubscriptionResource.DYNAMIC_OPERATING_ENVELOPE
+) -> set[int]:
+    """Returns site_control_group_ids for which an active subscription of the given type exists.
     Only subscriptions with an explicit resource_id are considered; 0 subscriptions is valid
     (device relies entirely on polling)."""
     result = await session.execute(
         text("SELECT resource_id FROM subscription WHERE resource_type = :rtype AND resource_id IS NOT NULL"),
-        {"rtype": SubscriptionResource.DYNAMIC_OPERATING_ENVELOPE.value},
+        {"rtype": resource.value},
     )
     return {row.resource_id for row in result}
 
@@ -465,163 +515,321 @@ def _build_receipt_markers(
     return sorted(markers, key=lambda m: m.time)
 
 
-# ─── Receipt time computation ─────────────────────────────────────────────────
+# ─── Client knowledge replay ──────────────────────────────────────────────────
 
 
-def _compute_receipt_time_and_step(
-    doe: _RawDOE,
-    group_id: int,
-    subscribed_group_ids: set[int],
-    sorted_requests: list[RequestEntry],
-) -> tuple[datetime, str]:
-    """Returns (receipt_time, step_name) for this control.
+@dataclass
+class _Observation:
+    """A moment at which the client's knowledge of a group's server state refreshes."""
 
-    For subscribed groups: receipt is created_time; step_name is the last non-empty
-    step seen in requests to /edev/*/derp/{group_id}/derc at or before created_time.
-    For polled groups: receipt is the first GET to /edev/*/derp/{group_id}/derc after
-    created_time; step_name comes from that request. Fallback: (doe.start_time, "").
-    """
-    if group_id in subscribed_group_ids:
-        step = ""
-        for req in sorted_requests:
-            if req.timestamp > doe.created_time:
-                break
-            m = _DERC_PATH_RE.search(req.path)
-            if m and int(m.group(1)) == group_id:
-                name = (req.step_name or "").strip()
-                if name:
-                    step = name
-        return doe.created_time, step
+    time: datetime
+    step_name: str = ""
 
+
+@dataclass
+class _ControlVersion:
+    """The values a DOE held on the server during [valid_from, valid_to)."""
+
+    row: _RawDOE
+    valid_from: datetime
+    valid_to: datetime
+
+
+def _boundary_time(row: _RawDOE) -> datetime:
+    """When this row's values stopped being the server's current state (_FAR_FUTURE if current)."""
+    if not row.is_archive:
+        return _FAR_FUTURE
+    if row.deleted_time is not None:
+        return row.deleted_time
+    if row.archive_time is not None:
+        return row.archive_time
+    return row.created_time  # malformed archive row - zero-width, gets skipped
+
+
+def _build_control_versions(all_does: list[_RawDOE]) -> dict[int, list[_ControlVersion]]:
+    """Reconstructs, per DOE, the sequence of value-versions the server held over time.
+
+    Archive rows hold the values that applied up until their archive/deleted time; the
+    active row (if any) holds the current values. Chaining those boundaries yields each
+    version's validity window. After a deletion boundary the DOE no longer exists."""
+    rows_by_id: dict[int, list[_RawDOE]] = {}
+    for doe in all_does:
+        rows_by_id.setdefault(doe.dynamic_operating_envelope_id, []).append(doe)
+
+    versions_by_id: dict[int, list[_ControlVersion]] = {}
+    for doe_id, rows in rows_by_id.items():
+        rows.sort(key=_boundary_time)
+        valid_from = min(r.created_time for r in rows)
+        versions: list[_ControlVersion] = []
+        for row in rows:
+            valid_to = _boundary_time(row)
+            if valid_to <= valid_from:
+                continue
+            versions.append(_ControlVersion(row=row, valid_from=valid_from, valid_to=valid_to))
+            valid_from = valid_to
+            if row.deleted_time is not None:
+                break  # The DOE ceased to exist here; later rows are duplicate snapshots
+        versions_by_id[doe_id] = versions
+    return versions_by_id
+
+
+def _version_at(versions: list[_ControlVersion], t: datetime) -> _ControlVersion | None:
+    for v in versions:
+        if v.valid_from <= t < v.valid_to:
+            return v
+    return None
+
+
+def _default_boundary(row: _RawDefault) -> datetime:
+    """When this default row's values stopped being the server's current state."""
+    if not row.is_archive:
+        return _FAR_FUTURE
+    return row.archive_time if row.archive_time is not None else row.changed_time
+
+
+def _default_version_at(rows: list[_RawDefault], t: datetime) -> _RawDefault | None:
+    """The default row that was the server's current state at time t (latest changed_time wins)."""
+    best: _RawDefault | None = None
+    for row in rows:
+        if row.changed_time <= t < _default_boundary(row):
+            if best is None or row.changed_time > best.changed_time:
+                best = row
+    return best
+
+
+def _step_name_at(sorted_requests: list[RequestEntry], group_id: int, t: datetime) -> str:
+    """The last non-empty step name on a request to this group's DERControl list at or before t."""
+    step = ""
     for req in sorted_requests:
-        if req.timestamp <= doe.created_time:
-            continue
-        if req.method != "GET":
-            continue
+        if req.timestamp > t:
+            break
         m = _DERC_PATH_RE.search(req.path)
         if m and int(m.group(1)) == group_id:
-            return req.timestamp, (req.step_name or "").strip()
-
-    logger.debug(
-        "power_limit_chart: no DERControl poll found for group %d after %r; falling back to start_time",
-        group_id,
-        doe.created_time,
-    )
-    return doe.start_time, ""
+            name = (req.step_name or "").strip()
+            if name:
+                step = name
+    return step
 
 
-# ─── Control enrichment ───────────────────────────────────────────────────────
+def _collect_poll_observations(
+    sorted_requests: list[RequestEntry],
+) -> tuple[dict[int, list[_Observation]], dict[int, list[_Observation]]]:
+    """Extract client poll observations from the request history.
+
+    Returns (derc_observations_by_group, dderc_observations_by_group). Only successful
+    GETs count - a failed poll gives the client no new knowledge."""
+    derc: dict[int, list[_Observation]] = {}
+    dderc: dict[int, list[_Observation]] = {}
+    for req in sorted_requests:
+        if req.method != "GET" or not (200 <= int(req.status) < 300):
+            continue
+        m = _DDERC_PATH_RE.search(req.path)
+        if m:
+            dderc.setdefault(int(m.group(1)), []).append(_Observation(req.timestamp, (req.step_name or "").strip()))
+            continue
+        m = _DERC_PATH_RE.search(req.path)
+        if m:
+            derc.setdefault(int(m.group(1)), []).append(_Observation(req.timestamp, (req.step_name or "").strip()))
+    return derc, dderc
 
 
-def _effective_end_for_doe(doe: _RawDOE) -> datetime | None:
-    """Returns the effective end time for a DOE, or None if no valid window exists."""
-    base_end = doe.start_time + timedelta(seconds=doe.duration_seconds)
-    if doe.is_archive:
-        if doe.deleted_time is not None and doe.deleted_time > doe.start_time:
-            return min(base_end, doe.deleted_time)
-        if doe.archive_time is not None and doe.archive_time > doe.start_time:
-            return min(base_end, doe.archive_time)
-        return None
-    return base_end
+def _synthesize_control_observations(
+    group_does: list[_RawDOE], group_id: int, sorted_requests: list[RequestEntry]
+) -> list[_Observation]:
+    """Instant-knowledge observations at every server-side control change. Used for subscribed
+    groups (notifications assumed delivered at the moment of change) and as the fallback when
+    no polls exist at all."""
+    times: set[datetime] = set()
+    for row in group_does:
+        times.add(row.created_time)
+        boundary = _boundary_time(row)
+        if boundary < _FAR_FUTURE:
+            times.add(boundary)
+    return [_Observation(t, _step_name_at(sorted_requests, group_id, t)) for t in sorted(times)]
 
 
-def _align_effective_ends_to_client_transitions(enriched: list[_EnrichedControl]) -> None:
-    """Align each control's effective_end to when the client transitions to the next one.
-
-    A control remains the client's active control until receipt_time of the next control
-    in the same group, regardless of when the server superseded it. For subscribed groups
-    receipt_time ≈ created_time ≈ deleted_time so this is a no-op; for polled groups it
-    closes the gap between server supersession and the next client poll.
-    """
-    for group_id in {c.site_control_group_id for c in enriched}:
-        group_controls = sorted(
-            [c for c in enriched if c.site_control_group_id == group_id],
-            key=lambda c: (c.receipt_time, c.doe.dynamic_operating_envelope_id),
-        )
-        for i in range(len(group_controls) - 1):
-            ctrl = group_controls[i]
-            next_receipt = group_controls[i + 1].receipt_time
-            if next_receipt <= ctrl.effective_start:
-                continue
-            base_end = ctrl.doe.start_time + timedelta(seconds=ctrl.doe.duration_seconds)
-            ctrl.effective_end = min(base_end, next_receipt)
+def _synthesize_default_observations(group_defaults: list[_RawDefault]) -> list[_Observation]:
+    """Instant-knowledge observations at every server-side default change."""
+    times: set[datetime] = set()
+    for row in group_defaults:
+        times.add(row.changed_time)
+        boundary = _default_boundary(row)
+        if boundary < _FAR_FUTURE:
+            times.add(boundary)
+    return [_Observation(t) for t in sorted(times)]
 
 
-def _build_enriched_controls(
+def _assemble_observations(polls: list[_Observation], synthesized: list[_Observation]) -> list[_Observation]:
+    """Merge and time-dedupe observations (first non-empty step name wins per instant)."""
+    by_time: dict[datetime, _Observation] = {}
+    for obs in polls + synthesized:
+        existing = by_time.get(obs.time)
+        if existing is None:
+            by_time[obs.time] = obs
+        elif not existing.step_name and obs.step_name:
+            existing.step_name = obs.step_name
+    return [by_time[t] for t in sorted(by_time)]
+
+
+def _build_group_observations(
     all_does: list[_RawDOE],
-    test_start: datetime,
-    groups_by_id: dict[int, _RawControlGroup],
+    all_defaults: list[_RawDefault],
+    sorted_requests: list[RequestEntry],
     subscribed_group_ids: set[int],
-    request_history: list[RequestEntry],
-    doe_tags: dict[int, str],
-) -> list[_EnrichedControl]:
-    sorted_requests = sorted(request_history, key=lambda r: r.timestamp)
-    enriched: list[_EnrichedControl] = []
+    default_subscribed_group_ids: set[int],
+) -> tuple[dict[int, list[_Observation]], dict[int, list[_Observation]]]:
+    """Assemble per-group observation events for controls (derc) and defaults (dderc).
+
+    Polls come from the request history. Subscribed groups additionally get instant-knowledge
+    observations at every server-side change. Groups with neither polls nor a subscription
+    fall back to instant knowledge with a warning."""
+    derc_polls, dderc_polls = _collect_poll_observations(sorted_requests)
+
+    does_by_group: dict[int, list[_RawDOE]] = {}
     for doe in all_does:
-        # Skip superseded controls. Active DOEs: their effective history is in archive.
-        # Archive DOEs with superseded=True are mass-delete snapshots — their validity
-        # window is already covered by the earlier superseded=False archive for the same DOE.
-        if doe.superseded:
-            continue
+        does_by_group.setdefault(doe.site_control_group_id, []).append(doe)
+    default_rows_by_group: dict[int, list[_RawDefault]] = {}
+    for d in all_defaults:
+        default_rows_by_group.setdefault(d.site_control_group_id, []).append(d)
 
-        # Only include controls created during the test
-        if doe.created_time < test_start:
-            continue
+    derc_observations: dict[int, list[_Observation]] = {}
+    for gid, group_does in does_by_group.items():
+        polls = derc_polls.get(gid, [])
+        synthesized: list[_Observation] = []
+        if gid in subscribed_group_ids:
+            # Subscribed: notifications assumed delivered the moment the server changes
+            synthesized = _synthesize_control_observations(group_does, gid, sorted_requests)
+        elif not polls:
+            logger.warning(
+                "power_limit_chart: no DERControl polls or subscription for group %d - assuming instant knowledge", gid
+            )
+            synthesized = _synthesize_control_observations(group_does, gid, sorted_requests)
+        derc_observations[gid] = _assemble_observations(polls, synthesized)
 
-        effective_end = _effective_end_for_doe(doe)
-        if effective_end is None:
-            continue
+    dderc_observations: dict[int, list[_Observation]] = {}
+    for gid, group_defaults in default_rows_by_group.items():
+        polls = dderc_polls.get(gid, [])
+        synthesized = []
+        if gid in default_subscribed_group_ids:
+            synthesized = _synthesize_default_observations(group_defaults)
+        elif not polls:
+            logger.warning(
+                "power_limit_chart: no DefaultDERControl polls or subscription for group %d"
+                " - assuming instant knowledge",
+                gid,
+            )
+            synthesized = _synthesize_default_observations(group_defaults)
+        dderc_observations[gid] = _assemble_observations(polls, synthesized)
 
-        group = groups_by_id.get(doe.site_control_group_id)
+    return derc_observations, dderc_observations
+
+
+def _knowledge_segments(
+    versions: list[_ControlVersion], observations: list[_Observation]
+) -> tuple[list[tuple[_RawDOE, datetime, datetime]], datetime | None, str]:
+    """Walk a DOE's observations, returning ((row, start, end) segments, receipt_time, receipt_step).
+
+    At each observation the client's belief becomes the server version at that instant; between
+    observations the client executes the schedule it last saw. receipt_time is None when the
+    client never observed the control."""
+    receipt: datetime | None = None
+    receipt_step = ""
+    segments: list[tuple[_RawDOE, datetime, datetime]] = []
+
+    for i, obs in enumerate(observations):
+        span_end = observations[i + 1].time if i + 1 < len(observations) else _FAR_FUTURE
+        version = _version_at(versions, obs.time)
+        if version is None or version.row.superseded:
+            continue  # The client sees the control as absent / cancelled / superseded
+        if receipt is None:
+            receipt = obs.time
+            receipt_step = obs.step_name
+        row = version.row
+        seg_start = max(row.start_time, obs.time)
+        seg_end = min(row.start_time + timedelta(seconds=row.duration_seconds), span_end)
+        if seg_end <= seg_start:
+            continue
+        if segments and segments[-1][0] is row and segments[-1][2] >= seg_start:
+            segments[-1] = (row, segments[-1][1], max(segments[-1][2], seg_end))
+        else:
+            segments.append((row, seg_start, seg_end))
+
+    return segments, receipt, receipt_step
+
+
+def _replay_control_knowledge(
+    all_does: list[_RawDOE],
+    observations_by_group: dict[int, list[_Observation]],
+    groups_by_id: dict[int, _RawControlGroup],
+    doe_tags: dict[int, str],
+    test_start: datetime,
+) -> list[_EnrichedControl]:
+    """Replays the client's knowledge of each DOE from its group's observation events.
+
+    A control enters the client's world at the first observation that shows it (receipt).
+    Between observations the client executes the schedule it last saw; a cancellation,
+    supersession or value update only takes effect at the next observation that reveals it.
+    A control the client never observed contributes nothing."""
+    versions_by_id = _build_control_versions(all_does)
+    enriched: list[_EnrichedControl] = []
+
+    for doe_id, versions in versions_by_id.items():
+        if not versions:
+            continue
+        first_row = versions[0].row
+        group = groups_by_id.get(first_row.site_control_group_id)
         if group is None:
             continue
-
-        receipt, inferred_step = _compute_receipt_time_and_step(
-            doe, doe.site_control_group_id, subscribed_group_ids, sorted_requests
-        )
-        # Prefer the tag recorded at control-creation time; fall back to the step name
-        # inferred from request timestamps (less reliable when creation occurs during
-        # the same request that polls the DERC list).
-        step_name = doe_tags.get(doe.dynamic_operating_envelope_id, inferred_step)
-        effective_start = max(doe.start_time, receipt)
-
-        if effective_start >= effective_end:
+        # Only include controls created during the test
+        if first_row.created_time < test_start:
             continue
 
-        enriched.append(
-            _EnrichedControl(
-                doe=doe,
-                site_control_group_id=doe.site_control_group_id,
-                primacy=group.primacy,
-                receipt_time=receipt,
-                effective_start=effective_start,
-                effective_end=effective_end,
-                step_name=step_name,
+        observations = observations_by_group.get(group.site_control_group_id, [])
+        segments, receipt, receipt_step = _knowledge_segments(versions, observations)
+        if receipt is None:
+            continue
+        # Prefer the tag recorded at control-creation time; fall back to the step name
+        # active when the client first observed the control.
+        step_name = doe_tags.get(doe_id, receipt_step)
+        for row, seg_start, seg_end in segments:
+            enriched.append(
+                _EnrichedControl(
+                    doe=row,
+                    site_control_group_id=group.site_control_group_id,
+                    primacy=group.primacy,
+                    receipt_time=receipt,
+                    effective_start=seg_start,
+                    effective_end=seg_end,
+                    step_name=step_name,
+                )
             )
-        )
     return enriched
 
 
-# ─── Default control helpers ──────────────────────────────────────────────────
-
-
-def _default_active_window(d: _DefaultLike) -> tuple[datetime, datetime] | None:
-    """Returns the (start, end) time window during which this default was active.
-    Returns None if the archive_time is missing (should not happen; silently ignored)."""
-    if d.is_archive:
-        if d.archive_time is None:
-            return None
-        return d.changed_time, d.archive_time
-    # Active default: valid from changed_time to the far future
-    far_future = datetime(9999, 1, 1, tzinfo=d.changed_time.tzinfo)
-    return d.changed_time, far_future
-
-
-def _build_defaults_by_group(all_defaults: list[_DefaultLike]) -> dict[int, list[_DefaultLike]]:
-    result: dict[int, list[_DefaultLike]] = {}
+def _replay_default_knowledge(
+    all_defaults: list[_RawDefault],
+    observations_by_group: dict[int, list[_Observation]],
+) -> dict[int, list[_KnownDefault]]:
+    """Replays the client's knowledge of each group's default control from dderc observations."""
+    rows_by_group: dict[int, list[_RawDefault]] = {}
     for d in all_defaults:
-        result.setdefault(d.site_control_group_id, []).append(d)
-    return result
+        rows_by_group.setdefault(d.site_control_group_id, []).append(d)
+
+    known: dict[int, list[_KnownDefault]] = {}
+    for group_id, rows in rows_by_group.items():
+        observations = observations_by_group.get(group_id, [])
+        entries: list[_KnownDefault] = []
+        for i, obs in enumerate(observations):
+            row = _default_version_at(rows, obs.time)
+            if row is None:
+                continue  # No default existed on the server at this observation
+            known_until = observations[i + 1].time if i + 1 < len(observations) else _FAR_FUTURE
+            if entries and entries[-1].row is row and entries[-1].known_until >= obs.time:
+                entries[-1].known_until = known_until
+            else:
+                entries.append(_KnownDefault(row=row, known_from=obs.time, known_until=known_until))
+        known[group_id] = entries
+    return known
 
 
 # ─── Disconnect / opModConnect tracking ───────────────────────────────────────
@@ -679,17 +887,20 @@ def _find_active_control_at(
     group_id: int,
     enriched: list[_EnrichedControl],
 ) -> _EnrichedControl | None:
-    """Find the highest-priority active enriched control for the given group at time t."""
+    """Find the control the client is following for the given group at time t.
+
+    If the client believes two overlapping controls, the most recently created wins
+    (sep2 client-side supersession)."""
     best: _EnrichedControl | None = None
     for ctrl in enriched:
         if ctrl.site_control_group_id != group_id:
             continue
         if not (ctrl.effective_start <= t < ctrl.effective_end):
             continue
-        if best is None:
-            best = ctrl
-        # Archive records take priority over active (they represent confirmed historical windows)
-        elif ctrl.doe.is_archive and not best.doe.is_archive:
+        if best is None or (ctrl.doe.created_time, ctrl.doe.dynamic_operating_envelope_id) > (
+            best.doe.created_time,
+            best.doe.dynamic_operating_envelope_id,
+        ):
             best = ctrl
     return best
 
@@ -699,13 +910,9 @@ def _find_active_default_at(
     group_id: int,
     defaults_by_group: dict[int, list[_DefaultLike]],
 ) -> _DefaultLike | None:
-    """Find the active default control for the given group at time t."""
+    """Find the default control the client knew about for the given group at time t."""
     for d in defaults_by_group.get(group_id, []):
-        window = _default_active_window(d)
-        if window is None:
-            continue
-        start, end = window
-        if start <= t < end:
+        if d.known_from <= t < d.known_until:
             return d
     return None
 
@@ -902,14 +1109,10 @@ def _collect_event_times(
         times.add(ctrl.effective_end)
     for defaults in defaults_by_group.values():
         for d in defaults:
-            window = _default_active_window(d)
-            if window is None:
-                continue
-            start, end = window
-            if test_start < start < test_end:
-                times.add(start)
-            if test_start < end < test_end:
-                times.add(end)
+            if test_start < d.known_from < test_end:
+                times.add(d.known_from)
+            if test_start < d.known_until < test_end:
+                times.add(d.known_until)
     for ds, de in disconnect_intervals:
         if test_start <= ds <= test_end:
             times.add(ds)
@@ -1496,14 +1699,17 @@ async def generate_power_limit_chart_html(
     has_storage_target = await _check_has_storage_target(session)
     all_does = await _get_does(session, has_storage_target)
     all_defaults = await _get_defaults(session, has_storage_target)
-    defaults_by_group = _build_defaults_by_group(all_defaults)
 
     subscribed_group_ids = await _get_subscribed_group_ids(session)
+    default_subscribed_group_ids = await _get_subscribed_group_ids(session, SubscriptionResource.DEFAULT_SITE_CONTROL)
 
-    enriched = _build_enriched_controls(
-        all_does, test_start, groups_by_id, subscribed_group_ids, request_history, doe_tags or {}
+    sorted_requests = sorted(request_history, key=lambda r: r.timestamp)
+    derc_observations, dderc_observations = _build_group_observations(
+        all_does, all_defaults, sorted_requests, subscribed_group_ids, default_subscribed_group_ids
     )
-    _align_effective_ends_to_client_transitions(enriched)
+
+    enriched = _replay_control_knowledge(all_does, derc_observations, groups_by_id, doe_tags or {}, test_start)
+    defaults_by_group = _replay_default_knowledge(all_defaults, dderc_observations)
 
     disconnect_intervals = _compute_disconnect_intervals(enriched, test_end)
 
