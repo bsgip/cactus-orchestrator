@@ -982,7 +982,7 @@ def test_get_effective_upper_at_storage_target_from_default():
     group = _u_group()
     val, src = _get_effective_upper_at(t, [group], [], _u_known_defaults(default))
     assert val == pytest.approx(4000.0)
-    assert src is not None and src.row is default
+    assert isinstance(src, _KnownDefault) and src.row is default
 
 
 def test_get_effective_lower_at_storage_target_from_default():
@@ -992,7 +992,7 @@ def test_get_effective_lower_at_storage_target_from_default():
     group = _u_group()
     val, src = _get_effective_lower_at(t, [group], [], _u_known_defaults(default))
     assert val == pytest.approx(2000.0)
-    assert src is not None and src.row is default
+    assert isinstance(src, _KnownDefault) and src.row is default
 
 
 # ─── Scenario A: Single program, export curtailment steps with AS4777 ramps ──

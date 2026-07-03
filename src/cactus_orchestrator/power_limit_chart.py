@@ -224,7 +224,7 @@ class _LimitEvent:
 
     time: datetime
     target: float  # Watts (positive = export ceiling, negative = import floor)
-    source: object | None  # _EnrichedControl | _DefaultLike | None (unconstrained)
+    source: _EnrichedControl | _DefaultLike | None  # None = unconstrained
     instant: bool = False  # True for disconnect/energise boundaries (ramp = 0s)
 
 
@@ -924,7 +924,7 @@ def _resolve_type_limit(
     defaults_by_group: dict[int, list[_DefaultLike]],
     get_ctrl_val: Callable[[_EnrichedControl], float | None],
     get_default_val: Callable[[_DefaultLike], float | None],
-) -> tuple[float | None, object | None]:
+) -> tuple[float | None, _EnrichedControl | _DefaultLike | None]:
     """Resolve the effective limit for a single control type independently.
 
     Phase 1 — active controls in primacy order: the first group whose active control
@@ -957,7 +957,7 @@ def _get_effective_upper_at(
     sorted_groups: list[_RawControlGroup],
     enriched: list[_EnrichedControl],
     defaults_by_group: dict[int, list[_DefaultLike]],
-) -> tuple[float | None, object | None]:
+) -> tuple[float | None, _EnrichedControl | _DefaultLike | None]:
     """Returns (effective_limit_watts, source) for the upper bound at time t.
 
     Export and generation limits are each resolved independently (active controls →
@@ -1002,7 +1002,7 @@ def _get_effective_lower_at(
     sorted_groups: list[_RawControlGroup],
     enriched: list[_EnrichedControl],
     defaults_by_group: dict[int, list[_DefaultLike]],
-) -> tuple[float | None, object | None]:
+) -> tuple[float | None, _EnrichedControl | _DefaultLike | None]:
     """Returns (effective_limit_watts, source) for the lower bound at time t.
     Returns a positive magnitude value — caller negates it for display.
 
@@ -1055,7 +1055,7 @@ def _rate_based_duration(grad_w_hundredths: float, delta_w: float, set_max_w: fl
 
 
 def _compute_ramp(
-    source: object | None,
+    source: _EnrichedControl | _DefaultLike | None,
     at_time: datetime,
     delta_w: float,
     set_max_w: float,
