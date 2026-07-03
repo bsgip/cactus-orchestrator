@@ -203,7 +203,7 @@ async def test_generate_compliance_artifact(pg_compliance_config):
     # Arrange
     compliance_request_id = 2
     user_context = UserContext(
-        subject_id="admin-user",
+        subject_id="admin1",
         issuer_id="https://test-cactus-issuer.example.com",
         permissions=[AuthPerm.admin_all],
     )

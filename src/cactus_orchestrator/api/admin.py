@@ -43,11 +43,12 @@ from cactus_orchestrator.auth import AuthPerm, UserContext, jwt_validator
 from cactus_orchestrator.chart import generate_power_limit_chart
 from cactus_orchestrator.crud import (
     ACTIVE_RUN_STATUSES,
-    delete_compliance_request,
     finalise_compliance_request,
     insert_compliance_generation_record,
+    safe_delete_compliance_request,
     select_admin_stats,
     select_compliance_request,
+    select_compliance_request_finalisation,
     select_compliance_requests,
     select_group_runs_aggregated_by_procedure,
     select_group_runs_for_procedure,
@@ -700,7 +701,18 @@ async def admin_delete_compliance_request_endpoint(
         logger.debug(exc)
         raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Not Found") from exc
 
-    await delete_compliance_request(session=db.session, compliance_request=request)
+    try:
+        request_deletable = await safe_delete_compliance_request(session=db.session, compliance_request=request)
+    except Exception as exc:
+        logger.debug(exc)
+        raise HTTPException(
+            status_code=HTTPStatus.INTERNAL_SERVER_ERROR, detail="Failed to delete compliance request"
+        ) from exc
+
+    if not request_deletable:
+        raise HTTPException(
+            status_code=HTTPStatus.BAD_REQUEST, detail="Compliance Request has been finalised. Unable to delete."
+        )
 
     await db.session.commit()
     return Response(status_code=HTTPStatus.OK)
@@ -711,16 +723,16 @@ async def admin_fetch_compliance_request_artifact(
     compliance_request_id: int,
     user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.admin_all}))],
 ) -> Response:
-    compliance_request = await select_compliance_request(
-        session=db.session, compliance_request_id=compliance_request_id, include_file_data=True
+    compliance_request_finalisation = await select_compliance_request_finalisation(
+        session=db.session, compliance_request_id=compliance_request_id
     )
 
-    if compliance_request is None or compliance_request.file_data is None:
+    if compliance_request_finalisation is None:
         raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Not Found")
 
     return Response(
         status_code=HTTPStatus.OK,
-        content=compliance_request.file_data,
+        content=compliance_request_finalisation.file_data,
         media_type="application/pdf",
         headers={"Content-Disposition": f"attachment; filename=ComplianceReport-{compliance_request_id}.pdf"},
     )
@@ -764,7 +776,10 @@ async def admin_finalise_compliance_request(
     except NoResultFound as err:
         raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="TODO ERROR MESSAGE") from err
 
-    # Update the compliance record to include pdf data (also sets status and updated by)
+    if compliance_artifact is None:
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Compliance Artifact does not exist.")
+
+    # Update the compliance record and create finalisation record which includes the pdf data
     try:
         await finalise_compliance_request(
             db.session,
