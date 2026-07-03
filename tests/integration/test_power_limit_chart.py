@@ -33,7 +33,7 @@ from envoy.server.model.subscription import Subscription, SubscriptionResource
 from sqlalchemy import text
 
 from cactus_orchestrator.power_limit_chart import (
-    _build_defaults_by_group,
+    _FAR_FUTURE,
     _check_has_storage_target,
     _EnrichedControl,
     _get_control_groups,
@@ -43,6 +43,7 @@ from cactus_orchestrator.power_limit_chart import (
     _get_effective_lower_at,
     _get_effective_upper_at,
     _get_subscribed_group_ids,
+    _KnownDefault,
     _RawControlGroup,
     _RawDefault,
     _RawDOE,
@@ -64,6 +65,20 @@ def _poll(group_id: int, when: datetime, req_id: int = 0, step_name: str = "") -
     return RequestEntry(
         url=f"https://envoy.example.com/edev/1/derp/{group_id}/derc",
         path=f"/edev/1/derp/{group_id}/derc",
+        method=HTTPMethod.GET,
+        status=HTTPStatus.OK,
+        timestamp=when,
+        step_name=step_name,
+        body_xml_errors=[],
+        request_id=req_id,
+    )
+
+
+def _dderc_poll(group_id: int, when: datetime, req_id: int = 0, step_name: str = "") -> RequestEntry:
+    """Construct a fake DefaultDERControl poll request."""
+    return RequestEntry(
+        url=f"https://envoy.example.com/edev/1/derp/{group_id}/dderc",
+        path=f"/edev/1/derp/{group_id}/dderc",
         method=HTTPMethod.GET,
         status=HTTPStatus.OK,
         timestamp=when,
@@ -112,6 +127,7 @@ def _make_doe(
         set_energized=set_energized,
         set_point_percentage=None,
         randomize_start_seconds=None,
+        storage_target_active_watts=None,
     )
 
 
@@ -171,6 +187,7 @@ def _make_archive_doe(
         superseded=superseded,
         set_point_percentage=None,
         randomize_start_seconds=None,
+        storage_target_active_watts=None,
         display_id=None,
         archive_time=archive_time,
         deleted_time=deleted_time,
@@ -882,6 +899,15 @@ def _u_group(site_control_group_id: int = 1, primacy: int = 1) -> _RawControlGro
     return _RawControlGroup(site_control_group_id=site_control_group_id, primacy=primacy)
 
 
+def _u_known_defaults(default: _RawDefault) -> dict[int, list[_KnownDefault]]:
+    """Wrap a raw default as known to the client for all time."""
+    return {
+        default.site_control_group_id: [
+            _KnownDefault(row=default, known_from=T0 - timedelta(hours=1), known_until=_FAR_FUTURE)
+        ]
+    }
+
+
 @pytest.mark.parametrize(
     "export_limit, gen_limit, storage_target, expected_watts",
     [
@@ -954,9 +980,9 @@ def test_get_effective_upper_at_storage_target_from_default():
     t = T0 + timedelta(minutes=30)
     default = _u_default(storage_target=4000.0)
     group = _u_group()
-    val, src = _get_effective_upper_at(t, [group], [], _build_defaults_by_group([default]))
+    val, src = _get_effective_upper_at(t, [group], [], _u_known_defaults(default))
     assert val == pytest.approx(4000.0)
-    assert src is default
+    assert src is not None and src.row is default
 
 
 def test_get_effective_lower_at_storage_target_from_default():
@@ -964,9 +990,9 @@ def test_get_effective_lower_at_storage_target_from_default():
     t = T0 + timedelta(minutes=30)
     default = _u_default(storage_target=-2000.0)
     group = _u_group()
-    val, src = _get_effective_lower_at(t, [group], [], _build_defaults_by_group([default]))
+    val, src = _get_effective_lower_at(t, [group], [], _u_known_defaults(default))
     assert val == pytest.approx(2000.0)
-    assert src is default
+    assert src is not None and src.row is default
 
 
 # ─── Scenario A: Single program, export curtailment steps with AS4777 ramps ──
@@ -1154,6 +1180,7 @@ async def test_chart_ramptms_and_defaults(pg_envoy_base_config):
                 generation_limit_active_watts=None,
                 load_limit_active_watts=None,
                 ramp_rate_percent_per_second=None,
+                storage_target_active_watts=None,
                 changed_time=T0 - timedelta(minutes=1),
             )
         )
@@ -1237,6 +1264,7 @@ async def test_chart_op_mod_connect(pg_envoy_base_config):
                 generation_limit_active_watts=None,
                 load_limit_active_watts=None,
                 ramp_rate_percent_per_second=None,
+                storage_target_active_watts=None,
                 changed_time=T0 - timedelta(minutes=1),
             )
         )
@@ -1326,6 +1354,7 @@ async def test_chart_op_mod_connect_expiry(pg_envoy_base_config):
                 generation_limit_active_watts=None,
                 load_limit_active_watts=None,
                 ramp_rate_percent_per_second=None,
+                storage_target_active_watts=None,
                 changed_time=T0 - timedelta(minutes=1),
             )
         )
@@ -1624,6 +1653,7 @@ async def test_chart_op_mod_energise(pg_envoy_base_config):
                 generation_limit_active_watts=None,
                 load_limit_active_watts=None,
                 ramp_rate_percent_per_second=None,
+                storage_target_active_watts=None,
                 changed_time=T0 - timedelta(minutes=1),
             )
         )
@@ -1673,4 +1703,121 @@ async def test_chart_op_mod_energise(pg_envoy_base_config):
     out = _out("scenario_F_op_mod_energise0.html")
     out.write_text(html)
     print(f"\n  ✓ Scenario F → {out}")
+
+
+# ─── Scenario G: ALL-28 — cancellation hands over to a CHANGED default ────────
+
+
+async def test_chart_all28_cancellation_to_changed_default(pg_envoy_base_config):
+    """
+    Reproduces ALL-28 steps (e)-(l): the default is changed (setGradW=100 → 1%/s) while DERC3
+    is active; DERC3 is then cancelled; the device must ramp to the 0W default at 1%/s from the
+    poll where it OBSERVES the cancellation (not the server-side deletion moment), then ramp to
+    DERC4 at the same 1%/s.
+
+    Timeline (setMaxW=10000, DERC polls every 60s at :30 offsets):
+      - T+1m:     dderc poll → default (imp=0, exp=0, no setGradW) becomes known
+      - T+3m:     DERC3 (exp/imp 5000, 15min duration) starts (polled at T+2m30s)
+      - T+7m:     default changed to imp=0 / exp=0 / setGradW=100
+      - T+7m10s:  dderc poll → changed default becomes known (DERC3 active → no ramp yet)
+      - T+8m:     DERC3 cancelled (deleted server-side)
+      - T+8m30s:  poll reveals the cancellation → ramp 5000→0 W at 1%/s (50s)
+      - T+11m:    DERC4 (exp/imp 3000) starts (polled T+10m30s) → ramp 0→3000 W at 1%/s (30s)
+    """
+    test_end = T0 + timedelta(minutes=16)
+    default_changed_at = T0 + timedelta(minutes=7)
+    derc3_cancelled_at = T0 + timedelta(minutes=8)
+
+    async with generate_async_session(pg_envoy_base_config) as session:
+        site = _make_site_with_setting(aggregator_id=1)
+        session.add(site)
+        grp1 = generate_class_instance(SiteControlGroup, seed=1, site_control_group_id=1, primacy=1)
+        session.add(grp1)
+        await session.flush()
+
+        # Old default (imp=0, exp=0, no setGradW) — archived when the default was changed at T+7m
+        session.add(
+            generate_class_instance(
+                ArchiveSiteControlGroupDefault,
+                seed=1,
+                site_control_group_id=1,
+                import_limit_active_watts=Decimal("0"),
+                export_limit_active_watts=Decimal("0"),
+                generation_limit_active_watts=None,
+                load_limit_active_watts=None,
+                ramp_rate_percent_per_second=None,
+                storage_target_active_watts=None,
+                changed_time=T0 - timedelta(minutes=1),
+                archive_time=default_changed_at,
+                deleted_time=None,
+            )
+        )
+        # New default (imp=0, exp=0, setGradW=100 → 1%/s) — active from T+7m
+        session.add(
+            generate_class_instance(
+                SiteControlGroupDefault,
+                seed=2,
+                site_control_group=grp1,
+                import_limit_active_watts=Decimal("0"),
+                export_limit_active_watts=Decimal("0"),
+                generation_limit_active_watts=None,
+                load_limit_active_watts=None,
+                ramp_rate_percent_per_second=100,
+                storage_target_active_watts=None,
+                changed_time=default_changed_at,
+            )
+        )
+
+        # DERC3: 50% limits, deliberately long duration, cancelled (deleted) at T+8m
+        session.add(
+            _make_archive_doe(
+                site_id=site.site_id,
+                group_id=1,
+                doe_id=333,
+                start=T0 + timedelta(minutes=3),
+                duration_seconds=900,
+                export_limit=Decimal("5000"),
+                import_limit=Decimal("5000"),
+                deleted_time=derc3_cancelled_at,
+                seed=3,
+            )
+        )
+        # DERC4: 30% limits, created at T+10m30s, starts T+11m
+        derc4 = _make_doe(
+            site,
+            grp1,
+            offset_minutes=11,
+            duration_minutes=5,
+            export_limit=Decimal("3000"),
+            import_limit=Decimal("3000"),
+            seed=4,
+        )
+        session.add(derc4)
+        await session.commit()
+
+    polls = [_poll(1, T0 + timedelta(seconds=30 + k * 60), req_id=k) for k in range(16)]
+    polls.append(_dderc_poll(1, T0 + timedelta(minutes=1), req_id=100))
+    polls.append(_dderc_poll(1, T0 + timedelta(minutes=7, seconds=10), req_id=101))
+
+    async with generate_async_session(pg_envoy_base_config) as session:
+        html = await generate_power_limit_chart_html(session, T0, test_end, polls)
+
+    assert html is not None
+    assert "Device Power Chart" in html
+    out = _out("scenario_G_all28_cancel_to_changed_default0.html")
+    out.write_text(html)
+    print(f"\n  ✓ Scenario G → {out}")
     print(f"\n  Open all charts: ls {OUTPUT_DIR}/")
+
+    # Plotly embeds hover text in JSON where < and > are escaped
+    def _hover_in_html(hover: str) -> bool:
+        return hover.replace("<", "\\u003c").replace(">", "\\u003e") in html
+
+    # The ramp to the 0W default starts at T+8m30s (the poll that reveals the cancellation),
+    # not at the T+8m server-side deletion — and runs at the CHANGED default's 1%/s.
+    assert _hover_in_html(
+        "Control received: Default DERP1<br>Relative time: 8:30<br>"
+        "Ramping from 5000 W to 0 W<br>Ramp rate: Default setGradW=100 (50s)"
+    )
+    # DERC4 has no rampTms, so it also ramps at the changed default's 1%/s.
+    assert _hover_in_html("Ramping from 0 W to 3000 W<br>Ramp rate: Default setGradW=100 (30s)")
