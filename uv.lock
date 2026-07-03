@@ -340,7 +340,7 @@ requires-dist = [
     { name = "bandit", marker = "extra == 'dev'" },
     { name = "cactus-runner", git = "https://github.com/bsgip/cactus-runner.git?rev=v2.1.4" },
     { name = "cactus-schema", specifier = "==0.0.23" },
-    { name = "cactus-test-definitions", specifier = "==1.14.6" },
+    { name = "cactus-test-definitions", specifier = "==1.14.6.1" },
     { name = "coverage", marker = "extra == 'dev'" },
     { name = "cryptography" },
     { name = "fastapi", specifier = "==0.131.0" },
@@ -409,16 +409,16 @@ wheels = [
 
 [[package]]
 name = "cactus-test-definitions"
-version = "1.14.6"
+version = "1.14.6.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "dataclass-wizard" },
     { name = "pyyaml" },
     { name = "pyyaml-include" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/a8/5a/3e3d10fc72bab90470edc3585d28d94ee09314a53d6e4e4737a022e9fa52/cactus_test_definitions-1.14.6.tar.gz", hash = "sha256:7be86a1c9d9f257d9261ac89fe751f736c01737f621c716735c42009a055013a", size = 166823, upload-time = "2026-06-05T05:16:32.047Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/be/01/b5db842649118f0ec69551d75620e9d8003562e6b7f4ef5cc4dc89c0b686/cactus_test_definitions-1.14.6.1.tar.gz", hash = "sha256:ebc3e1d4be8c24e9f55742364818b29c6358a840c6cdc425faf0d3cb85475dc2", size = 167141, upload-time = "2026-07-03T01:49:49.037Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/50/21/335d1430373271572be39a9372b34b33506aa221a63910c6c86d00544590/cactus_test_definitions-1.14.6-py3-none-any.whl", hash = "sha256:4934e49e42d3af985e3ebb7f881dd16fa659c3dcfd69c86ec985ef960f16e551", size = 318707, upload-time = "2026-06-05T05:16:30.248Z" },
+    { url = "https://files.pythonhosted.org/packages/e6/aa/6afecad1c682bcd4a9ef22841a4ca18811d6027dc689d4f0abfce6310f85/cactus_test_definitions-1.14.6.1-py3-none-any.whl", hash = "sha256:fd9963208ab87274db0bde6af6b08705948dd131dae7019c9aff25d6dc2a5ede", size = 319241, upload-time = "2026-07-03T01:49:47.106Z" },
 ]
 
 [[package]]
