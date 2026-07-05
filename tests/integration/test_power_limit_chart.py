@@ -32,22 +32,26 @@ from envoy.server.model.site import Site, SiteDERSetting
 from envoy.server.model.subscription import Subscription, SubscriptionResource
 from sqlalchemy import text
 
-from cactus_orchestrator.power_limit_chart import (
-    _FAR_FUTURE,
+from cactus_orchestrator.power_limit_chart import generate_power_limit_chart_html
+from cactus_orchestrator.power_limit_chart.db import (
     _check_has_storage_target,
-    _EnrichedControl,
     _get_control_groups,
     _get_defaults,
     _get_der_setting,
     _get_does,
-    _get_effective_lower_at,
-    _get_effective_upper_at,
     _get_subscribed_group_ids,
-    _KnownDefault,
     _RawControlGroup,
     _RawDefault,
     _RawDOE,
-    generate_power_limit_chart_html,
+)
+from cactus_orchestrator.power_limit_chart.limits import (
+    _get_effective_lower_at,
+    _get_effective_upper_at,
+)
+from cactus_orchestrator.power_limit_chart.replay import (
+    _FAR_FUTURE,
+    _Known,
+    _KnownControlSegment,
 )
 
 OUTPUT_DIR = Path("/tmp/cactus_charts")
@@ -573,12 +577,13 @@ async def test_get_defaults_active_default_fields(pg_envoy_base_config, seed: in
     assert len(result) == 1
     row = result[0]
 
-    ignored: set[str] = {"is_archive", "archive_time"}
+    ignored: set[str] = {"is_archive", "archive_time", "deleted_time"}
     if not has_storage_target:
         ignored.add("storage_target_active_watts")
     assert_class_instance_equality(_RawDefault, original_default, row, ignored_properties=ignored)
     assert row.is_archive is False
     assert row.archive_time is None
+    assert row.deleted_time is None
 
 
 @pytest.mark.parametrize("seed, optional_is_none", product([101, 202], [True, False]))
@@ -860,12 +865,12 @@ def _u_doe(
     )
 
 
-def _u_ctrl(doe: _RawDOE) -> _EnrichedControl:
-    return _EnrichedControl(
-        doe=doe,
+def _u_ctrl(doe: _RawDOE) -> _KnownControlSegment:
+    return _KnownControlSegment(
+        row=doe,
         site_control_group_id=doe.site_control_group_id,
         primacy=1,
-        receipt_time=T0,
+        observed_at=T0,
         effective_start=T0,
         effective_end=T0 + timedelta(hours=2),
         step_name="",
@@ -891,6 +896,7 @@ def _u_default(
         ramp_rate_percent_per_second=None,
         storage_target_active_watts=storage_target,
         is_archive=False,
+        deleted_time=None,
         archive_time=None,
     )
 
@@ -899,11 +905,11 @@ def _u_group(site_control_group_id: int = 1, primacy: int = 1) -> _RawControlGro
     return _RawControlGroup(site_control_group_id=site_control_group_id, primacy=primacy)
 
 
-def _u_known_defaults(default: _RawDefault) -> dict[int, list[_KnownDefault]]:
+def _u_known_defaults(default: _RawDefault) -> dict[int, list[_Known[_RawDefault]]]:
     """Wrap a raw default as known to the client for all time."""
     return {
         default.site_control_group_id: [
-            _KnownDefault(row=default, known_from=T0 - timedelta(hours=1), known_until=_FAR_FUTURE)
+            _Known(row=default, known_from=T0 - timedelta(hours=1), known_until=_FAR_FUTURE)
         ]
     }
 
@@ -933,7 +939,7 @@ def test_get_effective_upper_at_with_active_control(
     doe = _u_doe(export_limit=export_limit, gen_limit=gen_limit, storage_target=storage_target)
     ctrl = _u_ctrl(doe)
     group = _u_group()
-    val, src = _get_effective_upper_at(t, [group], [ctrl], {})
+    val, src = _get_effective_upper_at(t, [group], {ctrl.site_control_group_id: [ctrl]}, {})
     if expected_watts is None:
         assert val is None
         assert src is None
@@ -966,7 +972,7 @@ def test_get_effective_lower_at_with_active_control(
     doe = _u_doe(import_limit=import_limit, load_limit=load_limit, storage_target=storage_target)
     ctrl = _u_ctrl(doe)
     group = _u_group()
-    val, src = _get_effective_lower_at(t, [group], [ctrl], {})
+    val, src = _get_effective_lower_at(t, [group], {ctrl.site_control_group_id: [ctrl]}, {})
     if expected_watts is None:
         assert val is None
         assert src is None
@@ -980,9 +986,9 @@ def test_get_effective_upper_at_storage_target_from_default():
     t = T0 + timedelta(minutes=30)
     default = _u_default(storage_target=4000.0)
     group = _u_group()
-    val, src = _get_effective_upper_at(t, [group], [], _u_known_defaults(default))
+    val, src = _get_effective_upper_at(t, [group], {}, _u_known_defaults(default))
     assert val == pytest.approx(4000.0)
-    assert isinstance(src, _KnownDefault) and src.row is default
+    assert isinstance(src, _Known) and src.row is default
 
 
 def test_get_effective_lower_at_storage_target_from_default():
@@ -990,9 +996,9 @@ def test_get_effective_lower_at_storage_target_from_default():
     t = T0 + timedelta(minutes=30)
     default = _u_default(storage_target=-2000.0)
     group = _u_group()
-    val, src = _get_effective_lower_at(t, [group], [], _u_known_defaults(default))
+    val, src = _get_effective_lower_at(t, [group], {}, _u_known_defaults(default))
     assert val == pytest.approx(2000.0)
-    assert isinstance(src, _KnownDefault) and src.row is default
+    assert isinstance(src, _Known) and src.row is default
 
 
 # ─── Scenario A: Single program, export curtailment steps with AS4777 ramps ──
@@ -1211,6 +1217,7 @@ async def test_chart_ramptms_and_defaults(pg_envoy_base_config):
 
     # Near-instant polls (simulating subscription-speed receipt)
     polls = [
+        _dderc_poll(1, T0 + timedelta(seconds=5), req_id=0),
         _poll(1, created_times["ctrl1"] + timedelta(seconds=1), req_id=1),
         _poll(1, created_times["ctrl2"] + timedelta(seconds=1), req_id=2),
     ]
@@ -1301,6 +1308,7 @@ async def test_chart_op_mod_connect(pg_envoy_base_config):
         await session.commit()
 
     polls = [
+        _dderc_poll(1, T0 + timedelta(seconds=5), req_id=0),
         _poll(1, created_times["export"] + timedelta(seconds=60), req_id=1),
         _poll(1, created_times["disconnect"] + timedelta(seconds=60), req_id=2),
         _poll(1, created_times["reconnect"] + timedelta(seconds=60), req_id=3),
@@ -1383,6 +1391,7 @@ async def test_chart_op_mod_connect_expiry(pg_envoy_base_config):
         await session.commit()
 
     polls = [
+        _dderc_poll(1, T0 + timedelta(seconds=5), req_id=0),
         _poll(1, created_times["export"] + timedelta(seconds=60), req_id=1),
         _poll(1, created_times["disconnect"] + timedelta(seconds=60), req_id=2),
     ]
@@ -1690,6 +1699,7 @@ async def test_chart_op_mod_energise(pg_envoy_base_config):
         await session.commit()
 
     polls = [
+        _dderc_poll(1, T0 + timedelta(seconds=5), req_id=0),
         _poll(1, created_times["export"] + timedelta(seconds=60), req_id=1),
         _poll(1, created_times["de-energise"] + timedelta(seconds=60), req_id=2),
         _poll(1, created_times["re-energise"] + timedelta(seconds=60), req_id=3),
