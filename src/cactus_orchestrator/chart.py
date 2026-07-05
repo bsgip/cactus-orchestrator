@@ -57,8 +57,9 @@ async def generate_power_limit_chart(run_artifact: RunArtifact, video_start_seco
     Returns the HTML string, or None if the artifact lacks sufficient DER data to build
     the chart (e.g. no SiteDERSettings or SiteControlGroups were ever created).
 
-    Raises ValueError if the artifact pre-dates power limit chart support (no dumps present)
-    or if the reporting data cannot be deserialized.
+    Raises ValueError if the artifact pre-dates power limit chart support (no dumps present),
+    if the reporting data cannot be deserialized, or if the client never polled/subscribed to
+    a control list despite controls existing (non-compliant client; knowledge cannot be modelled).
     """
     schema_sql, data_sql = extract_envoy_dumps(run_artifact.file_data)
 
