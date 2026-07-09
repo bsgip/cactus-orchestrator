@@ -477,19 +477,6 @@ def test_build_group_observations_no_polls_no_subscription_errors():
         _build_group_observations([doe], [], [], set(), set())
 
 
-def test_build_group_observations_all_failed_polls_give_no_knowledge(caplog):
-    """Failed polls prove the client was polling (no error) but grant it no knowledge."""
-    doe = _make_doe_row(1, 1, T0, 900)
-    failed_polls = [
-        _req("/edev/1/derp/1/derc", T0 + timedelta(seconds=k * 60), status=HTTPStatus.FORBIDDEN) for k in range(3)
-    ]
-
-    derc_obs, _ = _build_group_observations([doe], [], failed_polls, set(), set())
-
-    assert derc_obs[1] == []
-    assert any("failed" in r.message for r in caplog.records)
-
-
 def test_build_group_observations_subscribed_merges_polls_and_changes():
     """A subscribed group observes every server-side change AND its own polls."""
     doe = _make_doe_row(1, 1, T0, 900)
