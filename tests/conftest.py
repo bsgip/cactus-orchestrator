@@ -1,7 +1,9 @@
 import base64
 import os
+import tempfile
 from collections.abc import Generator
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from unittest.mock import AsyncMock, Mock, patch
 
 import jwt
@@ -359,10 +361,48 @@ def pg_compliance_config(pg_empty_config):
 
 
 @pytest.fixture
-async def client(pg_empty_config, patch_jwks_request):
+def pki_tmp_files(
+    preserved_environment,
+    serca_cert_key_pair: tuple[x509.Certificate, ec.EllipticCurvePrivateKey],
+    envoy_ee_cert_key_pair: tuple[x509.Certificate, ec.EllipticCurvePrivateKey],
+):
+    """Loads up the EE / serca certs into a temp directory. writes those paths into the env config settings"""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        serca_path = str(Path(tmp_dir) / "serca.crt.pem")
+        envoy_ee_fullchain_path = str(Path(tmp_dir) / "ee.fullchain.pem")
+        envoy_key_path = str(Path(tmp_dir) / "ee.key.pem")
+
+        with open(serca_path, "wb") as fp:
+            fp.write(serca_cert_key_pair[0].public_bytes(serialization.Encoding.PEM))
+
+        with open(envoy_ee_fullchain_path, "wb") as fp:
+            fp.write(envoy_ee_cert_key_pair[0].public_bytes(serialization.Encoding.PEM))
+
+        with open(envoy_key_path, "wb") as fp:
+            fp.write(
+                envoy_ee_cert_key_pair[1].private_bytes(
+                    serialization.Encoding.PEM,
+                    format=serialization.PrivateFormat.PKCS8,
+                    encryption_algorithm=serialization.NoEncryption(),
+                )
+            )
+
+        os.environ["CERT_SERCA_PATH"] = serca_path
+        os.environ["CERT_ENVOY_EE_FULLCHAIN_PATH"] = envoy_ee_fullchain_path
+        os.environ["CERT_ENVOY_EE_KEY_PATH"] = envoy_key_path
+
+        yield
+
+
+@pytest.fixture
+async def client(
+    pki_tmp_files,
+    pg_empty_config,
+    patch_jwks_request,
+):
     from cactus_orchestrator.main import generate_app
 
-    # This is a sideeffect of some nasty globals that should be unpicked in the future
+    # This is a side effect of some nasty globals that should be unpicked in the future
     jwt_validator._reload_settings()
     _reset_current_settings()
 

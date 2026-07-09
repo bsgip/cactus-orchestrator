@@ -135,7 +135,7 @@ async def test_get_version(
         (["my/image/postgres", "my/image/runner"], [], None),
         (["my/image/postgres", "my/image/runner"], ["my/image/runner"], ImageNotFound),
         (
-            ["my/image/postgres", "my/image/envoy", "my/image/runner", "my/image/init"],
+            ["my/image/postgres", "my/image/envoy", "my/image/runner"],
             [],
             None,
         ),
@@ -159,7 +159,6 @@ async def test_ensure_images(
         "my/image/postgres",
         "my/image/envoy",
         "my/image/runner",
-        "my/image/init",
     ]
 
     def _image_get(image: str):
