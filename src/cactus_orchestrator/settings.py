@@ -1,80 +1,121 @@
 import logging
 import os
+from collections import defaultdict
 
-from kubernetes import client, config
 from pydantic import PostgresDsn
-from pydantic_settings import BaseSettings
+from pydantic.fields import FieldInfo
+from pydantic_settings import BaseSettings, PydanticBaseSettingsSource
 
-TLS_SERVER_SECRET_NAME_FORMAT = "tls-server-{domain}"  # noqa: S105 # nosec B105
-TLS_CA_SECRET_NAME_FORMAT = "tls-ca-{ingress_name}"  # noqa: S105 # nosec B105
-# NOTE: follwing two must be kept similar
-DEFAULT_INGRESS_PATH_FORMAT = "/{svc_name}/(.*)"
-TEST_EXECUTION_URL_FORMAT = "https://{fqdn}/{svc_name}"
-
-STATEFULSET_POD_NAME_FORMAT = "{statefulset_name}-0"  # TODO: k8s naming scheme of a statefulsets pod, how to do better?
-RUNNER_SVC_URL = "http://{svc_name}.{namespace}.svc.cluster.local:{svc_port}"
-
+from cactus_orchestrator.pod.models import PodImages
 
 logger = logging.getLogger(__name__)
-
-
-def load_k8s_config() -> None:
-    """Loads the Kubernetes configuration."""
-    if os.getenv("CACTUS_PYTEST_WITHOUT_KUBERNETES", "").lower() == "true":
-        logger.warning("Skipping k8s configuration load...")
-        return
-    try:
-        config.incluster_config.load_incluster_config()  # If running inside a cluster
-    except config.config_exception.ConfigException:
-        config.kube_config.load_kube_config()  # If running locally
 
 
 class CactusOrchestratorError(Exception): ...  # noqa: E701
 
 
-class CactusOrchestratorSettings(BaseSettings):
-    # misc
-    kubernetes_load_config: bool = True  # just for pytests TODO: find a better way
+class ImagesEnvSource(PydanticBaseSettingsSource):
+    """
+    Parses CACTUS_IMAGE__<version_key>__<field> env vars into dict[str, PodImages].
+    Only handles the `images` field — everything else is left to other sources.
+    """
 
-    # test orchestration
-    test_orchestration_namespace: str = "test-orchestration"
+    PREFIX = "CACTUS_IMAGE__"
+
+    def get_field_value(self, field: FieldInfo, field_name: str) -> tuple[dict | None, str, bool]:
+        if field_name != "images":
+            return None, field_name, False
+
+        nested = defaultdict(dict)
+        for key, val in os.environ.items():
+            if not key.upper().startswith(self.PREFIX):
+                continue
+            # CACTUS_IMAGES__V1_2__DB → ("V1_2", "db")
+            remainder = key[len(self.PREFIX) :]
+            parts = remainder.split("__", 1)
+            if len(parts) != 2:
+                continue
+            version_key, field_key = parts
+            nested[version_key][field_key.lower()] = val
+
+        images = {v["csip_aus_version"]: PodImages(**v) for v in nested.values()}
+        return images, field_name, False
+
+    def __call__(self) -> dict:
+        return {
+            field_name: self.get_field_value(field_info, field_name)[0]
+            for field_name, field_info in self.settings_cls.model_fields.items()
+            if self.get_field_value(field_info, field_name)[0] is not None
+        }
+
+
+class CactusOrchestratorSettings(BaseSettings):
+    # database
     orchestrator_database_url: PostgresDsn
 
-    # test execution
-    test_execution_namespace: str = "test-execution"
-    test_execution_ingress_name: str = "test-execution-ingress"
-    teststack_service_port: int = 80
-    test_execution_comms_timeout_seconds: int = 120  # The default timeout to use when making requests to the test stack
+    # domain
+    cactus_fqdn: str  # The Fully Qualified Domain Name under which this service is hosted. eg 'cactus.example.com'
+    comms_timeout_seconds: int = 120
+    envoy_prefix: str = "/envoy"  # The href prefix that envoy (in test pods) will be deployed under
 
-    # teststack templates
-    teststack_templates_namespace: str = "teststack-templates"
-    template_service_name_prefix: str = "envoy-svc-"  # Will be combined with CSIP-Aus Version identifier / uuid
-    template_app_name_prefix: str = "envoy-"  # Will be combined with CSIP-Aus Version identifier / uuid
-    template_statefulset_name_prefix: str = "envoy-set-"  # Will be combined with CSIP-Aus Version identifier  / uuid
-
-    # certificates
-    cert_serca_secret_name: str = "cert-serca"  # The raw SERCA root certificate (no key) under ca.crt
-    cert_mca_secret_name: str = (
-        "cert-mca-cactus"  # The Manufacturer CA certificate (no key) under ca.crt (signed by serca)
+    # podman
+    podman_socket: str = "/run/podman/podman.sock"
+    podman_network: str = (
+        "cactus-net"  # The network that the test pods will execute under (and that orchestrator runs in)
     )
-    tls_mica_secret_name: str = (
-        "tls-mica-cactus"  # The Manufacturer Intermediate CA certificate/key (signed by mca) - signs client certs
-    )
+    podman_runner_port: int = 8080
 
-    test_execution_fqdn: str  # NOTE: we could extract this from the server certs
+    # podman images
+    images: dict[str, PodImages]  # PodImages keyed by CSIP-Aus version
 
-    # teardown
+    # certificates (file paths)
+    # Shared trust anchor for every chain below.
+    cert_serca_path: str = ""  # path to SERCA ca.crt PEM file
+
+    # Device signing chain: SERCA -> Device MCA -> Device MICA -> Device EE (issued per run group).
+    cert_device_mca_path: str = ""  # path to Device MCA ca.crt PEM file
+    cert_device_mica_crt_path: str = ""  # path to Device MICA tls.crt PEM file
+    cert_device_mica_key_path: str = ""  # path to Device MICA tls.key PEM file (signs device EE certs)
+
+    # Aggregator signing chain: SERCA -> Agg PCA -> Agg ICA -> Aggregator EE (issued per run group, carries domain SAN).
+    cert_agg_pca_path: str = ""  # path to Aggregator PCA ca.crt PEM file
+    cert_agg_ica_crt_path: str = ""  # path to Aggregator ICA tls.crt PEM file
+    cert_agg_ica_key_path: str = ""  # path to Aggregator ICA tls.key PEM file (signs aggregator EE certs)
+
+    # Utility-server (envoy / DNSP) chain: SERCA -> envoy PCA -> envoy ICA -> envoy EE.
+    cert_envoy_ee_fullchain_path: str = ""  # path to envoy (DNSP) EE + ICA + PCA fullchain PEM file
+    cert_envoy_ee_key_path: str = ""  # path to envoy (DNSP) EE tls.key PEM file
+
+    # teardown task
     idleteardowntask_enable: bool = True
-    idleteardowntask_max_lifetime_seconds: int = 3600 * 24 * 4  # 4 days
-    idleteardowntask_idle_timeout_seconds: int = 7200  # 2 hour (some tests have 1 hour poll/post rate)
+    idleteardowntask_max_lifetime_seconds: int = 3600 * 24 * 4
+    idleteardowntask_idle_timeout_seconds: int = 7200
     idleteardowntask_repeat_every_seconds: int = 120
+    idleteardowntask_startup_grace_seconds: int = 300  # Runs have this much time to start before being orphaned
 
-    # readiness
-    pod_readiness_check_container_name: str = "envoy"
+    # image pull task
+    pulltask_repeat_every_seconds: int = 120
 
-    # general orchestrator options
+    # general options
     ignored_csip_aus_versions: list[str] = []
     ignored_test_procedures: list[str] = []
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        return (
+            init_settings,
+            ImagesEnvSource(settings_cls),  # handles `images`
+            env_settings,  # handles everything else
+            dotenv_settings,
+            file_secret_settings,
+        )
 
 
 class JWTAuthSettings(BaseSettings):
@@ -93,18 +134,9 @@ def get_current_settings() -> CactusOrchestratorSettings:
     global _main_settings
     if not _main_settings:
         _main_settings = CactusOrchestratorSettings()  # ty: ignore[missing-argument]
-        return _main_settings
     return _main_settings
 
 
-# NOTE: just for tests, not thread-safe
 def _reset_current_settings() -> None:
     global _main_settings
     _main_settings = None
-
-
-# NOTE: This needs to be called before instantiating any of the k8s clients
-load_k8s_config()
-v1_core_api = client.CoreV1Api()
-v1_app_api = client.AppsV1Api()
-v1_net_api = client.NetworkingV1Api()

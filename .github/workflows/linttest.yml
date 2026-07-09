@@ -52,6 +52,22 @@ jobs:
         with:
           python-version: ${{ matrix.pyver }}
 
+      - name: Install Podman
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y podman
+
+      - name: Enable rootful podman socket
+        run: |
+          sudo systemctl enable --now podman.socket
+          sudo systemctl status podman.socket --no-pager
+
+      - name: Grant current user access to the root socket
+        run: |
+          sudo chmod 777 /run/podman/
+          sudo chmod 777 /run/podman/podman.sock
+          ls -l /run/podman/podman.sock
+
       - name: Install Dependencies
         run: uv sync --extra test
 

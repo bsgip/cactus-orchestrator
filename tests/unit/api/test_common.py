@@ -2,10 +2,13 @@ import pytest
 from assertical.fixtures.postgres import generate_async_session
 from fastapi.exceptions import HTTPException
 
-from cactus_orchestrator.api.common import select_user_run_groups_or_raise
-from cactus_orchestrator.api.run import select_user_run_group_or_raise
+from cactus_orchestrator.api.common import (
+    select_user_run_group_or_raise,
+    select_user_run_group_run_or_raise,
+    select_user_run_groups_or_raise,
+)
 from cactus_orchestrator.auth import AuthPerm, UserContext
-from cactus_orchestrator.model import RunGroup, User
+from cactus_orchestrator.model import Run, RunGroup, User
 
 admin_user_context = UserContext(subject_id="", issuer_id="", permissions=[AuthPerm.admin_all, AuthPerm.user_all])
 user_1_context = UserContext(
@@ -96,3 +99,42 @@ async def test_select_user_run_groups_or_raise__raises_exception(user_context: U
     async with generate_async_session(pg_base_config) as session:
         with pytest.raises(HTTPException):
             _ = await select_user_run_groups_or_raise(session=session, user_context=user_context)
+
+
+@pytest.mark.parametrize(
+    "run_id, user_context, user_id",
+    [
+        (1, user_1_context, 1),  # user 1 run group 1 run 1
+        (5, user_1_context, 1),  # user 1 run group 2 run 5
+        (6, user_2_context, 2),  # user 2 run group 3 run 6
+    ],
+)
+@pytest.mark.asyncio
+async def test_select_user_run_group_run_or_raise(run_id: int, user_context: UserContext, user_id: int, pg_base_config):
+    async with generate_async_session(pg_base_config) as session:
+        user, run_group, run = await select_user_run_group_run_or_raise(
+            session=session, user_context=user_context, run_id=run_id
+        )
+        assert isinstance(user, User)
+        assert user.user_id == user_id
+        assert isinstance(run_group, RunGroup)
+        assert run_group.run_group_id == run.run_group_id
+        assert isinstance(run, Run)
+        assert run.run_id == run_id
+
+
+@pytest.mark.parametrize(
+    "run_id, user_context",
+    [
+        (99, user_1_context),  # run 99 DNE
+        (6, user_1_context),  # user 1 can't access run_group 3
+        (1, user_2_context),  # user 2 can't access run_group 1
+    ],
+)
+@pytest.mark.asyncio
+async def test_select_user_run_group_run_or_raise_raises_exception(
+    run_id: int, user_context: UserContext, pg_base_config
+):
+    async with generate_async_session(pg_base_config) as session:
+        with pytest.raises(HTTPException):
+            _ = await select_user_run_group_run_or_raise(session=session, user_context=user_context, run_id=run_id)

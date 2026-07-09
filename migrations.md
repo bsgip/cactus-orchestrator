@@ -28,7 +28,7 @@ docker compose up -d
 ```sh
 ORCHESTRATOR_DATABASE_URL="postgresql+asyncpg://user:password@localhost:5433/orchestratordb"
 CACTUS_PYTEST_WITHOUT_KUBERNETES="true"
-TEST_EXECUTION_FQDN="foo"
+CACTUS_FQDN="foo"
 JWTAUTH_JWKS_URL="a"
 JWTAUTH_ISSUER="b"
 JWTAUTH_AUDIENCE="c"

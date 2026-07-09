@@ -29,6 +29,8 @@ target_metadata = model.Base.metadata
 # can be acquired:
 # my_important_option = config.get_main_option("my_important_option")
 # ... etc.
+
+
 config.set_main_option("sqlalchemy.url", str(main_settings.orchestrator_database_url))
 
 
