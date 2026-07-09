@@ -4,19 +4,34 @@ from http import HTTPStatus
 from cactus_schema.orchestrator import PlaylistRunInfo, RunResponse, RunStatusResponse
 from cactus_schema.orchestrator.schema import ComplianceRequestResponse
 from cactus_test_definitions.client.test_procedures import TestProcedure, TestProcedureId
+from envoy_schema.server.schema.uri import DeviceCapabilityUri
 from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from cactus_orchestrator.auth import UserContext
-from cactus_orchestrator.crud import insert_user, select_run_group_for_user, select_run_groups_for_user, select_user
-from cactus_orchestrator.k8s.resource import generate_envoy_dcap_uri, get_resource_names
+from cactus_orchestrator.crud import (
+    insert_user,
+    select_run_group_for_user,
+    select_run_groups_for_user,
+    select_run_with_run_group_for_user,
+    select_user,
+)
 from cactus_orchestrator.model import ComplianceRequest, Run, RunGroup, RunStatus, User
+from cactus_orchestrator.pod.models import PodRoutes
 from cactus_orchestrator.procedures import get_filtered_test_procedures
 
 logger = logging.getLogger(__name__)
 
 
 test_procedures_by_id: dict[TestProcedureId, TestProcedure] = get_filtered_test_procedures()
+
+
+def envoy_dcap_uri(routes: PodRoutes) -> str:
+    return envoy_dcap_uri_for_host(routes.external_host, routes.href_prefix)
+
+
+def envoy_dcap_uri_for_host(external_host: str, envoy_href_prefix: str) -> str:
+    return f"https://{external_host}{envoy_href_prefix}{DeviceCapabilityUri}"
 
 
 def map_run_status_to_run_status_response(run_status: RunStatus) -> RunStatusResponse:
@@ -32,7 +47,9 @@ def map_run_status_to_run_status_response(run_status: RunStatus) -> RunStatusRes
     return status
 
 
-def map_run_to_run_response(run: Run, playlist_runs: list[PlaylistRunInfo] | None = None) -> RunResponse:
+def map_run_to_run_response(
+    run: Run, pod_routes: PodRoutes, playlist_runs: list[PlaylistRunInfo] | None = None
+) -> RunResponse:
     status = map_run_status_to_run_status_response(run.run_status)
     try:
         definition = test_procedures_by_id.get(TestProcedureId(run.testprocedure_id), None)
@@ -42,7 +59,7 @@ def map_run_to_run_response(run: Run, playlist_runs: list[PlaylistRunInfo] | Non
     return RunResponse(
         run_id=run.run_id,
         test_procedure_id=run.testprocedure_id,
-        test_url=generate_envoy_dcap_uri(get_resource_names(run.teststack_id)),
+        test_url=envoy_dcap_uri(pod_routes),
         status=status,
         all_criteria_met=run.all_criteria_met,
         created_at=run.created_at,
@@ -104,18 +121,25 @@ async def select_user_or_raise(
 
 
 async def select_user_run_group_or_raise(
-    session: AsyncSession, user_context: UserContext, run_group_id: int, with_cert: bool = False
+    session: AsyncSession,
+    user_context: UserContext,
+    run_group_id: int,
+    with_cert: bool = False,
+    for_update: bool = False,
 ) -> tuple[User, RunGroup]:
     """Selects a user for the specific user context AND their associated run_group_id or raises a HTTPException if none
     can be found.
 
-    Can optionally include deferred certificate values on the RunGroup"""
+    Can optionally include deferred certificate values on the RunGroup. Set for_update to lock the run_group row for
+    the duration of the transaction (used by certificate generation to serialise the certificate_id counter)."""
     user = await select_user_or_raise(
         session,
         user_context,
     )
 
-    run_group = await select_run_group_for_user(session, user.user_id, run_group_id, with_cert=with_cert)
+    run_group = await select_run_group_for_user(
+        session, user.user_id, run_group_id, with_cert=with_cert, for_update=for_update
+    )
     if run_group is None:
         logger.error(f"Cannot find run_group {run_group_id} for user {user.user_id}")
         raise HTTPException(
@@ -125,16 +149,40 @@ async def select_user_run_group_or_raise(
     return (user, run_group)
 
 
+async def select_user_run_group_run_or_raise(
+    session: AsyncSession, user_context: UserContext, run_id: int, with_cert: bool = False, with_artifact: bool = False
+) -> tuple[User, RunGroup, Run]:
+    """Selects a user for the specific user context AND their associated run + parent RunGroup or raises a HTTPException
+    if none can be found.
+
+    Can optionally include deferred certificate values on the RunGroup"""
+    user = await select_user_or_raise(
+        session,
+        user_context,
+    )
+
+    run = await select_run_with_run_group_for_user(session, user.user_id, run_id, with_cert, with_artifact)
+    if run is None:
+        logger.error(f"Cannot find run {run_id} for user {user.user_id}")
+        raise HTTPException(
+            status_code=HTTPStatus.NOT_FOUND,
+            detail=f"Cannot find run {run_id} for user {user.user_id}",
+        )
+
+    return (user, run.run_group, run)
+
+
 async def select_user_run_groups_or_raise(
-    session: AsyncSession, user_context: UserContext
+    session: AsyncSession, user_context: UserContext, for_update: bool = False
 ) -> tuple[User, list[RunGroup]]:
     """Selects a user for the specific user context AND their associated run_groups.
 
-    Raises if the user not found."""
+    Set for_update to lock the run_group rows for the duration of the transaction (used by certificate generation to
+    serialise the certificate_id counter). Raises if the user not found."""
 
     user = await select_user_or_raise(session, user_context)
 
-    run_groups = await select_run_groups_for_user(session, user.user_id)
+    run_groups = await select_run_groups_for_user(session, user.user_id, for_update=for_update)
 
     if not run_groups:
         logger.error(f"No run groups found for user {user.user_id}")

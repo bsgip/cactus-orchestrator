@@ -21,19 +21,23 @@ from cactus_orchestrator.model import RunGroup
 
 
 @dataclass
-class MockedK8s:
+class MockedCertFetch:
     fetch_certificate_key_pair: Mock
     fetch_certificate_only: Mock
+    fetch_pem_bundle: Mock
 
 
 @pytest.fixture
-def k8s_mock() -> Generator[MockedK8s, None, None]:
+def k8s_mock() -> Generator[MockedCertFetch, None, None]:
     with (
         patch("cactus_orchestrator.api.certificate.fetch_certificate_key_pair") as fetch_certificate_key_pair,
         patch("cactus_orchestrator.api.certificate.fetch_certificate_only") as fetch_certificate_only,
+        patch("cactus_orchestrator.api.certificate.fetch_pem_bundle") as fetch_pem_bundle,
     ):
-        yield MockedK8s(
-            fetch_certificate_key_pair=fetch_certificate_key_pair, fetch_certificate_only=fetch_certificate_only
+        yield MockedCertFetch(
+            fetch_certificate_key_pair=fetch_certificate_key_pair,
+            fetch_certificate_only=fetch_certificate_only,
+            fetch_pem_bundle=fetch_pem_bundle,
         )
 
 
@@ -49,28 +53,14 @@ async def test_generate_new_certificate_and_fetch(
     is_device_cert,
 ):
 
-    # The only part we mock is the fetching of certs from the k8's secret store
-    async def mocked_fetch_certificate_key_pair(secret_name, namespace=None, passphrase_secret=None):
-        if secret_name == "tls-mica-cactus":
-            return mica_cert_key_pair
-        else:
-            raise Exception(f"Mock error - unexpected secret_name '{secret_name}'")
-
-    async def mocked_fetch_certificate_only(secret_name, namespace=None):
-        if secret_name == "cert-mca-cactus":
-            return mca_cert_key_pair[0]
-        else:
-            raise Exception(f"Mock error - unexpected secret_name '{secret_name}'")
-
-    k8s_mock.fetch_certificate_key_pair.side_effect = mocked_fetch_certificate_key_pair
-    k8s_mock.fetch_certificate_only.side_effect = mocked_fetch_certificate_only
+    # The only part we mock is the fetching of certs from disk
+    k8s_mock.fetch_certificate_key_pair.return_value = mica_cert_key_pair
+    k8s_mock.fetch_certificate_only.return_value = mca_cert_key_pair[0]
 
     async with generate_async_session(pg_base_config) as session:
-        original_cert_id = (
-            (await session.execute(select(RunGroup).where(RunGroup.run_group_id == run_group_id)))
-            .scalar_one()
-            .certificate_id
-        )
+        run_group = (await session.execute(select(RunGroup).where(RunGroup.run_group_id == run_group_id))).scalar_one()
+        original_cert_id = run_group.certificate_id
+        csip_aus_version = run_group.csip_aus_version
 
     # Act
     body = GenerateClientCertificateRequest(is_device_cert=is_device_cert).to_json()
@@ -83,6 +73,8 @@ async def test_generate_new_certificate_and_fetch(
     assert res.content and len(res.content)
     assert res.headers["content-type"] == "application/zip"
     assert res.headers["content-disposition"] and "attachment; filename=" in res.headers["content-disposition"]
+    # csip aus version (slash-sanitised) is appended to the download filename
+    assert res.headers["content-disposition"].endswith(f"-{csip_aus_version.replace('/', '-')}.zip")
 
     k8s_mock.fetch_certificate_key_pair.assert_called_once()
     k8s_mock.fetch_certificate_only.assert_called_once()
@@ -157,27 +149,49 @@ async def test_generate_new_certificate_bad_run_group_id(client, valid_jwt_user1
 
 
 @pytest.mark.asyncio
-async def test_fetch_current_certificate_authority_der(
-    client, valid_jwt_user1, k8s_mock: MockedK8s, serca_cert_key_pair
+async def test_fetch_utility_server_certificates(
+    client,
+    valid_jwt_user1,
+    k8s_mock: MockedCertFetch,
+    serca_cert_key_pair,
+    services_pca_cert_key_pair,
+    dnsp_ica_cert_key_pair,
+    envoy_ee_cert_key_pair,
 ):
-    """Basic success path test."""
+    """The /certificate/authority endpoint returns the SERCA + envoy chain bundle as a zip."""
 
-    # Arrange
-    k8s_mock.fetch_certificate_only.return_value = serca_cert_key_pair[0]
+    # Arrange - the endpoint reads the SERCA cert and the pre-assembled envoy EE fullchain bundle (paths are mocked)
+    serca_cert = serca_cert_key_pair[0]
+    envoy_pca_cert = services_pca_cert_key_pair[0]
+    envoy_ica_cert = dnsp_ica_cert_key_pair[0]
+    envoy_ee_cert = envoy_ee_cert_key_pair[0]
+    fullchain = (
+        envoy_ee_cert.public_bytes(Encoding.PEM)
+        + envoy_ica_cert.public_bytes(Encoding.PEM)
+        + envoy_pca_cert.public_bytes(Encoding.PEM)
+    )
+    k8s_mock.fetch_certificate_only.return_value = serca_cert
+    k8s_mock.fetch_pem_bundle.return_value = fullchain
 
     # Act
-    response_1 = await client.get("/certificate/authority", headers={"Authorization": f"Bearer {valid_jwt_user1}"})
-    assert response_1.status_code == HTTPStatus.OK
-    assert response_1.headers["content-type"] == "application/x-x509-ca-cert"
-    assert x509.load_pem_x509_certificate(response_1.content, default_backend()) == serca_cert_key_pair[0]
-
-    response_2 = await client.get("/certificate/authority", headers={"Authorization": f"Bearer {valid_jwt_user1}"})
-    assert response_2.status_code == HTTPStatus.OK
-    assert response_2.headers["content-type"] == "application/x-x509-ca-cert"
-    assert x509.load_pem_x509_certificate(response_2.content, default_backend()) == serca_cert_key_pair[0]
+    response = await client.get("/certificate/authority", headers={"Authorization": f"Bearer {valid_jwt_user1}"})
 
     # Assert
-    assert k8s_mock.fetch_certificate_only.call_count == 2
+    assert response.status_code == HTTPStatus.OK
+    assert response.headers["content-type"] == "application/zip"
+    assert "filename=utility-server-certificates.zip" in response.headers["content-disposition"]
+
+    zip = zipfile.ZipFile(io.BytesIO(response.content))
+    assert set(zip.namelist()) == {"serca.pem", "utility-server-fullchain.pem"}
+    assert x509.load_pem_x509_certificate(zip.read("serca.pem"), default_backend()) == serca_cert
+    # The fullchain bundle (envoy EE + ICA + PCA, SERCA excluded) is served verbatim
+    assert x509.load_pem_x509_certificates(zip.read("utility-server-fullchain.pem")) == [
+        envoy_ee_cert,
+        envoy_ica_cert,
+        envoy_pca_cert,
+    ]
+    k8s_mock.fetch_certificate_only.assert_called_once()  # SERCA
+    k8s_mock.fetch_pem_bundle.assert_called_once()  # envoy fullchain
 
 
 async def test_generate_shared_aggregator_certificate_and_fetch(
@@ -191,21 +205,9 @@ async def test_generate_shared_aggregator_certificate_and_fetch(
 
     user_id = 1  # This needs to match the `valid_jwt_user?` fixture used.
 
-    # The only part we mock is the fetching of certs from the k8's secret store
-    async def mocked_fetch_certificate_key_pair(secret_name, namespace=None, passphrase_secret=None):
-        if secret_name == "tls-mica-cactus":
-            return mica_cert_key_pair
-        else:
-            raise Exception(f"Mock error - unexpected secret_name '{secret_name}'")
-
-    async def mocked_fetch_certificate_only(secret_name, namespace=None):
-        if secret_name == "cert-mca-cactus":
-            return mca_cert_key_pair[0]
-        else:
-            raise Exception(f"Mock error - unexpected secret_name '{secret_name}'")
-
-    k8s_mock.fetch_certificate_key_pair.side_effect = mocked_fetch_certificate_key_pair
-    k8s_mock.fetch_certificate_only.side_effect = mocked_fetch_certificate_only
+    # The only part we mock is the fetching of certs from disk
+    k8s_mock.fetch_certificate_key_pair.return_value = mica_cert_key_pair
+    k8s_mock.fetch_certificate_only.return_value = mca_cert_key_pair[0]
 
     async with generate_async_session(pg_base_config) as session:
         run_groups = (await session.execute(select(RunGroup).where(RunGroup.user_id == user_id))).scalars().all()
