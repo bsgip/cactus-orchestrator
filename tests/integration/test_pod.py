@@ -99,9 +99,9 @@ async def test_spawn_brings_up_healthy_pod_then_destroy_cleans_up(
 ):
     images = PodImages(
         csip_aus_version=CSIP_AUS_VERSION,
-        db="cactusimageregistry.azurecr.io/cactus-teststack-init:163-v12",
-        envoy="cactusimageregistry.azurecr.io/cactus-envoy:163-v12",
-        runner="cactusimageregistry.azurecr.io/cactus-runner:163-v12",
+        db="cactusimageregistry.azurecr.io/cactus-db:166-v12",
+        envoy="cactusimageregistry.azurecr.io/cactus-envoy:166-v12",
+        runner="cactusimageregistry.azurecr.io/cactus-runner:166-v12",
     )
 
     resources = PodResources(
