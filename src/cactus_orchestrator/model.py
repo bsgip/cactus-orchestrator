@@ -196,6 +196,24 @@ class ComplianceRecord(Base):
     file_data: Mapped[bytes] = mapped_column(LargeBinary, nullable=True, unique=False, deferred=True)
 
 
+class ComplianceRequestFinalisation(Base):
+    """Records each time a compliance request was finalised.
+
+    Records,
+    - the parent compliance request
+    - who finalisation the compliance and when
+    - the PDF compliance report (as file_data)
+    """
+
+    __tablename__ = "compliance_request_finalisation"
+
+    compliance_request_finalisation_id: Mapped[int] = mapped_column(name="id", primary_key=True, autoincrement=True)
+    compliance_request_id: Mapped[int] = mapped_column(ForeignKey("compliance_request.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    created_by: Mapped[int] = mapped_column(ForeignKey("user_.id"))
+    file_data: Mapped[bytes] = mapped_column(LargeBinary)
+
+
 class ComplianceRequestStatus(IntEnum):
     """Encodes the status of a compliance request
 
@@ -208,14 +226,16 @@ class ComplianceRequestStatus(IntEnum):
     pushed_back  - admin has pushed the request back to the client (changes needed)
                    admin can no longer edit the request
                    client has ability to edit the request
-    finalised    - the compliance request is finalised (a compliance record gets created)
+    finalised    - the compliance request is finalised (a compliance finalisation record gets created)
                    neither admin nor client can modify the request
+    reopened     - the compliance request was reopened by the admin for editing after a previous finalisation
     """
 
     SUBMITTED = auto()
     UNDER_REVIEW = auto()
     PUSHED_BACK = auto()
     FINALISED = auto()
+    REOPENED = auto()
 
 
 class ComplianceRequest(Base):
@@ -260,9 +280,6 @@ class ComplianceRequest(Base):
     software_client_providers: Mapped[str] = mapped_column(String, nullable=False, unique=False)
     software_client_versions: Mapped[str] = mapped_column(String, nullable=False, unique=False)
     onsite_hardware_details: Mapped[str] = mapped_column(String, nullable=False, unique=False)
-
-    # Finalisation Report PDF file data
-    file_data: Mapped[bytes] = mapped_column(LargeBinary, nullable=True, unique=False, deferred=True)
 
 
 class ComplianceRequestClass(Base):
