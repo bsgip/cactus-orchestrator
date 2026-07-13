@@ -365,7 +365,6 @@ def _create_pod_and_containers(
             "DATABASE_URL": ENVOY_DATABASE_URL_PSYCOPG,
             "ENVOY_ADMIN_BASICAUTH_USERNAME": "admin",
             "ENVOY_ADMIN_BASICAUTH_PASSWORD": "password",  # nosec # This is for internal use only - not exposed
-            "HEADER_MEDIA_PARAM_VALUE": images.csip_aus_version,
             "ENVOY_PROXY_PREFIX": routes.href_prefix,
         },
         volumes=shared_volumes,
