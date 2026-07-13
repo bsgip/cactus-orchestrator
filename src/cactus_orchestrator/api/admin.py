@@ -378,7 +378,8 @@ async def admin_get_run_power_limit_chart(
     try:
         html = await generate_power_limit_chart(run.run_artifact, video_start_seconds=video_start_seconds)
     except ValueError as err:
-        raise HTTPException(status_code=HTTPStatus.CONFLICT, detail="Chart generation failed.") from err
+        logger.warning(f"power_limit_chart: generation failed for {run_id=}: {err}")
+        raise HTTPException(status_code=HTTPStatus.CONFLICT, detail=f"Chart generation failed: {err}") from err
 
     if html is None:
         raise HTTPException(
