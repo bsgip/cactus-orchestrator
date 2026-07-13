@@ -65,17 +65,36 @@ class _RawDefault:
     archive_time: datetime | None  # archive rows only
 
 
-async def _get_der_setting(session: AsyncSession) -> _RawDERSetting | None:
+async def _check_has_legacy_site_der_table(session: AsyncSession) -> bool:
+    """Returns True if site_der_setting still uses the pre-flatten schema (site_der_id FK to a
+    parent site_der table, dropped in envoy migration b2f4a6c8d1e3_drop_site_der) rather than a
+    direct site_id column."""
     result = await session.execute(
         text(
+            "SELECT COUNT(*) FROM information_schema.columns "
+            "WHERE table_name = 'site_der_setting' AND column_name = 'site_der_id'"
+        )
+    )
+    return (result.scalar() or 0) > 0
+
+
+async def _get_der_setting(session: AsyncSession) -> _RawDERSetting | None:
+    if await _check_has_legacy_site_der_table(session):
+        query = """
+SELECT sds.max_w_value, sds.max_w_multiplier
+FROM site_der_setting sds
+JOIN site_der sd ON sd.site_der_id = sds.site_der_id
+WHERE sd.site_id = (SELECT site_id FROM site ORDER BY changed_time DESC LIMIT 1)
+LIMIT 1
             """
+    else:
+        query = """
 SELECT sds.max_w_value, sds.max_w_multiplier
 FROM site_der_setting sds
 WHERE sds.site_id = (SELECT site_id FROM site ORDER BY changed_time DESC LIMIT 1)
 LIMIT 1
             """
-        )
-    )
+    result = await session.execute(text(query))
     row = result.first()
     if row is None:
         return None

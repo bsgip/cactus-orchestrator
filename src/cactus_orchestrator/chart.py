@@ -1,9 +1,11 @@
 import asyncio
 import io
+import json
 import logging
 import subprocess  # nosec B404
 import zipfile
 from datetime import datetime
+from typing import Any
 
 import testing.postgresql
 from cactus_runner.models import ReportingData
@@ -48,6 +50,25 @@ def extract_envoy_dumps(zip_data: bytes) -> tuple[str, str]:
         return zf.read(schema_name).decode(), zf.read(data_name).decode()
 
 
+def _patch_legacy_site_der_id(data: Any) -> Any:  # noqa: ANN401
+    """Renames the legacy 'siteDerId' key to 'siteId' throughout nested dicts/lists, in place.
+
+    cactus-runner (Envoy v1.5.0, cactus-runner#192) renamed SiteDERRating/SiteDERSetting/
+    SiteDERAvailability/SiteDERStatus.site_der_id -> site_id. ReportingData_v1 blobs captured by an
+    older runner still serialize the old key and fail to deserialize against the current model.
+    This lets old artifacts keep loading without requiring changes in cactus-runner itself.
+    """
+    if isinstance(data, dict):
+        if "siteDerId" in data and "siteId" not in data:
+            data["siteId"] = data["siteDerId"]
+        for value in data.values():
+            _patch_legacy_site_der_id(value)
+    elif isinstance(data, list):
+        for item in data:
+            _patch_legacy_site_der_id(item)
+    return data
+
+
 async def generate_power_limit_chart(run_artifact: RunArtifact, video_start_seconds: float | None = None) -> str | None:
     """Generate a standalone power limit HTML chart from the dumps stored in a RunArtifact.
 
@@ -66,8 +87,12 @@ async def generate_power_limit_chart(run_artifact: RunArtifact, video_start_seco
     try:
         # Callers (e.g. admin endpoint) guard reporting_data/version for None before calling: ignore
         reporting_data = ReportingData.from_json(run_artifact.version, run_artifact.reporting_data)  # ty: ignore[invalid-argument-type]
-    except Exception as exc:
-        raise ValueError(f"Failed to deserialize reporting data: {exc}") from exc
+    except Exception as first_exc:
+        try:
+            patched = json.dumps(_patch_legacy_site_der_id(json.loads(run_artifact.reporting_data)))  # ty: ignore[invalid-argument-type]
+            reporting_data = ReportingData.from_json(run_artifact.version, patched)  # ty: ignore[invalid-argument-type]
+        except Exception:
+            raise ValueError(f"Failed to deserialize reporting data: {first_exc}") from first_exc
 
     test_start: datetime | None = reporting_data.runner_state.active_test_procedure.started_at
     if test_start is None:
