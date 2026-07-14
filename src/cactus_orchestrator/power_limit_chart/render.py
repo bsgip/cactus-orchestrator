@@ -54,7 +54,7 @@ def _assign_completion_lanes(
 def _add_receipt_markers(
     fig: go.Figure,
     receipt_markers: list[_ReceiptMarker],
-    set_max_w: float,
+    upper_max_w: float,
     to_chart_x: Callable[[datetime], datetime],
 ) -> None:
     for m in receipt_markers:
@@ -90,7 +90,7 @@ def _add_receipt_markers(
         fig.add_trace(
             go.Scatter(
                 x=[to_chart_x(m.time) for m in receipt_markers],
-                y=[set_max_w * 0.55] * len(receipt_markers),
+                y=[upper_max_w * 0.55] * len(receipt_markers),
                 mode="markers",
                 marker=dict(
                     symbol="triangle-down",
@@ -259,7 +259,10 @@ def _render_html_chart(
     lower_trace: list[tuple[datetime, float, str]],
     test_start: datetime,
     test_end: datetime,
-    set_max_w: float,
+    upper_max_w: float,
+    lower_max_w: float,
+    upper_max_label: str,
+    lower_max_label: str,
     step_intervals: list[tuple[str, datetime, datetime]],
     receipt_markers: list[_ReceiptMarker],
     disconnect_intervals: list[tuple[datetime, datetime]],
@@ -277,8 +280,9 @@ def _render_html_chart(
     def to_chart_x(t: datetime) -> datetime:
         return _fake_epoch + _video_offset + (t - test_start)
 
-    y_max = set_max_w * 1.1
-    y_min = -set_max_w * 1.1
+    # Expand the range so limits commanded beyond the device maximum stay visible.
+    y_max = max(upper_max_w, max((v for _, v, _ in upper_trace), default=0.0)) * 1.1
+    y_min = min(-lower_max_w, min((v for _, v, _ in lower_trace), default=0.0)) * 1.1
     has_steps = bool(step_intervals)
     bottom_margin = 230 if has_steps else 130
     completions = sorted(step_completions or [], key=lambda x: x[1])
@@ -320,27 +324,42 @@ def _render_html_chart(
         )
     )
 
-    # ── Reference lines ──────────────────────────────────────────────────────
+    # ── Device maximum indicators ────────────────────────────────────────────
+    # Light grey bands mark the region beyond what the device can physically do.
+    for band_y0, band_y1 in [(upper_max_w, y_max), (y_min, -lower_max_w)]:
+        if band_y1 > band_y0:
+            fig.add_shape(
+                type="rect",
+                xref="paper",
+                yref="y",
+                x0=0,
+                x1=1,
+                y0=band_y0,
+                y1=band_y1,
+                fillcolor="rgba(128,128,128,0.12)",
+                line=dict(width=0),
+                layer="below",
+            )
     fig.add_hline(y=0, line_color="black", line_width=1, line_dash="dash", opacity=0.4)
     fig.add_hline(
-        y=set_max_w,
+        y=upper_max_w,
         line_color="grey",
         line_width=1,
         line_dash="dot",
-        annotation_text=f"setMaxW ({int(set_max_w)} W)",
+        annotation_text=f"{upper_max_label} ({int(upper_max_w)} W)",
         annotation_position="top right",
     )
     fig.add_hline(
-        y=-set_max_w,
+        y=-lower_max_w,
         line_color="grey",
         line_width=1,
         line_dash="dot",
-        annotation_text=f"−setMaxW (−{int(set_max_w)} W)",
+        annotation_text=f"−{lower_max_label} (−{int(lower_max_w)} W)",
         annotation_position="bottom right",
     )
 
     # ── Overlays ─────────────────────────────────────────────────────────────
-    _add_receipt_markers(fig, receipt_markers, set_max_w, to_chart_x)
+    _add_receipt_markers(fig, receipt_markers, upper_max_w, to_chart_x)
     _add_reconnect_markers(fig, disconnect_intervals, test_end, to_chart_x)
     if completions:
         _add_completion_markers(fig, completions, lanes, lane_y, test_start, test_end, to_chart_x)
