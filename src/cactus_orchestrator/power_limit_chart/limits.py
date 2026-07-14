@@ -335,7 +335,8 @@ def _sweep_timeline(
     segments_by_group: _SegmentsByGroup,
     defaults_by_group: _DefaultsByGroup,
     disconnect_intervals: list[tuple[datetime, datetime]],
-    set_max_w: float,
+    upper_max_w: float,
+    lower_max_w: float,
     test_end: datetime,
 ) -> tuple[list[_LimitEvent], list[_LimitEvent], list[tuple[str, datetime, datetime]]]:
     """Single pass over the event timeline producing (upper_events, lower_events, step_intervals).
@@ -364,10 +365,12 @@ def _sweep_timeline(
             upper_target, upper_source = 0.0, None
             lower_target, lower_source = 0.0, None
         else:
+            # Control values above the device maximum are NOT cropped — the trace shows the
+            # commanded limit, with the region beyond device capability indicated in the render.
             raw, upper_source = _get_effective_upper_at(t, sorted_groups, segments_by_group, defaults_by_group)
-            upper_target = min(raw if raw is not None else set_max_w, set_max_w)
+            upper_target = raw if raw is not None else upper_max_w
             raw, lower_source = _get_effective_lower_at(t, sorted_groups, segments_by_group, defaults_by_group)
-            lower_target = max(-(raw if raw is not None else set_max_w), -set_max_w)
+            lower_target = -raw if raw is not None else -lower_max_w
 
         if prev_upper is None or abs(upper_target - prev_upper) > 0.1:
             upper_events.append(_LimitEvent(time=t, target=upper_target, source=upper_source, instant=instant))
