@@ -70,6 +70,21 @@ async def generate_power_limit_chart_html(
         logger.warning("power_limit_chart: setMaxW <= 0 - skipping chart")
         return None
 
+    # Directional device maxes: prefer the asymmetric setMaxDischargeRateW (export) /
+    # setMaxChargeRateW (import), falling back to the mandatory setMaxW.
+    upper_max_w = set_max_w
+    upper_max_label = "setMaxW"
+    if der_setting.max_discharge_rate_w_value is not None and der_setting.max_discharge_rate_w_multiplier is not None:
+        upper_max_w = float(der_setting.max_discharge_rate_w_value) * (
+            10.0**der_setting.max_discharge_rate_w_multiplier
+        )
+        upper_max_label = "setMaxDischargeRateW"
+    lower_max_w = set_max_w
+    lower_max_label = "setMaxW"
+    if der_setting.max_charge_rate_w_value is not None and der_setting.max_charge_rate_w_multiplier is not None:
+        lower_max_w = float(der_setting.max_charge_rate_w_value) * (10.0**der_setting.max_charge_rate_w_multiplier)
+        lower_max_label = "setMaxChargeRateW"
+
     control_groups = await _get_control_groups(session)
     if not control_groups:
         logger.warning("power_limit_chart: no SiteControlGroups found - skipping chart")
@@ -98,15 +113,36 @@ async def generate_power_limit_chart_html(
     event_times = _collect_event_times(segments, defaults_by_group, disconnect_intervals, test_start, test_end)
 
     upper_events, lower_events, step_intervals = _sweep_timeline(
-        event_times, sorted_groups, segments_by_group, defaults_by_group, disconnect_intervals, set_max_w, test_end
+        event_times,
+        sorted_groups,
+        segments_by_group,
+        defaults_by_group,
+        disconnect_intervals,
+        upper_max_w,
+        lower_max_w,
+        test_end,
     )
 
     video_offset = video_start_seconds or 0.0
     upper_trace = _build_trace(
-        upper_events, test_start, test_end, set_max_w, set_max_w, disconnect_intervals, defaults_by_group, video_offset
+        upper_events,
+        test_start,
+        test_end,
+        upper_max_w,
+        set_max_w,
+        disconnect_intervals,
+        defaults_by_group,
+        video_offset,
     )
     lower_trace = _build_trace(
-        lower_events, test_start, test_end, -set_max_w, set_max_w, disconnect_intervals, defaults_by_group, video_offset
+        lower_events,
+        test_start,
+        test_end,
+        -lower_max_w,
+        set_max_w,
+        disconnect_intervals,
+        defaults_by_group,
+        video_offset,
     )
 
     receipt_markers = _build_receipt_markers(segments, subscribed_group_ids)
@@ -116,7 +152,10 @@ async def generate_power_limit_chart_html(
         lower_trace,
         test_start,
         test_end,
-        set_max_w,
+        upper_max_w,
+        lower_max_w,
+        upper_max_label,
+        lower_max_label,
         step_intervals,
         receipt_markers,
         disconnect_intervals,
