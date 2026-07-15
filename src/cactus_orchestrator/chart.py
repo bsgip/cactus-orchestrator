@@ -3,6 +3,7 @@ import io
 import json
 import logging
 import subprocess  # nosec B404
+import time
 import zipfile
 from datetime import datetime
 from typing import Any
@@ -114,15 +115,19 @@ async def generate_power_limit_chart(run_artifact: RunArtifact, video_start_seco
         if info.completed_at is not None
     ]
 
+    t0 = time.monotonic()
+    timings: list[tuple[str, float]] = []
+
     try:
         pg: testing.postgresql.Postgresql = await asyncio.to_thread(testing.postgresql.Postgresql)
     except RuntimeError as exc:
         raise ValueError(f"Postgres unavailable (is initdb installed?): {exc}") from exc
+    timings.append(("pg-start", time.monotonic() - t0))
     try:
         pg_url: str = pg.url()
         async_pg_url = pg_url.replace("postgresql://", "postgresql+asyncpg://")
 
-        for sql in (schema_sql, data_sql):
+        for label, sql in (("schema-restore", schema_sql), ("data-restore", data_sql)):
             # psql is the canonical restore tool for plain-SQL pg_dump output; nosec B603 B607
             proc = await asyncio.to_thread(
                 subprocess.run,
@@ -130,6 +135,7 @@ async def generate_power_limit_chart(run_artifact: RunArtifact, video_start_seco
                 input=sql.encode(),
                 capture_output=True,
             )
+            timings.append((label, time.monotonic() - t0))
             if proc.returncode != 0:
                 stderr_str = (
                     proc.stderr.decode(errors="replace") if isinstance(proc.stderr, bytes) else str(proc.stderr)
@@ -153,5 +159,9 @@ async def generate_power_limit_chart(run_artifact: RunArtifact, video_start_seco
                 )
         finally:
             await engine.dispose()
+            timings.append(("chart-gen", time.monotonic() - t0))
     finally:
         await asyncio.to_thread(pg.stop)
+        timings.append(("pg-stop", time.monotonic() - t0))
+        breakdown = ", ".join(f"{name} +{offset:.2f}s" for name, offset in timings)
+        logger.info(f"power_limit_chart timing for run_artifact={run_artifact.run_artifact_id}: {breakdown}")
