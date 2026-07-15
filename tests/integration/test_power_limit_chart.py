@@ -135,7 +135,14 @@ def _make_doe(
     )
 
 
-def _make_site_with_setting(aggregator_id: int, max_w: int = 10000, grad_w: int = 28, seed: int = 1) -> Site:
+def _make_site_with_setting(
+    aggregator_id: int,
+    max_w: int = 10000,
+    grad_w: int = 28,
+    seed: int = 1,
+    charge_rate_w: int | None = None,
+    discharge_rate_w: int | None = None,
+) -> Site:
     """Build a Site with one SiteDERSetting."""
     der_setting = generate_class_instance(
         SiteDERSetting,
@@ -144,6 +151,10 @@ def _make_site_with_setting(aggregator_id: int, max_w: int = 10000, grad_w: int 
         site_id=None,
         max_w_value=max_w,
         max_w_multiplier=0,
+        max_charge_rate_w_value=charge_rate_w,
+        max_charge_rate_w_multiplier=0 if charge_rate_w is not None else None,
+        max_discharge_rate_w_value=discharge_rate_w,
+        max_discharge_rate_w_multiplier=0 if discharge_rate_w is not None else None,
         grad_w=grad_w,
         soft_grad_w=None,
     )
@@ -239,7 +250,8 @@ async def test_get_der_setting_no_der_setting(pg_envoy_base_config):
 
 
 async def test_get_der_setting_returns_max_w_fields(pg_envoy_base_config):
-    """Returns the correct max_w_value and max_w_multiplier from the active site's DER setting."""
+    """Returns the correct max_w_value and max_w_multiplier from the active site's DER setting,
+    with NULL charge/discharge rates passed through as None."""
     async with generate_async_session(pg_envoy_base_config) as session:
         site = _make_site_with_setting(aggregator_id=1, max_w=7500)
         session.add(site)
@@ -251,6 +263,27 @@ async def test_get_der_setting_returns_max_w_fields(pg_envoy_base_config):
     assert result is not None
     assert result.max_w_value == 7500
     assert result.max_w_multiplier == 0
+    assert result.max_charge_rate_w_value is None
+    assert result.max_charge_rate_w_multiplier is None
+    assert result.max_discharge_rate_w_value is None
+    assert result.max_discharge_rate_w_multiplier is None
+
+
+async def test_get_der_setting_returns_charge_discharge_rate_fields(pg_envoy_base_config):
+    """Returns the charge/discharge rate fields when populated."""
+    async with generate_async_session(pg_envoy_base_config) as session:
+        site = _make_site_with_setting(aggregator_id=1, max_w=7500, charge_rate_w=3000, discharge_rate_w=5000)
+        session.add(site)
+        await session.commit()
+
+    async with generate_async_session(pg_envoy_base_config) as session:
+        result = await _get_der_setting(session)
+
+    assert result is not None
+    assert result.max_charge_rate_w_value == 3000
+    assert result.max_charge_rate_w_multiplier == 0
+    assert result.max_discharge_rate_w_value == 5000
+    assert result.max_discharge_rate_w_multiplier == 0
 
 
 async def test_get_der_setting_uses_most_recently_changed_site(pg_envoy_base_config):
@@ -829,7 +862,6 @@ async def test_chart_storage_target_constrains_upper_and_lower_bounds(
     assert "-2500" in html
     out = _out("scenario_storage_target_v13.html")
     out.write_text(html)
-    print(f"\n  ✓ Storage target scenario → {out}")
 
 
 # ─── Unit tests: _get_effective_upper_at / _get_effective_lower_at ────────────
@@ -1066,7 +1098,87 @@ async def test_chart_single_program_export_curtailment(pg_envoy_base_config):
     assert "Device Power Chart" in html
     out = _out("scenario_A_single_program_export0.html")
     out.write_text(html)
-    print(f"\n  ✓ Scenario A → {out}")
+
+
+# ─── Scenario: control above device max is not cropped ────────────────────────
+
+
+async def test_chart_control_above_device_max_not_cropped(pg_envoy_base_config):
+    """
+    A control commanding 20000W export against a 10000W setMaxW device.
+
+    Expected visual:
+      - Upper trace ramps from 10000W up to 20000W at T+5m (not cropped to setMaxW)
+      - Ramp back down starts from 20000W (the control point), not from setMaxW
+      - Region above 10000W marked by the dotted setMaxW line and grey band
+    """
+    test_end = T0 + timedelta(minutes=30)
+
+    async with generate_async_session(pg_envoy_base_config) as session:
+        site = _make_site_with_setting(aggregator_id=1)
+        session.add(site)
+        group = generate_class_instance(SiteControlGroup, seed=1, site_control_group_id=1, primacy=1)
+        session.add(group)
+
+        ctrl = _make_doe(site, group, offset_minutes=5, duration_minutes=15, export_limit=Decimal("20000"), seed=10)
+        session.add(ctrl)
+        await session.flush()
+        created = ctrl.created_time
+        await session.commit()
+
+    polls = [_poll(1, created + timedelta(seconds=60), req_id=1)]
+
+    async with generate_async_session(pg_envoy_base_config) as session:
+        html = await generate_power_limit_chart_html(session, T0, test_end, polls)
+
+    assert html is not None, "Chart generation returned None"
+    # The over-max control value is ramped to, not cropped to setMaxW...
+    assert "to 20000 W" in html
+    # ...and the ramp back down starts from the control point.
+    assert "from 20000 W to 10000 W" in html
+    assert "setMaxW (10000 W)" in html
+    out = _out("scenario_control_above_device_max.html")
+    out.write_text(html)
+
+
+# ─── Scenario: directional device maxes from charge/discharge rates ───────────
+
+
+async def test_chart_directional_device_maxes_from_charge_discharge_rates(pg_envoy_base_config):
+    """
+    DERSetting with setMaxDischargeRateW=6000 and setMaxChargeRateW=4000 alongside setMaxW=10000.
+
+    Expected visual:
+      - Upper trace starts at 6000W (discharge rate), not setMaxW
+      - Lower trace flat at -4000W (charge rate)
+      - Dotted reference lines labelled with the rate fields
+    """
+    test_end = T0 + timedelta(minutes=30)
+
+    async with generate_async_session(pg_envoy_base_config) as session:
+        site = _make_site_with_setting(aggregator_id=1, charge_rate_w=4000, discharge_rate_w=6000)
+        session.add(site)
+        group = generate_class_instance(SiteControlGroup, seed=1, site_control_group_id=1, primacy=1)
+        session.add(group)
+
+        ctrl = _make_doe(site, group, offset_minutes=5, duration_minutes=10, export_limit=Decimal("3000"), seed=10)
+        session.add(ctrl)
+        await session.flush()
+        created = ctrl.created_time
+        await session.commit()
+
+    polls = [_poll(1, created + timedelta(seconds=60), req_id=1)]
+
+    async with generate_async_session(pg_envoy_base_config) as session:
+        html = await generate_power_limit_chart_html(session, T0, test_end, polls)
+
+    assert html is not None, "Chart generation returned None"
+    assert "setMaxDischargeRateW (6000 W)" in html
+    assert "setMaxChargeRateW" in html
+    # Ramp down from the discharge-rate max, not setMaxW
+    assert "from 6000 W to 3000 W" in html
+    out = _out("scenario_directional_device_maxes.html")
+    out.write_text(html)
 
 
 # ─── Scenario B: Two programs, primacy resolution, import + export limits ─────
@@ -1145,7 +1257,6 @@ async def test_chart_multi_program_primacy(pg_envoy_base_config):
     assert "Device Power Chart" in html
     out = _out("scenario_B_multi_program_primacy0.html")
     out.write_text(html)
-    print(f"\n  ✓ Scenario B → {out}")
 
 
 # ─── Scenario C: rampTms on controls, default control as baseline ─────────────
@@ -1229,7 +1340,6 @@ async def test_chart_ramptms_and_defaults(pg_envoy_base_config):
     assert "Device Power Chart" in html
     out = _out("scenario_C_ramptms_and_defaults0.html")
     out.write_text(html)
-    print(f"\n  ✓ Scenario C → {out}")
 
 
 # ─── Scenario D: opModConnect disconnect and reconnect grace period ───────────
@@ -1321,7 +1431,6 @@ async def test_chart_op_mod_connect(pg_envoy_base_config):
     assert "Device Power Chart" in html
     out = _out("scenario_D_op_mod_connect0.html")
     out.write_text(html)
-    print(f"\n  ✓ Scenario D → {out}")
 
 
 # ─── Scenario D2: opModConnect — expiry-triggered reconnect, no True control ──
@@ -1403,7 +1512,6 @@ async def test_chart_op_mod_connect_expiry(pg_envoy_base_config):
     assert "Device Power Chart" in html
     out = _out("scenario_D2_op_mod_connect_expiry0.html")
     out.write_text(html)
-    print(f"\n  ✓ Scenario D2 → {out}")
 
 
 # ─── Scenario E: GEN-10 DERC4/5/6 — opModConnect + primacy + supersede ────────
@@ -1520,7 +1628,6 @@ async def test_chart_gen10_derc456(pg_envoy_base_config):
     assert "Device Power Chart" in html
     out = _out("scenario_E_gen10_derc4560.html")
     out.write_text(html)
-    print(f"\n  ✓ Scenario E → {out}")
 
 
 # ─── Scenario E2: GEN-10 DERC4/5/6 — subscription variant (no gap) ───────────
@@ -1620,7 +1727,6 @@ async def test_chart_gen10_derc456_subscribed(pg_envoy_base_config):
     assert "Device Power Chart" in html
     out = _out("scenario_E2_gen10_derc456_subscribed0.html")
     out.write_text(html)
-    print(f"\n  ✓ Scenario E2 → {out}")
 
 
 # ─── Scenario F: opModEnergise — de-energise and re-energise grace period ─────
@@ -1712,7 +1818,6 @@ async def test_chart_op_mod_energise(pg_envoy_base_config):
     assert "Device Power Chart" in html
     out = _out("scenario_F_op_mod_energise0.html")
     out.write_text(html)
-    print(f"\n  ✓ Scenario F → {out}")
 
 
 # ─── Scenario G: ALL-28 — cancellation hands over to a CHANGED default ────────
@@ -1816,8 +1921,6 @@ async def test_chart_all28_cancellation_to_changed_default(pg_envoy_base_config)
     assert "Device Power Chart" in html
     out = _out("scenario_G_all28_cancel_to_changed_default0.html")
     out.write_text(html)
-    print(f"\n  ✓ Scenario G → {out}")
-    print(f"\n  Open all charts: ls {OUTPUT_DIR}/")
 
     # Plotly embeds hover text in JSON where < and > are escaped
     def _hover_in_html(hover: str) -> bool:

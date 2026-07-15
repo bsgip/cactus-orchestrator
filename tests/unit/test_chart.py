@@ -17,6 +17,7 @@ from cactus_orchestrator.power_limit_chart.limits import (
     _build_receipt_markers,
     _compute_disconnect_intervals,
     _get_effective_upper_at,
+    _sweep_timeline,
 )
 from cactus_orchestrator.power_limit_chart.replay import (
     _FAR_FUTURE,
@@ -547,6 +548,28 @@ def test_overlapping_field_disjoint_controls_do_not_mask():
 
     assert val == pytest.approx(5000.0)
     assert src is segments_by_group[1][0]
+
+
+# ─── _sweep_timeline ──────────────────────────────────────────────────────────
+
+
+def test_sweep_timeline_control_above_device_max_not_cropped():
+    """A control commanding more than the device max must pass through uncropped so the
+    ramp targets (and later starts from) the actual control value, not the device max."""
+    t_start = T0 + timedelta(seconds=60)
+    t_end = T0 + timedelta(seconds=120)
+    test_end = T0 + timedelta(seconds=600)
+    row = _make_doe_row(1, 1, t_start, 60, export_limit=20000.0)
+    segments_by_group = {1: [_make_segment(row, t_start, t_end)]}
+    event_times = [T0, t_start, t_end, test_end]
+
+    upper_events, lower_events, _ = _sweep_timeline(
+        event_times, [_GROUPS[1]], segments_by_group, {}, [], 10000.0, 4000.0, test_end
+    )
+
+    # Unconstrained fallback uses the directional maxes; the 20000 W control is not cropped.
+    assert [(e.time, e.target) for e in upper_events] == [(T0, 10000.0), (t_start, 20000.0), (t_end, 10000.0)]
+    assert [(e.time, e.target) for e in lower_events] == [(T0, -4000.0)]
 
 
 # ─── _build_receipt_markers ───────────────────────────────────────────────────

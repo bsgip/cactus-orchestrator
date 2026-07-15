@@ -17,6 +17,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 class _RawDERSetting:
     max_w_value: int
     max_w_multiplier: int
+    max_charge_rate_w_value: int | None
+    max_charge_rate_w_multiplier: int | None
+    max_discharge_rate_w_value: int | None
+    max_discharge_rate_w_multiplier: int | None
 
 
 @dataclass
@@ -79,26 +83,38 @@ async def _check_has_legacy_site_der_table(session: AsyncSession) -> bool:
 
 
 async def _get_der_setting(session: AsyncSession) -> _RawDERSetting | None:
+    setting_cols = (
+        "sds.max_w_value, sds.max_w_multiplier, "
+        "sds.max_charge_rate_w_value, sds.max_charge_rate_w_multiplier, "
+        "sds.max_discharge_rate_w_value, sds.max_discharge_rate_w_multiplier"
+    )
     if await _check_has_legacy_site_der_table(session):
-        query = """
-SELECT sds.max_w_value, sds.max_w_multiplier
+        query = f"""
+SELECT {setting_cols}
 FROM site_der_setting sds
 JOIN site_der sd ON sd.site_der_id = sds.site_der_id
 WHERE sd.site_id = (SELECT site_id FROM site ORDER BY changed_time DESC LIMIT 1)
 LIMIT 1
-            """
+            """  # noqa: S608  # nosec B608
     else:
-        query = """
-SELECT sds.max_w_value, sds.max_w_multiplier
+        query = f"""
+SELECT {setting_cols}
 FROM site_der_setting sds
 WHERE sds.site_id = (SELECT site_id FROM site ORDER BY changed_time DESC LIMIT 1)
 LIMIT 1
-            """
+            """  # noqa: S608  # nosec B608
     result = await session.execute(text(query))
     row = result.first()
     if row is None:
         return None
-    return _RawDERSetting(max_w_value=row.max_w_value, max_w_multiplier=row.max_w_multiplier)
+    return _RawDERSetting(
+        max_w_value=row.max_w_value,
+        max_w_multiplier=row.max_w_multiplier,
+        max_charge_rate_w_value=row.max_charge_rate_w_value,
+        max_charge_rate_w_multiplier=row.max_charge_rate_w_multiplier,
+        max_discharge_rate_w_value=row.max_discharge_rate_w_value,
+        max_discharge_rate_w_multiplier=row.max_discharge_rate_w_multiplier,
+    )
 
 
 async def _get_control_groups(session: AsyncSession) -> list[_RawControlGroup]:
