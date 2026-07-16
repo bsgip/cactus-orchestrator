@@ -119,7 +119,10 @@ async def generate_power_limit_chart(run_artifact: RunArtifact, video_start_seco
     timings: list[tuple[str, float]] = []
 
     try:
-        pg: testing.postgresql.Postgresql = await asyncio.to_thread(testing.postgresql.Postgresql)
+        # on hosts with slow fsync initdb's default sync of ~1000 files turns ~0.3s into ~20s.
+        pg: testing.postgresql.Postgresql = await asyncio.to_thread(
+            testing.postgresql.Postgresql, initdb_args="-U postgres -A trust --no-sync"
+        )
     except RuntimeError as exc:
         raise ValueError(f"Postgres unavailable (is initdb installed?): {exc}") from exc
     timings.append(("pg-start", time.monotonic() - t0))
