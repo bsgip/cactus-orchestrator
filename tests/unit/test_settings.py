@@ -47,3 +47,12 @@ def test_parse_images_from_env(cleared_env):
     assert settings.images["v1.88-storage-beta"].db == "cactus-db:1"
     assert settings.images["v1.88-storage-beta"].envoy == "envoy:4"
     assert settings.images["v1.88-storage-beta"].runner == "runner"
+
+
+def test_dev_runner_localhost_port_base_defaults_off(cleared_env):
+    """Makes sure we dont accidentally deploy dev version somehow"""
+    assert "DEV_RUNNER_LOCALHOST_PORT_BASE" not in os.environ
+
+    settings = CactusOrchestratorSettings()  # ty:ignore[missing-argument]
+
+    assert settings.dev_runner_localhost_port_base is None
