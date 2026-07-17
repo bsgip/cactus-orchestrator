@@ -1,7 +1,15 @@
+import zlib
 from dataclasses import dataclass
 from datetime import datetime
 
 from cactus_orchestrator.model import Run, RunGroup
+
+DEV_RUNNER_PORT_RANGE = 1000
+
+
+def dev_runner_localhost_port(port_base: int, pod_name: str) -> int:
+    """LOCAL DEV ONLY: derives a stable host port for a pod's runner from the pod name."""
+    return port_base + zlib.crc32(pod_name.encode()) % DEV_RUNNER_PORT_RANGE
 
 
 def generate_static_uri_external_host(cactus_fqdn: str, run_group_id: int) -> str:
@@ -33,20 +41,37 @@ class PodRoutes:
     internal_base_url: str  # For use from orchestrator -> runner pod.
     external_host: str
 
+    # LOCAL DEV ONLY: host port the runner is additionally published on
+    dev_host_port: int | None = None
+
     @staticmethod
     def from_run(
-        cactus_fqdn: str, envoy_href: str, exposed_port: int, resources: "PodResources", run_group: RunGroup, run: Run
+        cactus_fqdn: str,
+        envoy_href: str,
+        exposed_port: int,
+        resources: "PodResources",
+        run_group: RunGroup,
+        run: Run,
+        dev_localhost_port_base: int | None = None,
     ) -> "PodRoutes":
         if run_group.is_static_uri:
             external_host = generate_static_uri_external_host(cactus_fqdn, run.run_group_id)
         else:
             external_host = generate_dynamic_uri_external_host(cactus_fqdn, run.run_group_id, run.run_id)
 
+        if dev_localhost_port_base is not None:
+            dev_host_port = dev_runner_localhost_port(dev_localhost_port_base, resources.pod_name)
+            internal_base_url = f"http://127.0.0.1:{dev_host_port}"
+        else:
+            dev_host_port = None
+            internal_base_url = f"http://{resources.pod_name}:{exposed_port}"
+
         return PodRoutes(
             href_prefix=envoy_href,
             exposed_port=exposed_port,
-            internal_base_url=f"http://{resources.pod_name}:{exposed_port}",
+            internal_base_url=internal_base_url,
             external_host=external_host,
+            dev_host_port=dev_host_port,
         )
 
 

@@ -257,12 +257,18 @@ def _create_pod_and_containers(
     # a teststack breakout from being host-root. The pod owns the single shared namespace; every
     # member below must also pass userns_mode="auto" to join it — without it podman-py emits a
     # conflicting container-level id-mapping and the OCI runtime refuses the join.
-    client.pods.create(
-        name=resources.pod_name,
-        Networks={resources.shared_network_name: {}},
-        userns={"nsmode": "auto"},
-        labels=resources.pod_labels,
-    )
+    pod_create_kwargs: dict[str, Any] = {
+        "name": resources.pod_name,
+        "Networks": {resources.shared_network_name: {}},
+        "userns": {"nsmode": "auto"},
+        "labels": resources.pod_labels,
+    }
+    if routes.dev_host_port is not None:
+        # LOCAL DEV ONLY: also publish the runner on 127.0.0.1 so orchestrator can reach it
+        pod_create_kwargs["portmappings"] = [
+            {"host_ip": "127.0.0.1", "host_port": routes.dev_host_port, "container_port": routes.exposed_port}
+        ]
+    client.pods.create(**pod_create_kwargs)
     timings.append(("pod", time.monotonic() - t0))
 
     # 1. Postgres — binds localhost so other teststacks on cactus-net can't reach it
