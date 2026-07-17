@@ -269,11 +269,15 @@ async def test_destroy_pod_resources(
         [{}, {"State": {"Health": {"Status": "not healthy"}}}, {"State": {"Health": {"Status": "hEALTHY"}}}],
     ],
 )
-async def test_create_pod_run_success(mock_client: MockedPodmanClient, health_values: list[dict]):
+@pytest.mark.parametrize("dev_host_port", [None, 12345])
+async def test_create_pod_run_success(
+    mock_client: MockedPodmanClient, health_values: list[dict], dev_host_port: int | None
+):
     """Does a successful startup behave as expected - and can handle health checks taking a bit to stabilise"""
     # Arrange
+    health_values = list(health_values)  # parametrize shares the list object and the test pops from it
     images = generate_class_instance(PodImages, seed=101)
-    routes = generate_class_instance(PodRoutes, seed=202)
+    routes = generate_class_instance(PodRoutes, seed=202, dev_host_port=dev_host_port)
     resources = generate_class_instance(PodResources, seed=303)
     pki = PodPKI(server_ca_bytes=b"ca", server_cert_bytes=b"cert", server_key_bytes=b"key")
 
@@ -312,9 +316,24 @@ async def test_create_pod_run_success(mock_client: MockedPodmanClient, health_va
 
     # We created a shared volume / pod
     mock_client.volumes_create.assert_called_once_with(name=resources.volume_name)
-    mock_client.pods_create.assert_has_calls(
-        [mock.call(name=resources.pod_name, Networks=mock.ANY, userns=mock.ANY, labels=resources.pod_labels)]
-    )
+    if dev_host_port is None:
+        mock_client.pods_create.assert_has_calls(
+            [mock.call(name=resources.pod_name, Networks=mock.ANY, userns=mock.ANY, labels=resources.pod_labels)]
+        )
+    else:
+        mock_client.pods_create.assert_has_calls(
+            [
+                mock.call(
+                    name=resources.pod_name,
+                    Networks=mock.ANY,
+                    userns=mock.ANY,
+                    labels=resources.pod_labels,
+                    portmappings=[
+                        {"host_ip": "127.0.0.1", "host_port": dev_host_port, "container_port": routes.exposed_port}
+                    ],
+                )
+            ]
+        )
 
     # Our containers are created - noting that we create via the low level API due to startup health checks
     assert mock_client.containers_run.call_count == 0
