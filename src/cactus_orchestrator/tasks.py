@@ -95,6 +95,7 @@ async def destroy_idle_pods(
             pod_resources,
             run.run_group,
             run,
+            dev_localhost_port_base=settings.dev_runner_localhost_port_base,
         )
 
         idle = False
