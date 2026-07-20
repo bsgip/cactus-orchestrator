@@ -21,6 +21,8 @@ from cactus_schema.orchestrator import (
     RunArtifactMultipleRequest,
     RunResponse,
     StartRunResponse,
+    UpdatePlaylistRequest,
+    UpdatePlaylistResponse,
     uri,
 )
 from cactus_schema.runner import (
@@ -58,11 +60,15 @@ from cactus_orchestrator.crud import (
     ACTIVE_RUN_STATUSES,
     create_runartifact,
     delete_runs,
+    delete_upcoming_playlist_runs,
     insert_playlist_runs,
+    insert_playlist_tail_runs,
     insert_run_for_run_group,
     select_next_playlist_run,
     select_passed_runs_for_user,
+    select_playlist_position_label,
     select_playlist_runs,
+    select_playlist_runs_for_update,
     select_playlist_runs_with_status,
     select_run_group_for_user,
     select_runs_for_group,
@@ -72,7 +78,7 @@ from cactus_orchestrator.crud import (
     update_run_with_runartifact_and_finalise,
     update_runartifact_with_file_data,
 )
-from cactus_orchestrator.model import Run, RunArtifact, RunStatus, User
+from cactus_orchestrator.model import Run, RunArtifact, RunGroup, RunStatus, User
 from cactus_orchestrator.pod.manager import create_pod_run, destroy_pod_resources, ensure_images
 from cactus_orchestrator.pod.models import PodPKI, PodResources, PodRoutes
 from cactus_orchestrator.settings import CactusOrchestratorError, get_current_settings
@@ -106,10 +112,12 @@ async def get_run_artifact_response_for_user(user: User, run_id: int) -> Respons
             logger.warning(f"Run {run_id} artifact is missing a PDF and has no reporting data — cannot generate")
         else:
             try:
+                playlist_info = await select_playlist_position_label(db.session, run)
                 updated = await regenerate_pdf_report(
                     file_data=artifact.file_data,
                     raw_reporting_data=artifact.reporting_data,
                     version=artifact.version,
+                    playlist_info=playlist_info,
                 )
                 await update_runartifact_with_file_data(db.session, artifact, updated)
                 await db.session.commit()
@@ -294,80 +302,21 @@ async def spawn_teststack_and_init_run(  # noqa: C901
 
     # create a new pod
     try:
-        user_identifier = user.user_name or user.subject_id
         pod_name = await create_pod_run(settings.podman_socket, pod_images, pod_resources, pod_routes, pod_pki)
     except Exception as exc:
         logger.error(f"Failed to create new pod for run_group {run_group_id}", exc_info=exc)
         raise HTTPException(HTTPStatus.INTERNAL_SERVER_ERROR, detail="Internal Server Error") from exc
 
-    # Initialise the runner instance in the new pod
+    # Initialise the runner instance in the new pod - the runner only ever sees the single, currently-active test.
+    # Subsequent playlist tests are sent one at a time via RunnerClient.next_test on advancement.
     try:
         # inject initial state with either the device or aggregator cert data
         async with ClientSession(
             base_url=pod_routes.internal_base_url,
             timeout=ClientTimeout(settings.comms_timeout_seconds),
         ) as session:
-            # Build RunRequest objects for all tests
-            run_requests: list[RunRequest] = []
-            if is_playlist and runs:
-                for run in runs:
-                    test_proc_id = TestProcedureId(run.testprocedure_id)
-                    yaml_definition = get_yaml_contents(test_proc_id)
-                    run_request = RunRequest(
-                        run_id=str(run.run_id),
-                        test_definition=TestDefinition(test_procedure_id=test_proc_id, yaml_definition=yaml_definition),
-                        run_group=RunRequestRunGroup(
-                            run_group_id=str(run_group.run_group_id),
-                            name=run_group.name,
-                            csip_aus_version=CSIPAusVersion(run_group.csip_aus_version),
-                            test_certificates=TestCertificates(
-                                aggregator=None if run_group.is_device_cert else run_group.certificate_pem.decode(),
-                                device=run_group.certificate_pem.decode() if run_group.is_device_cert else None,
-                            ),
-                        ),
-                        test_config=TestConfig(
-                            pen=user.pen,
-                            subscription_domain=user.subscription_domain,
-                            is_static_url=run_group.is_static_uri,
-                        ),
-                        test_user=TestUser(user_id=str(user.user_id), name=user_identifier),
-                    )
-                    run_requests.append(run_request)
-            else:
-                yaml_definition = get_yaml_contents(procedure_ids[0])
-                run_request = RunRequest(
-                    run_id=str(first_run.run_id),
-                    test_definition=TestDefinition(test_procedure_id=procedure_ids[0], yaml_definition=yaml_definition),
-                    run_group=RunRequestRunGroup(
-                        run_group_id=str(run_group.run_group_id),
-                        name=run_group.name,
-                        csip_aus_version=CSIPAusVersion(run_group.csip_aus_version),
-                        test_certificates=TestCertificates(
-                            aggregator=None if run_group.is_device_cert else run_group.certificate_pem.decode(),
-                            device=run_group.certificate_pem.decode() if run_group.is_device_cert else None,
-                        ),
-                    ),
-                    test_config=TestConfig(
-                        pen=user.pen,
-                        subscription_domain=user.subscription_domain,
-                        is_static_url=run_group.is_static_uri,
-                    ),
-                    test_user=TestUser(user_id=str(user.user_id), name=user_identifier),
-                )
-                run_requests.append(run_request)
-
-            # This is not ideal, existing only to allow different versioning for 1.2 and 1.3 runners for now.
-            # Once the 1.3 runner can be updated, this should be simplified.
-            # For backwards compatibility: send single RunRequest for non-playlist runs,
-            # send list[RunRequest] for playlists. Older runners only accept single RunRequest.
-            # Only pass start_index kwarg when needed (older clients don't have this parameter).
-            init_kwargs: dict = {
-                "session": session,
-                "run_request": run_requests if is_playlist else run_request,
-            }
-            if is_playlist and start_index > 0:
-                init_kwargs["start_index"] = start_index
-            init_result = await RunnerClient.initialise(**init_kwargs)
+            run_request = _build_run_request(first_run, run_group, user)
+            init_result = await RunnerClient.initialise(session=session, run_request=run_request)
 
     except (CactusOrchestratorError, RunnerClientError) as exc:
         logger.info("Failure to initialise runner. Will teardown any resources.", exc_info=exc)
@@ -478,6 +427,33 @@ async def start_run(
     return StartRunResponse(test_url=envoy_dcap_uri(pod_routes))
 
 
+def _build_run_request(run: Run, run_group: RunGroup, user: User) -> RunRequest:
+    """Build the RunRequest for a specific run - used both at init and at each playlist advancement."""
+    if run_group.certificate_pem is None:
+        raise CactusOrchestratorError("RunGroup certificate must be set before building a RunRequest")
+    test_procedure_id = TestProcedureId(run.testprocedure_id)
+    yaml_definition = get_yaml_contents(test_procedure_id)
+    return RunRequest(
+        run_id=str(run.run_id),
+        test_definition=TestDefinition(test_procedure_id=test_procedure_id, yaml_definition=yaml_definition),
+        run_group=RunRequestRunGroup(
+            run_group_id=str(run_group.run_group_id),
+            name=run_group.name,
+            csip_aus_version=CSIPAusVersion(run_group.csip_aus_version),
+            test_certificates=TestCertificates(
+                aggregator=None if run_group.is_device_cert else run_group.certificate_pem.decode(),
+                device=run_group.certificate_pem.decode() if run_group.is_device_cert else None,
+            ),
+        ),
+        test_config=TestConfig(
+            pen=user.pen,
+            subscription_domain=user.subscription_domain,
+            is_static_url=run_group.is_static_uri,
+        ),
+        test_user=TestUser(user_id=str(user.user_id), name=user.user_name or user.subject_id),
+    )
+
+
 def is_all_criteria_met(runner_status: RunnerStatus | None) -> bool | None:
 
     if runner_status is None:
@@ -533,8 +509,12 @@ async def finalise_run(
         if reporting_data:
             try:
                 reporting_data_version = json.loads(reporting_data)["version"]
+                playlist_info = await select_playlist_position_label(session, run)
                 file_data = await regenerate_pdf_report(
-                    file_data=file_data, raw_reporting_data=reporting_data, version=reporting_data_version
+                    file_data=file_data,
+                    raw_reporting_data=reporting_data,
+                    version=reporting_data_version,
+                    playlist_info=playlist_info,
                 )
             except Exception as exc:
                 msg = f"Unable to regenerate run report for run {run.run_id}. Reason={exc}"
@@ -635,9 +615,9 @@ async def finalise_run_and_teardown_teststack(  # noqa: C901
     For playlist runs, this will finalize the current test and advance to the next test in the playlist.
     The teststack is only torn down after the last test in the playlist completes.
     """
-    # get user
+    # get user - with_cert=True: needed to build the next test's RunRequest on playlist advancement
     user, run_group, run = await select_user_run_group_run_or_raise(
-        db.session, user_context, run_id, with_artifact=True
+        db.session, user_context, run_id, with_cert=True, with_artifact=True
     )
     logger.info(f"Finalise requested for run {run_id} by user {user.subject_id}")
 
@@ -671,43 +651,27 @@ async def finalise_run_and_teardown_teststack(  # noqa: C901
         # Handle playlist advancement or teardown
         should_teardown = True
         if run.playlist_execution_id and run.playlist_order is not None:
-            # This is a playlist - check if there's a next test
+            # Lock the playlist's rows so the playlist cant be altered on finalise (race)
+            await select_playlist_runs_for_update(db.session, run.playlist_execution_id)
             next_run = await select_next_playlist_run(db.session, run.playlist_execution_id, run.playlist_order)
             if next_run:
+                next_run_request = _build_run_request(next_run, run_group, user)
                 async with ClientSession(
                     base_url=pod_routes.internal_base_url,
                     timeout=ClientTimeout(settings.comms_timeout_seconds),
                 ) as session:
                     try:
-                        runner_status = await RunnerClient.status(session)
-                        # Verify runner has advanced to the next test
-                        if (
-                            runner_status.test_procedure_name
-                            and runner_status.test_procedure_name == next_run.testprocedure_id
-                        ):
-                            # Runner has next test - check if it's actually started or just initialized
-                            # timestamp_start is only set when preconditions are applied and test begins
-                            if runner_status.timestamp_start:
-                                await update_run_run_status(db.session, next_run.run_id, RunStatus.started)
-                                logger.info(
-                                    f"Playlist advanced: run {run.run_id} finalized, next run {next_run.run_id} started"
-                                )
-                            else:
-                                # Test is initialized but not started - leave status as initialised
-                                logger.info(f"""Playlist advanced: run {run.run_id} finalized,
-                                     next run {next_run.run_id} initialized (awaiting start)""")
-                            await db.session.commit()
-                            should_teardown = False
-                        elif runner_status.test_procedure_name == "-":
-                            logger.info(f"Playlist ended: runner reports no active test after run {run.run_id}")
-                        else:
-                            logger.warning(
-                                f"Playlist state mismatch: expected {next_run.testprocedure_id}, "
-                                f"got {runner_status.test_procedure_name}"
-                            )
-                    except Exception as exc:
-                        logger.error(f"Error checking runner status for playlist advancement: {exc}")
-                        # If we can't check status, assume playlist failed and teardown
+                        next_test_result = await RunnerClient.next_test(session, next_run_request)
+                        new_status = RunStatus.started if next_test_result.is_started else RunStatus.initialised
+                        await update_run_run_status(db.session, next_run.run_id, new_status)
+                        await db.session.commit()
+                        should_teardown = False
+                        logger.info(
+                            f"Playlist advanced: run {run.run_id} finalized, next run {next_run.run_id} -> {new_status.name}"  # noqa: E501
+                        )
+                    except RunnerClientError as exc:
+                        logger.error(f"Error advancing playlist to next test: {exc}")
+                        # should_teardown stays True
 
         if should_teardown:
             await destroy_pod_resources(settings.podman_socket, pod_resources)
@@ -787,6 +751,59 @@ async def finalise_playlist(
             content=artifact.file_data,
             media_type=f"application/{artifact.compression}",
         )
+
+
+@router.post(uri.RunPlaylistUpdate, status_code=HTTPStatus.OK)
+async def update_playlist(
+    run_id: int,
+    body: UpdatePlaylistRequest,
+    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.user_all}))],
+) -> UpdatePlaylistResponse:
+    """Replace the upcoming tail of an executing playlist with a new ordered list of tests.
+
+    Pure DB operation - the active and completed runs are untouched and the runner is never contacted.
+    Applied by delete-and-recreate: the old upcoming rows are deleted and fresh ones inserted.
+    """
+    _, _, run = await select_user_run_group_run_or_raise(db.session, user_context, run_id)
+
+    if not run.playlist_execution_id:
+        raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail="Run is not part of a playlist")
+
+    # Lock the playlist's rows for the duration of the mutation so it cannot interleave with advancement.
+    playlist_runs = await select_playlist_runs_for_update(db.session, run.playlist_execution_id)
+    current_active_run = next((r for r in playlist_runs if r.run_status in ACTIVE_RUN_STATUSES), None)
+    if (
+        current_active_run is None
+        or current_active_run.playlist_order is None
+        or current_active_run.run_id != body.expected_active_run_id
+    ):
+        raise HTTPException(
+            status_code=HTTPStatus.CONFLICT,
+            detail="The playlist has advanced since it was last fetched. Refresh and try again.",
+        )
+
+    await delete_upcoming_playlist_runs(db.session, run.playlist_execution_id, current_active_run.playlist_order)
+    await insert_playlist_tail_runs(
+        db.session,
+        current_active_run.run_group_id,
+        run.playlist_execution_id,
+        [p.value for p in body.test_procedure_ids],
+        current_active_run.is_device_cert,
+        current_active_run.pod_name,
+        current_active_run.playlist_order + 1,
+    )
+    await db.session.commit()
+
+    updated_runs = await select_playlist_runs(db.session, run.playlist_execution_id)
+    playlist_run_infos = [
+        PlaylistRunInfo(
+            run_id=r.run_id,
+            test_procedure_id=r.testprocedure_id,
+            status=map_run_status_to_run_status_response(r.run_status),
+        )
+        for r in updated_runs
+    ]
+    return UpdatePlaylistResponse(playlist_runs=playlist_run_infos)
 
 
 @router.get(uri.RunArtifact, status_code=HTTPStatus.OK)
