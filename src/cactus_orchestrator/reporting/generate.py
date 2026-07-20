@@ -9,7 +9,7 @@ from cactus_orchestrator.reporting.run_reporting import pdf_report_as_bytes
 logger = logging.getLogger(__name__)
 
 
-async def generate_pdf_report_v1(reporting_data: ReportingData_v1) -> bytes | None:
+async def generate_pdf_report_v1(reporting_data: ReportingData_v1, playlist_info: str | None = None) -> bytes | None:
 
     # Unpack the readings: time_period_start is serialised as epoch ms integers by to_json(), so we explicitly convert
     # it back to datetime; pd.read_json convert_dates heuristic doesn't match the column name and would leave it int64.
@@ -29,6 +29,7 @@ async def generate_pdf_report_v1(reporting_data: ReportingData_v1) -> bytes | No
         sites=reporting_data.sites,
         timeline=reporting_data.timeline,
         set_max_w_varied=reporting_data.set_max_w_varied,
+        playlist_info=playlist_info,
     )
 
     return pdf_data
