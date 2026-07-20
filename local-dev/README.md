@@ -119,18 +119,25 @@ cert into the `ssl-client-cert` header. Locally runner speaks plain HTTP on a lo
 Find a pod's runner port:
 
 ```bash
-sudo podman pod ps                      # pod name, e.g. run-42
-sudo podman inspect run-42-runner --format '{{.HostConfig.PortBindings}}'
-curl http://127.0.0.1:<port>/health
+sudo podman ps                          # PORTS column shows e.g. 127.0.0.1:20042->8080/tcp
+# or, per pod (bindings live on the pod's infra container, not the runner container):
+sudo podman pod inspect run-42 --format '{{.InfraConfig.PortBindings}}'
+curl -i http://127.0.0.1:<port>/health       # HTTP 200, empty body (503 = unhealthy)
 ```
 
 The runner's API is `/health`, `/status`, `/initialise`, `/start`, `/finalize`.
-Everything else (`/dcap`, `/edev`) proxies to envoy: On every proxied request set the header, using the run's client cert (download from the UI):
+Envoy is proxied under the `ENVOY_PREFIX` prefix (default `/envoy`, per orchestrator settings): `/envoy/dcap`,
+`/envoy/edev`, etc. On every proxied request set the `ssl-client-cert` header to the **url-encoded contents** of the
+run's cert (the `fullchain.pem` from the UI's cert download ZIP works as-is — the leaf is first and the LFDI
+computation only reads the first cert):
 
 ```bash
-python3 -c "import urllib.parse; print(urllib.parse.quote(open('client.cert.pem').read()))"
-# curl http://127.0.0.1:<port>/dcap -H "ssl-client-cert: <url-encoded PEM>"
+curl http://127.0.0.1:<port>/envoy/dcap \
+  -H "ssl-client-cert: $(python3 -c "import urllib.parse; print(urllib.parse.quote(open('fullchain.pem').read()))")"
 ```
+
+Proxied responses: 400 = no active test procedure (initialise/start a run first), 403 = cert doesn't match the
+run's registered cert, 200 = through to envoy.
 
 In Postman: set a collection-level `ssl-client-cert` header. No TLS client cert config needed.
 
