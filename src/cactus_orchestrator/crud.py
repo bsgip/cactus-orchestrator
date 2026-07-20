@@ -762,6 +762,14 @@ async def select_playlist_runs(
     return result.scalars().all()
 
 
+async def select_playlist_position_label(session: AsyncSession, run: Run) -> str | None:
+    """Returns a "Test N of M" label for a playlist run (None if run isn't part of a playlist)."""
+    if run.playlist_execution_id is None or run.playlist_order is None:
+        return None
+    count = await count_playlist_runs(session, run.playlist_execution_id)
+    return f"Test {run.playlist_order + 1} of {count}"
+
+
 async def count_playlist_runs(
     session: AsyncSession,
     playlist_execution_id: str,
@@ -776,15 +784,73 @@ async def select_next_playlist_run(
     session: AsyncSession,
     playlist_execution_id: str,
     current_order: int,
+    for_update: bool = False,
 ) -> Run | None:
-    """Get the next run in a playlist after the given order position."""
+    """Get the run with the lowest playlist_order greater than current_order (tolerates gaps)."""
     stmt = (
         select(Run)
         .where(Run.playlist_execution_id == playlist_execution_id)
-        .where(Run.playlist_order == current_order + 1)
+        .where(Run.playlist_order > current_order)
+        .order_by(Run.playlist_order)
+        .limit(1)
     )
+    if for_update:
+        stmt = stmt.with_for_update()
     result = await session.execute(stmt)
     return result.scalar_one_or_none()
+
+
+async def select_playlist_runs_for_update(
+    session: AsyncSession,
+    playlist_execution_id: str,
+) -> Sequence[Run]:
+    """Get all runs in a playlist, ordered by playlist_order, locking the rows for update."""
+    stmt = (
+        select(Run)
+        .where(Run.playlist_execution_id == playlist_execution_id)
+        .order_by(Run.playlist_order)
+        .with_for_update()
+    )
+    result = await session.execute(stmt)
+    return result.scalars().all()
+
+
+async def delete_upcoming_playlist_runs(session: AsyncSession, playlist_execution_id: str, active_order: int) -> None:
+    """Delete the not-yet-run tail of a playlist (playlist_order > active_order). The active run (which may
+    itself still be 'initialised' if not yet started) and completed runs are untouched."""
+    stmt = delete(Run).where(Run.playlist_execution_id == playlist_execution_id, Run.playlist_order > active_order)
+    await session.execute(stmt)
+
+
+async def insert_playlist_tail_runs(
+    session: AsyncSession,
+    run_group_id: int,
+    playlist_execution_id: str,
+    test_procedure_ids: list[str],
+    is_device_cert: bool,
+    pod_name: str | None,
+    start_order: int,
+) -> list[Run]:
+    """Insert fresh 'initialised' Run rows for the upcoming tail of a playlist, starting at start_order.
+
+    Callers are expected to have already deleted the old upcoming rows (delete_upcoming_playlist_runs) - this
+    just inserts the replacements, contiguously numbered from start_order.
+    """
+    runs = []
+    for offset, procedure_id in enumerate(test_procedure_ids):
+        run = Run(
+            run_group_id=run_group_id,
+            pod_name=pod_name,
+            testprocedure_id=procedure_id,
+            run_status=RunStatus.initialised,
+            is_device_cert=is_device_cert,
+            playlist_execution_id=playlist_execution_id,
+            playlist_order=start_order + offset,
+        )
+        session.add(run)
+        runs.append(run)
+    await session.flush()
+    return runs
 
 
 async def select_playlist_runs_with_status(
