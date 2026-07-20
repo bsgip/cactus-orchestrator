@@ -15,11 +15,13 @@ from cactus_orchestrator.crud import (
     ProcedureRunAggregated,
     count_playlist_runs,
     delete_compliance_request,
+    delete_upcoming_playlist_runs,
     finalise_compliance_request,
     insert_compliance_generation_record,
     insert_compliance_request,
     insert_compliance_request_finalisation,
     insert_playlist_runs,
+    insert_playlist_tail_runs,
     insert_run_for_run_group,
     insert_run_group,
     insert_user,
@@ -34,7 +36,9 @@ from cactus_orchestrator.crud import (
     select_next_playlist_run,
     select_nonfinalised_runs,
     select_passed_runs_for_user,
+    select_playlist_position_label,
     select_playlist_runs,
+    select_playlist_runs_for_update,
     select_run_for_group,
     select_run_group_counts_for_user,
     select_run_group_for_user,
@@ -1112,6 +1116,172 @@ async def test_select_next_playlist_run(pg_base_config):
         # Get next after order 2 (should be None - last in playlist)
         next_run = await select_next_playlist_run(session, playlist_execution_id, 2)
         assert next_run is None
+
+
+@pytest.mark.asyncio
+async def test_select_next_playlist_run_tolerates_gaps(pg_base_config):
+    """A tail mutation deletes and reinserts rows, which can leave a gap in playlist_order (e.g. after the
+    active run at order 0, a mutation replaces orders 1/2 with a single new row at order 1). The next-run
+    lookup should still find it via 'minimum order greater than current', not an exact order+1 match."""
+
+    playlist_execution_id = str(uuid4())
+
+    async with generate_async_session(pg_base_config) as session:
+        await insert_playlist_runs(
+            session,
+            run_group_id=1,
+            playlist_execution_id=playlist_execution_id,
+            test_procedure_ids=["ALL-01"],
+            is_device_cert=False,
+        )
+        # Simulate a tail mutation that replaced the old order-1 row with a fresh row at order 3 (gap at 1, 2)
+        tail_runs = await insert_playlist_tail_runs(
+            session,
+            run_group_id=1,
+            playlist_execution_id=playlist_execution_id,
+            test_procedure_ids=["ALL-05"],
+            is_device_cert=False,
+            pod_name="pod-1",
+            start_order=3,
+        )
+        tail_run_id = tail_runs[0].run_id
+        await session.commit()
+
+    async with generate_async_session(pg_base_config) as session:
+        next_run = await select_next_playlist_run(session, playlist_execution_id, 0)
+        assert next_run is not None
+        assert next_run.run_id == tail_run_id
+        assert next_run.playlist_order == 3
+
+
+@pytest.mark.asyncio
+async def test_select_playlist_runs_for_update(pg_base_config):
+    playlist_execution_id = str(uuid4())
+
+    async with generate_async_session(pg_base_config) as session:
+        await insert_playlist_runs(
+            session,
+            run_group_id=1,
+            playlist_execution_id=playlist_execution_id,
+            test_procedure_ids=["ALL-02", "ALL-01"],
+            is_device_cert=False,
+        )
+        await session.commit()
+
+    async with generate_async_session(pg_base_config) as session:
+        playlist_runs = await select_playlist_runs_for_update(session, playlist_execution_id)
+        assert [r.testprocedure_id for r in playlist_runs] == ["ALL-02", "ALL-01"]
+
+
+@pytest.mark.asyncio
+async def test_delete_upcoming_playlist_runs(pg_base_config):
+    playlist_execution_id = str(uuid4())
+
+    async with generate_async_session(pg_base_config) as session:
+        runs = await insert_playlist_runs(
+            session,
+            run_group_id=1,
+            playlist_execution_id=playlist_execution_id,
+            test_procedure_ids=["ALL-01", "ALL-02", "ALL-03"],
+            is_device_cert=False,
+        )
+        # Mark the active run (order 0) as started - it's the currently-running test
+        active_run_id = runs[0].run_id
+        active_run = (await session.execute(select(Run).where(Run.run_id == active_run_id))).scalar_one()
+        active_run.run_status = RunStatus.started
+        await session.commit()
+
+    async with generate_async_session(pg_base_config) as session:
+        await delete_upcoming_playlist_runs(session, playlist_execution_id, active_order=0)
+        await session.commit()
+
+    async with generate_async_session(pg_base_config) as session:
+        remaining = await select_playlist_runs(session, playlist_execution_id)
+        # Active run (order 0) survives; the upcoming placeholders (order 1, 2) are gone
+        assert [r.playlist_order for r in remaining] == [0]
+        assert remaining[0].run_id == active_run_id
+
+
+@pytest.mark.asyncio
+async def test_delete_upcoming_playlist_runs_active_still_initialised(pg_base_config):
+    """The active run may itself still be 'initialised' (advanced via /next-test but not yet started) - it
+    must not be deleted just because it shares a status with the placeholder tail."""
+    playlist_execution_id = str(uuid4())
+
+    async with generate_async_session(pg_base_config) as session:
+        runs = await insert_playlist_runs(
+            session,
+            run_group_id=1,
+            playlist_execution_id=playlist_execution_id,
+            test_procedure_ids=["ALL-01", "ALL-02", "ALL-03"],
+            is_device_cert=False,
+            start_index=1,  # order 0 -> skipped, order 1 -> provisioning, order 2 -> initialised
+        )
+        active_run_id = runs[1].run_id
+        active_run = (await session.execute(select(Run).where(Run.run_id == active_run_id))).scalar_one()
+        active_run.run_status = RunStatus.initialised  # advanced but not yet started
+        await session.commit()
+
+    async with generate_async_session(pg_base_config) as session:
+        await delete_upcoming_playlist_runs(session, playlist_execution_id, active_order=1)
+        await session.commit()
+
+    async with generate_async_session(pg_base_config) as session:
+        remaining = await select_playlist_runs(session, playlist_execution_id)
+        assert [r.playlist_order for r in remaining] == [0, 1]
+        assert remaining[1].run_id == active_run_id
+
+
+@pytest.mark.asyncio
+async def test_insert_playlist_tail_runs(pg_base_config):
+    playlist_execution_id = str(uuid4())
+
+    async with generate_async_session(pg_base_config) as session:
+        runs = await insert_playlist_tail_runs(
+            session,
+            run_group_id=1,
+            playlist_execution_id=playlist_execution_id,
+            test_procedure_ids=["ALL-02", "ALL-03"],
+            is_device_cert=True,
+            pod_name="pod-42",
+            start_order=1,
+        )
+        assert len(runs) == 2
+        assert [r.playlist_order for r in runs] == [1, 2]
+        assert [r.testprocedure_id for r in runs] == ["ALL-02", "ALL-03"]
+        assert all(r.run_status == RunStatus.initialised for r in runs)
+        assert all(r.pod_name == "pod-42" for r in runs)
+        assert all(r.is_device_cert is True for r in runs)
+        assert all(r.playlist_execution_id == playlist_execution_id for r in runs)
+        await session.commit()
+
+
+@pytest.mark.asyncio
+async def test_select_playlist_position_label(pg_base_config):
+    playlist_execution_id = str(uuid4())
+
+    async with generate_async_session(pg_base_config) as session:
+        runs = await insert_playlist_runs(
+            session,
+            run_group_id=1,
+            playlist_execution_id=playlist_execution_id,
+            test_procedure_ids=["ALL-01", "ALL-02", "ALL-03"],
+            is_device_cert=False,
+        )
+        first_run_id = runs[0].run_id
+        second_run_id = runs[1].run_id
+        single_run = await insert_run_for_run_group(session, 1, "ALL-01", RunStatus.provisioning, False)
+        single_run_id = single_run.run_id
+        await session.commit()
+
+    async with generate_async_session(pg_base_config) as session:
+        first_run = (await session.execute(select(Run).where(Run.run_id == first_run_id))).scalar_one()
+        second_run = (await session.execute(select(Run).where(Run.run_id == second_run_id))).scalar_one()
+        single_run = (await session.execute(select(Run).where(Run.run_id == single_run_id))).scalar_one()
+
+        assert await select_playlist_position_label(session, first_run) == "Test 1 of 3"
+        assert await select_playlist_position_label(session, second_run) == "Test 2 of 3"
+        assert await select_playlist_position_label(session, single_run) is None
 
 
 @pytest.mark.asyncio
