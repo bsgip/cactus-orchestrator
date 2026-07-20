@@ -19,8 +19,8 @@ dependencies = [
     "fastapi-async-sqlalchemy",
     "asyncpg",
     "cactus-test-definitions==1.14.8",
-    "cactus-schema==1.1.0",
-    "cactus-runner @ git+https://github.com/bsgip/cactus-runner.git@v2.4.2",
+    "cactus-schema @ git+https://github.com/bsgip/cactus-schema.git@b20aeb3",
+    "cactus-runner @ git+https://github.com/bsgip/cactus-runner.git@b850615",
     "fastapi-pagination",
     "fastapi-utils",
     "typing_inspect",                                                          # fastapi-utils missing dep?
