@@ -27,6 +27,8 @@ from cactus_schema.orchestrator import (
     ProceedResponse,
     RunResponse,
     StartRunResponse,
+    UpdatePlaylistRequest,
+    UpdatePlaylistResponse,
 )
 from cactus_schema.runner import (
     CriteriaEntry,
@@ -56,6 +58,7 @@ class MockedPod:
 
     # Runner client
     init: Mock
+    next_test: Mock
     start: Mock
     finalize: Mock
     status: Mock
@@ -75,6 +78,7 @@ def mocked_pod() -> Generator[MockedPod, None, None]:
         ) as mock_destroy_pod_resources,
         patch("cactus_orchestrator.api.run.ensure_images", new_callable=AsyncMock) as mock_ensure_images,
         patch("cactus_orchestrator.api.run.RunnerClient.initialise") as init,
+        patch("cactus_orchestrator.api.run.RunnerClient.next_test") as next_test,
         patch("cactus_orchestrator.api.run.RunnerClient.start") as start,
         patch("cactus_orchestrator.api.run.RunnerClient.finalize") as finalize,
         patch("cactus_orchestrator.api.run.RunnerClient.status") as status,
@@ -95,6 +99,7 @@ def mocked_pod() -> Generator[MockedPod, None, None]:
             destroy_pod_resources=mock_destroy_pod_resources,
             ensure_images=mock_ensure_images,
             init=init,
+            next_test=next_test,
             start=start,
             finalize=finalize,
             status=status,
@@ -1308,13 +1313,11 @@ async def test_spawn_teststack_with_playlist(
     mocked_pod.create_pod_run.assert_awaited_once()
     mocked_pod.init.assert_awaited_once()
 
-    # Verify RunnerClient.initialise received a list of RunRequests for playlists
-    run_requests = mocked_pod.init.call_args_list[0].kwargs["run_request"]
-    assert isinstance(run_requests, list)
-    assert len(run_requests) == 2
-    assert all(isinstance(r, RunRequest) for r in run_requests)
-    assert run_requests[0].test_definition.test_procedure_id == TestProcedureId.ALL_01
-    assert run_requests[1].test_definition.test_procedure_id == TestProcedureId.ALL_02
+    # The runner only ever sees the single, currently-active test - even for playlists. Subsequent tests are
+    # sent one at a time via /next-test on advancement.
+    run_request = mocked_pod.init.call_args_list[0].kwargs["run_request"]
+    assert isinstance(run_request, RunRequest)
+    assert run_request.test_definition.test_procedure_id == TestProcedureId.ALL_01
 
     # DB - all runs created with correct statuses
     async with generate_async_session(pg_base_config) as session:
@@ -1349,7 +1352,7 @@ async def test_backwards_compatibility_single_run(
 
         await session.commit()
 
-    # Act - Use old single test_procedure_id format
+    # Act - Use the singular test_procedure_id field (single-test, backwards compatible request shape)
     req = InitRunRequest(test_procedure_id=TestProcedureId.ALL_01)
     res = await client.post(
         f"/run_group/{run_group_id}/run", content=req.to_json(), headers={"Authorization": f"Bearer {valid_jwt_user1}"}
@@ -1361,11 +1364,10 @@ async def test_backwards_compatibility_single_run(
     assert response_model.playlist_execution_id is None
     assert response_model.playlist_runs is None or len(response_model.playlist_runs) == 0
 
-    # Verify RunnerClient.initialise received a single RunRequest (not a list) for backwards compatibility
+    # Verify RunnerClient.initialise received a single RunRequest
     mocked_pod.init.assert_awaited_once()
     run_request = mocked_pod.init.call_args_list[0].kwargs["run_request"]
     assert isinstance(run_request, RunRequest)
-    assert not isinstance(run_request, list)
 
     # DB - run should have NULL playlist fields
     async with generate_async_session(pg_base_config) as session:
@@ -1428,14 +1430,10 @@ async def test_playlist_finalize_advances_to_next_test(
         await session.execute(update(Run).where(Run.run_id == first_run_id).values(run_status=RunStatus.started))
         await session.commit()
 
-    # Mock runner status to report second test is now active (simulating advancement)
     finalize_data = zip_file_data
     mocked_pod.finalize.return_value = finalize_data
-    mocked_pod.status.return_value = generate_class_instance(
-        RunnerStatus,
-        test_procedure_name=TestProcedureId.ALL_02.value,  # Runner reports next test is active
-        step_status={},
-    )
+    mocked_pod.status.return_value = generate_class_instance(RunnerStatus, step_status={})
+    mocked_pod.next_test.return_value = generate_class_instance(InitResponseBody, is_started=True)
 
     # Finalize first run
     response = await client.post(
@@ -1443,8 +1441,12 @@ async def test_playlist_finalize_advances_to_next_test(
     )
     assert response.status_code == HTTPStatus.OK
 
-    # Assert - teststack should NOT be torn down, second run should be started
+    # Assert - teststack should NOT be torn down, second run should be started via an explicit /next-test call
     mocked_pod.destroy_pod_resources.assert_not_awaited()
+    mocked_pod.next_test.assert_awaited_once()
+    next_run_request = mocked_pod.next_test.call_args_list[0].args[1]
+    assert next_run_request.test_definition.test_procedure_id == TestProcedureId.ALL_02
+    assert next_run_request.run_id == str(second_run_id)
 
     async with generate_async_session(pg_base_config) as session:
         first_run = (await session.execute(select(Run).where(Run.run_id == first_run_id))).scalar_one()
@@ -1478,14 +1480,9 @@ async def test_playlist_finalize_teardown_on_last_test(
         await session.execute(update(Run).where(Run.run_id == second_run_id).values(run_status=RunStatus.started))
         await session.commit()
 
-    # Mock runner status to report no active test (playlist complete)
     finalize_data = zip_file_data
     mocked_pod.finalize.return_value = finalize_data
-    mocked_pod.status.return_value = generate_class_instance(
-        RunnerStatus,
-        test_procedure_name="-",  # No active test - playlist complete
-        step_status={},
-    )
+    mocked_pod.status.return_value = generate_class_instance(RunnerStatus, step_status={})
 
     # Finalize last run
     response = await client.post(
@@ -1493,8 +1490,10 @@ async def test_playlist_finalize_teardown_on_last_test(
     )
     assert response.status_code == HTTPStatus.OK
 
-    # Assert - teststack should be torn down
+    # Assert - there is no next playlist entry, so /next-test is never called and the teststack is torn down
     mocked_pod.create_pod_run.assert_awaited_once()
+    mocked_pod.next_test.assert_not_awaited()
+    mocked_pod.destroy_pod_resources.assert_awaited_once()
 
     async with generate_async_session(pg_base_config) as session:
         second_run = (await session.execute(select(Run).where(Run.run_id == second_run_id))).scalar_one()
@@ -1582,6 +1581,184 @@ async def test_start_run_rejects_out_of_order_playlist_run(
     # Should be rejected with CONFLICT
     assert response.status_code == HTTPStatus.CONFLICT
     assert str(first_run_id) in response.text
+
+
+@pytest.mark.asyncio
+async def test_playlist_finalize_next_test_error_falls_back_to_teardown(
+    client, mocked_pod: MockedPod, zip_file_data, pg_base_config, client_cert_pem_bytes, valid_jwt_user1
+):
+    """If the runner rejects /next-test (e.g. a mismatch, or it's unreachable), the orchestrator tears down
+    rather than leaving the playlist stuck."""
+    response_model = await create_playlist_for_test(
+        client,
+        mocked_pod,
+        pg_base_config,
+        client_cert_pem_bytes,
+        valid_jwt_user1,
+        [TestProcedureId.ALL_01, TestProcedureId.ALL_02],
+    )
+    assert response_model.playlist_runs is not None
+    first_run_id = response_model.playlist_runs[0].run_id
+
+    async with generate_async_session(pg_base_config) as session:
+        await session.execute(update(Run).where(Run.run_id == first_run_id).values(run_status=RunStatus.started))
+        await session.commit()
+
+    mocked_pod.finalize.return_value = zip_file_data
+    mocked_pod.status.return_value = generate_class_instance(RunnerStatus, step_status={})
+    mocked_pod.next_test.side_effect = RunnerClientError("boom", http_status_code=HTTPStatus.CONFLICT)
+
+    response = await client.post(
+        f"/run/{first_run_id}/finalise", headers={"Authorization": f"Bearer {valid_jwt_user1}"}
+    )
+    assert response.status_code == HTTPStatus.OK
+
+    mocked_pod.destroy_pod_resources.assert_awaited_once()
+
+
+async def _get_playlist_run_response(client, valid_jwt: str, run_id: int) -> RunResponse:
+    response = await client.get(f"/run/{run_id}", headers={"Authorization": f"Bearer {valid_jwt}"})
+    assert response.status_code == HTTPStatus.OK
+    return RunResponse.from_json(response.text)
+
+
+@pytest.mark.asyncio
+async def test_update_playlist_replaces_upcoming_tail(
+    client, mocked_pod: MockedPod, pg_base_config, client_cert_pem_bytes, valid_jwt_user1
+):
+    response_model = await create_playlist_for_test(
+        client,
+        mocked_pod,
+        pg_base_config,
+        client_cert_pem_bytes,
+        valid_jwt_user1,
+        [TestProcedureId.ALL_01, TestProcedureId.ALL_02, TestProcedureId.ALL_03],
+    )
+    assert response_model.playlist_runs is not None
+    first_run_id = response_model.playlist_runs[0].run_id
+    old_upcoming_run_ids = {r.run_id for r in response_model.playlist_runs[1:]}
+
+    req = UpdatePlaylistRequest(
+        test_procedure_ids=[TestProcedureId.ALL_04],
+        expected_active_run_id=first_run_id,
+    )
+    response = await client.post(
+        f"/run/{first_run_id}/playlist",
+        content=req.to_json(),
+        headers={"Authorization": f"Bearer {valid_jwt_user1}"},
+    )
+    assert response.status_code == HTTPStatus.OK
+    response_model = UpdatePlaylistResponse.from_json(response.text)
+
+    # No runner interaction - this is a pure DB operation
+    mocked_pod.next_test.assert_not_awaited()
+
+    assert [r.test_procedure_id for r in response_model.playlist_runs] == [
+        TestProcedureId.ALL_01.value,
+        TestProcedureId.ALL_04.value,
+    ]
+    new_run_ids = {r.run_id for r in response_model.playlist_runs}
+    # Old upcoming run_ids do not survive the edit (delete-and-recreate)
+    assert new_run_ids.isdisjoint(old_upcoming_run_ids)
+    assert first_run_id in new_run_ids
+
+    # Reflected when fetching the (still-active) first run too
+    run_response = await _get_playlist_run_response(client, valid_jwt_user1, first_run_id)
+    assert run_response.playlist_runs is not None
+    assert len(run_response.playlist_runs) == 2
+
+
+@pytest.mark.asyncio
+async def test_update_playlist_stale_expected_active_run_id_returns_409(
+    client, mocked_pod: MockedPod, pg_base_config, client_cert_pem_bytes, valid_jwt_user1
+):
+    response_model = await create_playlist_for_test(
+        client,
+        mocked_pod,
+        pg_base_config,
+        client_cert_pem_bytes,
+        valid_jwt_user1,
+        [TestProcedureId.ALL_01, TestProcedureId.ALL_02],
+    )
+    assert response_model.playlist_runs is not None
+    first_run_id = response_model.playlist_runs[0].run_id
+    second_run_id = response_model.playlist_runs[1].run_id
+
+    req = UpdatePlaylistRequest(
+        test_procedure_ids=[TestProcedureId.ALL_03],
+        expected_active_run_id=second_run_id,  # wrong - first_run_id is still active
+    )
+    response = await client.post(
+        f"/run/{first_run_id}/playlist",
+        content=req.to_json(),
+        headers={"Authorization": f"Bearer {valid_jwt_user1}"},
+    )
+    assert response.status_code == HTTPStatus.CONFLICT
+
+
+@pytest.mark.asyncio
+async def test_update_playlist_non_playlist_run_returns_400(
+    client, mocked_pod: MockedPod, pg_base_config, client_cert_pem_bytes, valid_jwt_user1
+):
+    mocked_pod.health.return_value = True
+    mocked_pod.init.return_value = generate_class_instance(InitResponseBody, is_started=False)
+
+    async with generate_async_session(pg_base_config) as session:
+        run_group = (await session.execute(select(RunGroup).where(RunGroup.run_group_id == 1))).scalar_one()
+        run_group.certificate_pem = client_cert_pem_bytes
+        run_group.is_device_cert = True
+        run_group.is_static_uri = False
+        await session.commit()
+
+    req = InitRunRequest(test_procedure_id=TestProcedureId.ALL_01)
+    res = await client.post(
+        "/run_group/1/run", content=req.to_json(), headers={"Authorization": f"Bearer {valid_jwt_user1}"}
+    )
+    assert res.status_code == HTTPStatus.CREATED
+    single_run_id = InitRunResponse.from_json(res.text).run_id
+
+    req = UpdatePlaylistRequest(test_procedure_ids=[TestProcedureId.ALL_02], expected_active_run_id=single_run_id)
+    response = await client.post(
+        f"/run/{single_run_id}/playlist",
+        content=req.to_json(),
+        headers={"Authorization": f"Bearer {valid_jwt_user1}"},
+    )
+    assert response.status_code == HTTPStatus.BAD_REQUEST
+
+
+@pytest.mark.asyncio
+async def test_update_playlist_retry_failed_test(
+    client, mocked_pod: MockedPod, pg_base_config, client_cert_pem_bytes, valid_jwt_user1
+):
+    """Retrying a completed-failed test is just inserting the same test_procedure_id at the front of the tail -
+    duplicate test_procedure_id within one playlist is legal."""
+    response_model = await create_playlist_for_test(
+        client,
+        mocked_pod,
+        pg_base_config,
+        client_cert_pem_bytes,
+        valid_jwt_user1,
+        [TestProcedureId.ALL_01, TestProcedureId.ALL_02],
+    )
+    assert response_model.playlist_runs is not None
+    first_run_id = response_model.playlist_runs[0].run_id
+
+    req = UpdatePlaylistRequest(
+        test_procedure_ids=[TestProcedureId.ALL_01, TestProcedureId.ALL_02],
+        expected_active_run_id=first_run_id,
+    )
+    response = await client.post(
+        f"/run/{first_run_id}/playlist",
+        content=req.to_json(),
+        headers={"Authorization": f"Bearer {valid_jwt_user1}"},
+    )
+    assert response.status_code == HTTPStatus.OK
+    response_model = UpdatePlaylistResponse.from_json(response.text)
+    assert [r.test_procedure_id for r in response_model.playlist_runs] == [
+        TestProcedureId.ALL_01.value,
+        TestProcedureId.ALL_01.value,
+        TestProcedureId.ALL_02.value,
+    ]
 
 
 @pytest.mark.parametrize(
