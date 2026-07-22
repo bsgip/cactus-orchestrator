@@ -136,6 +136,16 @@ async def test_destroy_idle_pods_and_orphans(podman_mock: MockedPodman, pg_base_
         p2_r3.playlist_execution_id = "def456"
         p2_run_id = p2_r1.run_id
 
+        # Create an active playlist mid-session where the active test has just been advanced to via /next-test
+        # but not yet started - only 'initialised' (active, not-yet-started) + 'finalised' rows, no
+        # 'provisioning'/'started' row present. This should NOT be treated as orphaned (regression coverage for
+        # the playlist migration's orphan-pod rule).
+        p3_r1 = await insert_run_for_run_group(session, RUN_GROUP_ID, "ALL-01", RunStatus.finalised_by_client, False)
+        p3_r2 = await insert_run_for_run_group(session, RUN_GROUP_ID, "ALL-01", RunStatus.initialised, False)
+        p3_r1.playlist_execution_id = "ghi789"
+        p3_r2.playlist_execution_id = "ghi789"
+        p3_run_id = p3_r1.run_id
+
         await session.commit()
 
     # If the task checks for pod liveness - say they are still active
@@ -192,6 +202,12 @@ async def test_destroy_idle_pods_and_orphans(podman_mock: MockedPodman, pg_base_
             run_id=p2_run_id,
             resources=generate_class_instance(PodResources, pod_name=f"run-{p2_run_id}"),
         ),  # ORPHAN - This playlist is finalised
+        generate_class_instance(
+            RunningPod,
+            run_group_id=RUN_GROUP_ID,
+            run_id=p3_run_id,
+            resources=generate_class_instance(PodResources, pod_name=f"run-{p3_run_id}"),
+        ),  # This playlist's active test is only 'initialised' (advanced, not yet started) - still active
     ]
 
     # In the test DB runs 1,5,6 and 8 are all from "2024" and due for max life teardown
