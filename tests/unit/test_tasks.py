@@ -16,7 +16,7 @@ from sqlalchemy import select
 from cactus_orchestrator.crud import insert_run_for_run_group, select_active_runs_for_user
 from cactus_orchestrator.model import Run, RunGroup, RunStatus
 from cactus_orchestrator.pod.models import PodResources, RunningPod
-from cactus_orchestrator.tasks import destroy_idle_pods, generate_idleteardowntask
+from cactus_orchestrator.tasks import destroy_idle_pods, generate_idleteardowntask, terminate_dead_pod_runs
 
 
 @dataclass
@@ -136,6 +136,28 @@ async def test_destroy_idle_pods_and_orphans(podman_mock: MockedPodman, pg_base_
         p2_r3.playlist_execution_id = "def456"
         p2_run_id = p2_r1.run_id
 
+        # Active single run whose pod was deleted out-of-band (entirely missing from podman)
+        dead_pod_run = await insert_run_for_run_group(session, RUN_GROUP_ID, "ALL-01", RunStatus.started, False)
+        dead_pod_run.pod_name = f"run-{dead_pod_run.run_id}"
+        dead_pod_run_id = dead_pod_run.run_id
+
+        # Active single run whose pod is still present in podman but has crashed/exited (is_running=False)
+        crashed_pod_run = await insert_run_for_run_group(session, RUN_GROUP_ID, "ALL-01", RunStatus.started, False)
+        crashed_pod_run.pod_name = f"run-{crashed_pod_run.run_id}"
+        crashed_pod_run_id = crashed_pod_run.run_id
+
+        # Active playlist whose active run's pod was deleted out-of-band - all active siblings should terminate too
+        p3_r1 = await insert_run_for_run_group(session, RUN_GROUP_ID, "ALL-01", RunStatus.finalised_by_client, False)
+        p3_r2 = await insert_run_for_run_group(session, RUN_GROUP_ID, "ALL-01", RunStatus.started, False)
+        p3_r3 = await insert_run_for_run_group(session, RUN_GROUP_ID, "ALL-01", RunStatus.initialised, False)
+        p3_r1.playlist_execution_id = "ghi789"
+        p3_r2.playlist_execution_id = "ghi789"
+        p3_r3.playlist_execution_id = "ghi789"
+        p3_r2.pod_name = f"run-{p3_r2.run_id}"
+        p3_r3.pod_name = p3_r2.pod_name  # playlist siblings share the same pod
+        p3_run_id = p3_r2.run_id
+        p3_r3_run_id = p3_r3.run_id
+
         await session.commit()
 
     # If the task checks for pod liveness - say they are still active
@@ -192,6 +214,14 @@ async def test_destroy_idle_pods_and_orphans(podman_mock: MockedPodman, pg_base_
             run_id=p2_run_id,
             resources=generate_class_instance(PodResources, pod_name=f"run-{p2_run_id}"),
         ),  # ORPHAN - This playlist is finalised
+        generate_class_instance(
+            RunningPod,
+            run_group_id=RUN_GROUP_ID,
+            run_id=crashed_pod_run_id,
+            is_running=False,
+            resources=generate_class_instance(PodResources, pod_name=f"run-{crashed_pod_run_id}"),
+        ),  # DEAD - pod is present but has crashed/exited (is_running=False)
+        # NOTE: dead_pod_run_id and p3_run_id are deliberately absent - simulating a pod deleted out-of-band
     ]
 
     # In the test DB runs 1,5,6 and 8 are all from "2024" and due for max life teardown
@@ -205,7 +235,11 @@ async def test_destroy_idle_pods_and_orphans(podman_mock: MockedPodman, pg_base_
         f"run-{terminated_run_id}",  # Orphan
         f"run-{finalised_run_id}",  # Orphan
         f"run-{p2_run_id}",  # Orphan
+        f"run-{dead_pod_run_id}",  # Dead pod - deleted out-of-band
+        f"run-{crashed_pod_run_id}",  # Dead pod - crashed/exited
+        f"run-{p3_run_id}",  # Dead pod - playlist active run's pod deleted out-of-band
     ]
+    expected_terminated_run_ids = [dead_pod_run_id, crashed_pod_run_id, p3_run_id, p3_r3_run_id]
 
     # Let the background task run
     await asyncio.sleep(3)
@@ -217,6 +251,15 @@ async def test_destroy_idle_pods_and_orphans(podman_mock: MockedPodman, pg_base_
         )
         for r in finalised_runs:
             assert r.run_status == RunStatus.finalised_by_timeout
+            assert r.finalised_at is not None
+            assert_nowish(r.finalised_at)
+
+        terminated_runs = (
+            (await session.execute(select(Run).where(Run.run_id.in_(expected_terminated_run_ids)))).scalars().all()
+        )
+        assert len(terminated_runs) == len(expected_terminated_run_ids)
+        for r in terminated_runs:
+            assert r.run_status == RunStatus.terminated
             assert r.finalised_at is not None
             assert_nowish(r.finalised_at)
 
@@ -275,5 +318,105 @@ async def test_destroy_idle_pods_with_playlist(
     mock_session.commit.side_effect = lambda: async_return(None)
 
     await destroy_idle_pods(mock_session, 3600, 1800, 120)
+    mock_finalize_runs.assert_called_once()
+    mock_destroy_pod_resources.assert_called_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("pod_name_in_run", "running_pods", "expect_terminate"),
+    [
+        ("run-101", [], True),  # pod missing entirely - deleted out-of-band
+        ("run-101", [generate_class_instance(RunningPod, name="run-101", is_running=False)], True),  # crashed/exited
+        ("run-101", [generate_class_instance(RunningPod, name="run-101", is_running=True)], False),  # still alive
+        (None, [], False),  # pod never created yet (still provisioning) - nothing to reconcile
+    ],
+)
+@patch("cactus_orchestrator.tasks.select_nonfinalised_runs", spec=AsyncMock)
+@patch("cactus_orchestrator.tasks.destroy_pod_resources", spec=AsyncMock)
+@patch("cactus_orchestrator.tasks.finalize_teststack_runs", spec=AsyncMock)
+async def test_terminate_dead_pod_runs(
+    mock_finalize_runs, mock_destroy_pod_resources, mock_select_runs, pod_name_in_run, running_pods, expect_terminate
+):
+    """Verify a run is only terminated when its pod is missing or present-but-not-running."""
+
+    mock_run = Run(
+        run_id=101,
+        run_group_id=1,
+        pod_name=pod_name_in_run,
+        testprocedure_id="ALL-01",
+        created_at=datetime(2024, 1, 1, tzinfo=UTC),
+        finalised_at=None,
+        run_status=RunStatus.started,
+    )
+
+    async def async_return(value):
+        return value
+
+    mock_select_runs.side_effect = lambda *args, **kwargs: async_return([mock_run])
+    mock_finalize_runs.side_effect = lambda *args, **kwargs: async_return(None)
+    mock_destroy_pod_resources.side_effect = lambda *args, **kwargs: async_return(True)
+
+    mock_session = MagicMock()
+    mock_session.commit.side_effect = lambda: async_return(None)
+
+    await terminate_dead_pod_runs(mock_session, running_pods, 120)
+
+    if expect_terminate:
+        mock_finalize_runs.assert_called_once()
+        assert mock_finalize_runs.call_args.args[3] == RunStatus.terminated
+        mock_destroy_pod_resources.assert_called_once()
+    else:
+        mock_finalize_runs.assert_not_called()
+        mock_destroy_pod_resources.assert_not_called()
+
+
+@pytest.mark.asyncio
+@patch("cactus_orchestrator.tasks.select_nonfinalised_runs", spec=AsyncMock)
+@patch("cactus_orchestrator.tasks.destroy_pod_resources", spec=AsyncMock)
+@patch("cactus_orchestrator.tasks.finalize_teststack_runs", spec=AsyncMock)
+async def test_terminate_dead_pod_runs_with_playlist(mock_finalize_runs, mock_destroy_pod_resources, mock_select_runs):
+    """When a playlist's active run's pod has died, only one terminate/destroy call is made for that teststack."""
+
+    playlist_execution_id = str(uuid4())
+    mock_runs = [
+        Run(
+            run_id=201,
+            run_group_id=1,
+            pod_name="playlist-teststack",
+            testprocedure_id="ALL-01",
+            created_at=datetime(2024, 1, 1, tzinfo=UTC),
+            finalised_at=None,
+            run_status=RunStatus.started,
+            playlist_execution_id=playlist_execution_id,
+            playlist_order=0,
+        ),
+        Run(
+            run_id=202,
+            run_group_id=1,
+            pod_name="playlist-teststack",
+            testprocedure_id="ALL-01",
+            created_at=datetime(2024, 1, 1, tzinfo=UTC),
+            finalised_at=None,
+            run_status=RunStatus.initialised,
+            playlist_execution_id=playlist_execution_id,
+            playlist_order=1,
+        ),
+    ]
+
+    async def async_return(value):
+        return value
+
+    mock_select_runs.side_effect = lambda *args, **kwargs: async_return(mock_runs)
+    mock_finalize_runs.side_effect = lambda *args, **kwargs: async_return(None)
+    mock_destroy_pod_resources.side_effect = lambda *args, **kwargs: async_return(True)
+
+    mock_session = MagicMock()
+    mock_session.commit.side_effect = lambda: async_return(None)
+
+    await terminate_dead_pod_runs(mock_session, [], 120)
+
+    # Both runs share one pod/teststack - only the first (playlist-order 0) run should trigger the calls,
+    # the second is skipped as its playlist has already been processed
     mock_finalize_runs.assert_called_once()
     mock_destroy_pod_resources.assert_called_once()

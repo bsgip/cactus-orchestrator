@@ -22,7 +22,7 @@ from cactus_orchestrator.crud import (
 )
 from cactus_orchestrator.model import Run, RunStatus
 from cactus_orchestrator.pod.manager import destroy_pod_resources, ensure_images, fetch_running_pods
-from cactus_orchestrator.pod.models import PodResources, PodRoutes
+from cactus_orchestrator.pod.models import PodResources, PodRoutes, RunningPod
 from cactus_orchestrator.settings import CactusOrchestratorSettings, get_current_settings
 
 logger = logging.getLogger(__name__)
@@ -128,11 +128,52 @@ async def destroy_idle_pods(
             await destroy_pod_resources(settings.podman_socket, pod_resources)
 
 
-async def destroy_orphaned_pods(session: AsyncSession) -> None:
+async def terminate_dead_pod_runs(
+    session: AsyncSession, running_pods: list[RunningPod], comms_timeout_seconds: int
+) -> None:
+    """Checks active runs and terminates any whose pod has disappeared or died out-of-band"""
+    settings = get_current_settings()
+    running_pods_by_name = {pod.name: pod for pod in running_pods}
+
+    runs = await select_nonfinalised_runs(session)
+
+    # Track playlist_execution_ids we've already processed
+    processed_playlists: set[str] = set()
+
+    for run in runs:
+        if run.playlist_execution_id and run.playlist_execution_id in processed_playlists:
+            continue
+
+        if run.pod_name is None:
+            # Pod hasn't been created yet (still provisioning) - nothing to reconcile
+            continue
+
+        pod = running_pods_by_name.get(run.pod_name)
+        if pod is not None and pod.is_running:
+            continue
+
+        logger.info(f"(Dead Pod Task) Run {run.run_id} at pod {run.pod_name} has died and will be terminated.")
+        if run.playlist_execution_id:
+            processed_playlists.add(run.playlist_execution_id)
+
+        now = datetime.now(UTC)
+        pod_resources = PodResources.from_run(settings.podman_network, run)
+        try:
+            await finalize_teststack_runs(session, run, "", RunStatus.terminated, now, comms_timeout_seconds)
+            await session.commit()
+        except Exception as exc:
+            logger.warning(
+                f"Failed to terminate dead-pod run {run.run_id} at pod {run.pod_name}: {exc}",
+                exc_info=exc,
+            )
+        await destroy_pod_resources(settings.podman_socket, pod_resources)
+
+
+async def destroy_orphaned_pods(session: AsyncSession, running_pods: list[RunningPod]) -> None:
     """Enumerates all running cactus pods and attempts to kill any whose parent run is missing / inactive"""
     settings = get_current_settings()
 
-    for pod in await fetch_running_pods(settings.podman_socket):
+    for pod in running_pods:
         try:
             run = await select_run_for_group(session, pod.run_group_id, pod.run_id)
 
@@ -175,6 +216,7 @@ def generate_idleteardowntask(
     @repeat_every(seconds=idleteardowntask_repeat_every_seconds)
     async def idleteardowntask() -> None:
         """Task that monitors live pods and triggers teardown based on timeout rules."""
+        settings = get_current_settings()
         async with db():
             await destroy_idle_pods(
                 db.session,
@@ -183,7 +225,9 @@ def generate_idleteardowntask(
                 comms_timeout_seconds,
             )
 
-            await destroy_orphaned_pods(db.session)
+            running_pods = await fetch_running_pods(settings.podman_socket)
+            await terminate_dead_pod_runs(db.session, running_pods, comms_timeout_seconds)
+            await destroy_orphaned_pods(db.session, running_pods)
 
     return idleteardowntask
 
