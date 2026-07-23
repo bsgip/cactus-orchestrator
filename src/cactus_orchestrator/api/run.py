@@ -159,6 +159,7 @@ async def get_group_runs_paginated(
                     PodResources.from_run(settings.podman_network, run),
                     run_group,
                     run,
+                    dev_localhost_port_base=settings.dev_runner_localhost_port_base,
                 ),
             )
             for run in runs
@@ -273,6 +274,7 @@ async def spawn_teststack_and_init_run(  # noqa: C901
         pod_resources,
         run_group,
         first_run,
+        dev_localhost_port_base=settings.dev_runner_localhost_port_base,
     )
 
     # Global static utility-server (envoy / DNSP) notification mTLS material - envoy presents this when POSTing
@@ -434,7 +436,13 @@ async def start_run(
     settings = get_current_settings()
     pod_resources = PodResources.from_run(settings.podman_network, run)
     pod_routes = PodRoutes.from_run(
-        settings.cactus_fqdn, settings.envoy_prefix, settings.podman_runner_port, pod_resources, run_group, run
+        settings.cactus_fqdn,
+        settings.envoy_prefix,
+        settings.podman_runner_port,
+        pod_resources,
+        run_group,
+        run,
+        dev_localhost_port_base=settings.dev_runner_localhost_port_base,
     )
 
     # request runner starts run
@@ -561,7 +569,13 @@ async def get_individual_run(
     settings = get_current_settings()
     pod_resources = PodResources.from_run(settings.podman_network, run)
     pod_routes = PodRoutes.from_run(
-        settings.cactus_fqdn, settings.envoy_prefix, settings.podman_runner_port, pod_resources, run_group, run
+        settings.cactus_fqdn,
+        settings.envoy_prefix,
+        settings.podman_runner_port,
+        pod_resources,
+        run_group,
+        run,
+        dev_localhost_port_base=settings.dev_runner_localhost_port_base,
     )
 
     # Fetch playlist_runs if this is a playlist run
@@ -630,7 +644,13 @@ async def finalise_run_and_teardown_teststack(  # noqa: C901
     settings = get_current_settings()
     pod_resources = PodResources.from_run(settings.podman_network, run)
     pod_routes = PodRoutes.from_run(
-        settings.cactus_fqdn, settings.envoy_prefix, settings.podman_runner_port, pod_resources, run_group, run
+        settings.cactus_fqdn,
+        settings.envoy_prefix,
+        settings.podman_runner_port,
+        pod_resources,
+        run_group,
+        run,
+        dev_localhost_port_base=settings.dev_runner_localhost_port_base,
     )
 
     # Don't attempt to cleanup / teardown if this has already been finalised
@@ -726,7 +746,13 @@ async def finalise_playlist(
     settings = get_current_settings()
     pod_resources = PodResources.from_run(settings.podman_network, run)
     pod_routes = PodRoutes.from_run(
-        settings.cactus_fqdn, settings.envoy_prefix, settings.podman_runner_port, pod_resources, run_group, run
+        settings.cactus_fqdn,
+        settings.envoy_prefix,
+        settings.podman_runner_port,
+        pod_resources,
+        run_group,
+        run,
+        dev_localhost_port_base=settings.dev_runner_localhost_port_base,
     )
 
     # Finalize current test if it's active
@@ -864,7 +890,13 @@ async def get_run_status(
     settings = get_current_settings()
     pod_resources = PodResources.from_run(settings.podman_network, run)
     pod_routes = PodRoutes.from_run(
-        settings.cactus_fqdn, settings.envoy_prefix, settings.podman_runner_port, pod_resources, run_group, run
+        settings.cactus_fqdn,
+        settings.envoy_prefix,
+        settings.podman_runner_port,
+        pod_resources,
+        run_group,
+        run,
+        dev_localhost_port_base=settings.dev_runner_localhost_port_base,
     )
     async with ClientSession(
         base_url=pod_routes.internal_base_url,
@@ -903,7 +935,13 @@ async def get_run_request_list(
     settings = get_current_settings()
     pod_resources = PodResources.from_run(settings.podman_network, run)
     pod_routes = PodRoutes.from_run(
-        settings.cactus_fqdn, settings.envoy_prefix, settings.podman_runner_port, pod_resources, run_group, run
+        settings.cactus_fqdn,
+        settings.envoy_prefix,
+        settings.podman_runner_port,
+        pod_resources,
+        run_group,
+        run,
+        dev_localhost_port_base=settings.dev_runner_localhost_port_base,
     )
     async with ClientSession(
         base_url=pod_routes.internal_base_url,
@@ -944,7 +982,13 @@ async def get_run_request_data(
     settings = get_current_settings()
     pod_resources = PodResources.from_run(settings.podman_network, run)
     pod_routes = PodRoutes.from_run(
-        settings.cactus_fqdn, settings.envoy_prefix, settings.podman_runner_port, pod_resources, run_group, run
+        settings.cactus_fqdn,
+        settings.envoy_prefix,
+        settings.podman_runner_port,
+        pod_resources,
+        run_group,
+        run,
+        dev_localhost_port_base=settings.dev_runner_localhost_port_base,
     )
     async with ClientSession(
         base_url=pod_routes.internal_base_url,
@@ -981,7 +1025,13 @@ async def proceed_proxy(
     settings = get_current_settings()
     pod_resources = PodResources.from_run(settings.podman_network, run)
     pod_routes = PodRoutes.from_run(
-        settings.cactus_fqdn, settings.envoy_prefix, settings.podman_runner_port, pod_resources, run_group, run
+        settings.cactus_fqdn,
+        settings.envoy_prefix,
+        settings.podman_runner_port,
+        pod_resources,
+        run_group,
+        run,
+        dev_localhost_port_base=settings.dev_runner_localhost_port_base,
     )
     async with ClientSession(
         base_url=pod_routes.internal_base_url,
@@ -1029,6 +1079,7 @@ async def get_run_list(
             pod_resources,
             run.run_group,
             run,
+            dev_localhost_port_base=settings.dev_runner_localhost_port_base,
         )
         run_responses.append(map_run_to_run_response(run, pod_routes))
 

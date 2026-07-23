@@ -100,6 +100,11 @@ class CactusOrchestratorSettings(BaseSettings):
     ignored_csip_aus_versions: list[str] = []
     ignored_test_procedures: list[str] = []
 
+    # LOCAL DEV ONLY - never set in production. When set, each pod's runner port is also published to
+    # 127.0.0.1:<port> on the host and the orchestrator addresses runners via localhost instead
+    # of pod-name DNS - allowing the orchestrator to run outside podman_network.
+    dev_runner_localhost_port_base: int | None = None
+
     @classmethod
     def settings_customise_sources(
         cls,
