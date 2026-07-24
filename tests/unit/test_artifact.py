@@ -8,6 +8,7 @@ from assertical.fixtures.postgres import generate_async_session
 from cactus_runner.models import (
     ActiveTestProcedure,
     CheckResult,
+    RandomValues,
     ReportingData_v1,
     ResourceAnnotations,
     RunnerState,
@@ -112,6 +113,7 @@ def run_artifact() -> RunArtifact:
             step_status={},
             finished_zip_path=None,
             resource_annotations=ResourceAnnotations(der_control_ids_by_alias={"a": 1}),
+            random_values=RandomValues(),
         ),
     )
     reporting_data = generate_class_instance(
