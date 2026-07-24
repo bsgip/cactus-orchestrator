@@ -954,16 +954,38 @@ def generate_timeline_chart(timeline: Timeline, sites: list[Site]) -> Image:
         line = {"dash": "dash"} if ds.dashed else {}
         fig.add_trace(go.Scatter(x=x_data, y=y_data, name=ds.label, line_shape=line_shape, line=line))
 
-    # Figure out if we have a setMaxW to utilise
-    set_max_w: int | None = None
+    # Figure out the effective device max for each direction: prefer the asymmetric
+    # setMaxDischargeRateW (export) / setMaxChargeRateW (import), falling back to setMaxW.
+    upper_max_w: int | None = None
+    upper_max_label = "setMaxW"
+    lower_max_w: int | None = None
+    lower_max_label = "setMaxW"
     for site in sites:
         try:
             der_setting = site.site_ders[0].site_der_setting
             if der_setting:
                 set_max_w = int(der_setting.max_w_value * pow(10, der_setting.max_w_multiplier))
+                upper_max_w = set_max_w
+                lower_max_w = set_max_w
+                if (
+                    der_setting.max_discharge_rate_w_value is not None
+                    and der_setting.max_discharge_rate_w_multiplier is not None
+                ):
+                    upper_max_w = int(
+                        der_setting.max_discharge_rate_w_value * pow(10, der_setting.max_discharge_rate_w_multiplier)
+                    )
+                    upper_max_label = "setMaxDischargeRateW"
+                if (
+                    der_setting.max_charge_rate_w_value is not None
+                    and der_setting.max_charge_rate_w_multiplier is not None
+                ):
+                    lower_max_w = int(
+                        der_setting.max_charge_rate_w_value * pow(10, der_setting.max_charge_rate_w_multiplier)
+                    )
+                    lower_max_label = "setMaxChargeRateW"
                 break
         except Exception as exc:
-            logger.error(f"Failing looking up setMaxW for site {site.site_id}", exc_info=exc)
+            logger.error(f"Failing looking up device max for site {site.site_id}", exc_info=exc)
 
     shapes = [
         # This adds emphasis to the zero line
@@ -981,58 +1003,59 @@ def generate_timeline_chart(timeline: Timeline, sites: list[Site]) -> Image:
     ]
     annotations = []
 
-    if set_max_w is not None:
-        shapes.extend(
-            [
-                dict(
-                    type="line",
-                    xref="paper",
-                    x0=0,
-                    x1=1,
-                    yref="y",
-                    y0=set_max_w,
-                    y1=set_max_w,
-                    line=dict(color="red", width=2, dash="dash"),
-                ),
-                dict(
-                    type="line",
-                    xref="paper",
-                    x0=0,
-                    x1=1,
-                    yref="y",
-                    y0=-set_max_w,
-                    y1=-set_max_w,
-                    line=dict(color="red", width=2, dash="dash"),
-                ),
-            ]
+    if upper_max_w is not None:
+        shapes.append(
+            dict(
+                type="line",
+                xref="paper",
+                x0=0,
+                x1=1,
+                yref="y",
+                y0=upper_max_w,
+                y1=upper_max_w,
+                line=dict(color="red", width=2, dash="dash"),
+            )
         )
-        annotations.extend(
-            [
-                dict(
-                    xref="paper",
-                    x=0.5,  # Middle of the page
-                    y=set_max_w,
-                    xanchor="center",
-                    yanchor="middle",
-                    text="setMaxW",
-                    showarrow=False,
-                    font=dict(color="red", size=12),
-                    bgcolor="white",
-                    bordercolor="red",
-                ),
-                dict(
-                    xref="paper",
-                    x=0.5,  # Middle of the page
-                    y=-set_max_w,
-                    xanchor="center",
-                    yanchor="middle",
-                    text="setMaxW",
-                    showarrow=False,
-                    font=dict(color="red", size=12),
-                    bgcolor="white",
-                    bordercolor="red",
-                ),
-            ]
+        annotations.append(
+            dict(
+                xref="paper",
+                x=0.5,  # Middle of the page
+                y=upper_max_w,
+                xanchor="center",
+                yanchor="middle",
+                text=upper_max_label,
+                showarrow=False,
+                font=dict(color="red", size=12),
+                bgcolor="white",
+                bordercolor="red",
+            )
+        )
+    if lower_max_w is not None:
+        shapes.append(
+            dict(
+                type="line",
+                xref="paper",
+                x0=0,
+                x1=1,
+                yref="y",
+                y0=-lower_max_w,
+                y1=-lower_max_w,
+                line=dict(color="red", width=2, dash="dash"),
+            )
+        )
+        annotations.append(
+            dict(
+                xref="paper",
+                x=0.5,  # Middle of the page
+                y=-lower_max_w,
+                xanchor="center",
+                yanchor="middle",
+                text=lower_max_label,
+                showarrow=False,
+                font=dict(color="red", size=12),
+                bgcolor="white",
+                bordercolor="red",
+            )
         )
 
     # Generate x-axis labels
