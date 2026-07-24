@@ -12,6 +12,7 @@ from assertical.fake.generator import generate_class_instance
 from assertical.fixtures.environment import environment_snapshot
 from assertical.fixtures.fastapi import start_app_with_client
 from assertical.fixtures.postgres import generate_async_conn_str_from_connection
+from cactus_runner.models import RandomValues
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec, rsa
@@ -373,6 +374,7 @@ def reporting_data_json(reporting_data_version):
             step_status={},
             finished_zip_path=None,
             resource_annotations=ResourceAnnotations(der_control_ids_by_alias={"a": 1}),
+            random_values=RandomValues(),
         ),
     )
     reporting_data = generate_class_instance(
