@@ -1399,7 +1399,7 @@ async def create_playlist_for_test(
 
         await session.commit()
 
-    req = InitRunRequest(test_procedure_ids=test_procedure_ids)
+    req = InitRunRequest(test_procedure_ids=[str(tpid) for tpid in test_procedure_ids])
     res = await client.post(
         f"/run_group/{run_group_id}/run", content=req.to_json(), headers={"Authorization": f"Bearer {valid_jwt}"}
     )

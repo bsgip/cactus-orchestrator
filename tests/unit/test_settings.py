@@ -17,7 +17,7 @@ def cleared_env(preserved_environment):
 
 def test_parse_images_from_env_empty(cleared_env):
 
-    settings = CactusOrchestratorSettings()  # ty:ignore[missing-argument]
+    settings = CactusOrchestratorSettings()
 
     assert_dict_type(str, PodImages, settings.images, count=0)
 
@@ -34,7 +34,7 @@ def test_parse_images_from_env(cleared_env):
     os.environ["CACTUS_IMAGE__V1_88_STORAGE_BETA__ENVOY"] = "envoy:4"
     os.environ["CACTUS_IMAGE__V1_88_STORAGE_BETA__RUNNER"] = "runner"
 
-    settings = CactusOrchestratorSettings()  # ty:ignore[missing-argument]
+    settings = CactusOrchestratorSettings()
 
     assert_dict_type(str, PodImages, settings.images, count=2)
 
@@ -53,6 +53,6 @@ def test_dev_runner_localhost_port_base_defaults_off(cleared_env):
     """Makes sure we dont accidentally deploy dev version somehow"""
     assert "DEV_RUNNER_LOCALHOST_PORT_BASE" not in os.environ
 
-    settings = CactusOrchestratorSettings()  # ty:ignore[missing-argument]
+    settings = CactusOrchestratorSettings()
 
     assert settings.dev_runner_localhost_port_base is None
