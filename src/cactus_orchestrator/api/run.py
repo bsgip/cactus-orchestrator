@@ -250,7 +250,7 @@ async def spawn_teststack_and_init_run(  # noqa: C901
             db.session,
             run_group_id,
             playlist_execution_id,  # type: ignore  # We know it's not None when is_playlist
-            [p.value for p in procedure_ids],  # Convert TestProcedureId enums to strings
+            [p for p in procedure_ids],
             run_group.is_device_cert,
             start_index,
         )
@@ -260,7 +260,7 @@ async def spawn_teststack_and_init_run(  # noqa: C901
         first_run = await insert_run_for_run_group(
             db.session,
             run_group_id,
-            procedure_ids[0].value,
+            procedure_ids[0],
             RunStatus.provisioning,
             run_group.is_device_cert,
         )
@@ -334,7 +334,7 @@ async def spawn_teststack_and_init_run(  # noqa: C901
                     )
                     run_requests.append(run_request)
             else:
-                yaml_definition = get_yaml_contents(procedure_ids[0])
+                yaml_definition = get_yaml_contents(TestProcedureId(procedure_ids[0]))
                 run_request = RunRequest(
                     run_id=str(first_run.run_id),
                     test_definition=TestDefinition(test_procedure_id=procedure_ids[0], yaml_definition=yaml_definition),

@@ -61,7 +61,7 @@ def run_summary_to_compliance_status(test_procedure: TestProcedureRunSummaryResp
 async def get_class_compliance(
     compliance_class: str,
     tests: list[TestProcedureId],
-    procedure_map: dict[TestProcedureId, TestProcedureRunSummaryResponse],
+    procedure_map: dict[str, TestProcedureRunSummaryResponse],
 ) -> Compliance:
     class_details = fetch_compliance_class(compliance_class)
     per_run_compliance = [
@@ -78,7 +78,7 @@ async def get_class_compliance(
 
 async def get_procedure_mapping(
     session: AsyncSession, run_group: RunGroup
-) -> dict[TestProcedureId, TestProcedureRunSummaryResponse]:
+) -> dict[str, TestProcedureRunSummaryResponse]:
     test_procedure_definitions = get_filtered_test_procedures()
 
     procedures: list[TestProcedureRunSummaryResponse] = []
@@ -107,7 +107,7 @@ async def get_procedure_mapping(
 
 
 async def get_compliance_for_run_group(
-    procedure_map: dict[TestProcedureId, TestProcedureRunSummaryResponse],
+    procedure_map: dict[str, TestProcedureRunSummaryResponse],
 ) -> dict[str, Compliance]:
 
     tests_by_class = defaultdict(list)
