@@ -350,7 +350,11 @@ def _create_pod_and_containers(
 
     # 4. Runner — the ingress: the Traefik labels (with a StripPrefix middleware) live here, not on
     # envoy, so external device traffic flows through the runner's proxy before reaching envoy.
-    traefik_router_rule = f"Host(`{routes.external_host}`) && PathPrefix(`{routes.href_prefix}`)"
+    #
+    # Support the /envoy route AND the /.well-known route
+    traefik_router_rule = (
+        f"Host(`{routes.external_host}`) && (PathPrefix(`{routes.href_prefix}`) || PathPrefix(`/.well-known`))"
+    )
     traefik_labels = {
         "traefik.enable": "true",
         "traefik.docker.network": resources.shared_network_name,
