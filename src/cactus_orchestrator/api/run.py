@@ -787,7 +787,7 @@ async def update_playlist(
         db.session,
         current_active_run.run_group_id,
         run.playlist_execution_id,
-        [p.value for p in body.test_procedure_ids],
+        body.test_procedure_ids,
         current_active_run.is_device_cert,
         current_active_run.pod_name,
         current_active_run.playlist_order + 1,
