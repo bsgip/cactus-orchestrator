@@ -138,7 +138,7 @@ _main_settings: CactusOrchestratorSettings | None = None
 def get_current_settings() -> CactusOrchestratorSettings:
     global _main_settings
     if not _main_settings:
-        _main_settings = CactusOrchestratorSettings()  # ty: ignore[missing-argument]
+        _main_settings = CactusOrchestratorSettings()
     return _main_settings
 
 
