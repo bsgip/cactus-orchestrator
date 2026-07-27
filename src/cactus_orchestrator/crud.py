@@ -312,11 +312,13 @@ async def update_run_with_runartifact_and_finalise(
     run_status: RunStatus,
     finalised_at: datetime,
     all_criteria_met: bool | None,
+    warnings: list[dict] | None,
 ) -> None:
     run.run_artifact_id = run_artifact_id
     run.finalised_at = finalised_at
     run.run_status = run_status
     run.all_criteria_met = all_criteria_met
+    run.warnings = warnings
     await session.flush()
 
 
