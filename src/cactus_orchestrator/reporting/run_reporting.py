@@ -1684,6 +1684,7 @@ def generate_page_elements(
     timeline: Timeline | None,
     stylesheet: StyleSheet,
     set_max_w_varied: bool = False,
+    playlist_info: str | None = None,
 ) -> list[Flowable]:
     active_test_procedure = runner_state.active_test_procedure
     if active_test_procedure is None:
@@ -1727,11 +1728,7 @@ def generate_page_elements(
                 client_pen=active_test_procedure.pen,
                 duration=duration,
                 stylesheet=stylesheet,
-                playlist_info=(
-                    f"Test {runner_state.playlist_index + 1} of {len(runner_state.playlist)}"
-                    if runner_state.playlist
-                    else None
-                ),
+                playlist_info=playlist_info,
             )
         )
     except ValueError as e:
@@ -1788,6 +1785,7 @@ def pdf_report_as_bytes(
     timeline: Timeline | None,
     no_spacers: bool = False,
     set_max_w_varied: bool = False,
+    playlist_info: str | None = None,
 ) -> bytes:
     stylesheet = get_stylesheet()
     if no_spacers:
@@ -1812,6 +1810,7 @@ def pdf_report_as_bytes(
         timeline=timeline,
         stylesheet=stylesheet,
         set_max_w_varied=set_max_w_varied,
+        playlist_info=playlist_info,
     )
 
     test_procedure_name = runner_state.active_test_procedure.name
