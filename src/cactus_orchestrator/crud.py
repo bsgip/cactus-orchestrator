@@ -816,8 +816,7 @@ async def select_playlist_runs_for_update(
 
 
 async def delete_upcoming_playlist_runs(session: AsyncSession, playlist_execution_id: str, active_order: int) -> None:
-    """Delete the not-yet-run tail of a playlist (playlist_order > active_order). The active run (which may
-    itself still be 'initialised' if not yet started) and completed runs are untouched."""
+    """Delete the not-yet-run tail of a playlist (playlist_order > active_order)."""
     stmt = delete(Run).where(Run.playlist_execution_id == playlist_execution_id, Run.playlist_order > active_order)
     await session.execute(stmt)
 
@@ -831,11 +830,8 @@ async def insert_playlist_tail_runs(
     pod_name: str | None,
     start_order: int,
 ) -> list[Run]:
-    """Insert fresh 'initialised' Run rows for the upcoming tail of a playlist, starting at start_order.
-
-    Callers are expected to have already deleted the old upcoming rows (delete_upcoming_playlist_runs) - this
-    just inserts the replacements, contiguously numbered from start_order.
-    """
+    """Insert 'initialised' Run rows for a playlist tail, numbered contiguously from start_order.
+    Callers must delete the old tail rows first (delete_upcoming_playlist_runs)."""
     runs = []
     for offset, procedure_id in enumerate(test_procedure_ids):
         run = Run(

@@ -330,7 +330,7 @@ requires-dist = [
     { name = "asyncpg" },
     { name = "bandit", marker = "extra == 'dev'" },
     { name = "cactus-runner", git = "https://github.com/bsgip/cactus-runner.git?rev=v2.6.0" },
-    { name = "cactus-schema", specifier = ">=1.3.1,<2" },
+    { name = "cactus-schema", specifier = "==1.3.1" },
     { name = "cactus-test-definitions", specifier = "==1.15.0" },
     { name = "coverage", marker = "extra == 'dev'" },
     { name = "cryptography" },

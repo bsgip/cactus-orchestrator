@@ -166,8 +166,7 @@ async def regenerate_pdf_report(
         file_data (bytes): a zip archive containing a pdf run report (to be replaced)
         raw_reporting_data (str): ReportingData as a json encoded string
         version (int): the version of the reporting data in `raw_reporting_data`.
-        playlist_info (str | None): "Test N of M" label for playlist runs, sourced from the orchestrator DB
-            (RunnerState no longer carries playlist position).
+        playlist_info (str | None): "Test N of M" label for playlist runs.
     Returns:
         bytes: the updated zip file data.
     Raises:
@@ -224,7 +223,7 @@ async def regenerate_run_artifact(session: AsyncSession, run: Run, run_artifact:
 
     Args:
         session: A database session.
-        run (Run): The Run the artifact belongs to (used to source the playlist "Test N of M" label).
+        run (Run): The Run the artifact belongs to.
         run_artifact (RunArtifact): The RunArtifact to update.
     Returns:
         RunArtifact: the updated RunArtifact

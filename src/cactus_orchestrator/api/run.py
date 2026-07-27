@@ -307,8 +307,7 @@ async def spawn_teststack_and_init_run(  # noqa: C901
         logger.error(f"Failed to create new pod for run_group {run_group_id}", exc_info=exc)
         raise HTTPException(HTTPStatus.INTERNAL_SERVER_ERROR, detail="Internal Server Error") from exc
 
-    # Initialise the runner instance in the new pod - the runner only ever sees the single, currently-active test.
-    # Subsequent playlist tests are sent one at a time via RunnerClient.next_test on advancement.
+    # Initialise the runner with the first test only - playlists advance via RunnerClient.next_test
     try:
         # inject initial state with either the device or aggregator cert data
         async with ClientSession(
@@ -615,7 +614,7 @@ async def finalise_run_and_teardown_teststack(  # noqa: C901
     For playlist runs, this will finalize the current test and advance to the next test in the playlist.
     The teststack is only torn down after the last test in the playlist completes.
     """
-    # get user - with_cert=True: needed to build the next test's RunRequest on playlist advancement
+    # get user (with cert - needed to build the next RunRequest on playlist advancement)
     user, run_group, run = await select_user_run_group_run_or_raise(
         db.session, user_context, run_id, with_cert=True, with_artifact=True
     )
@@ -651,16 +650,16 @@ async def finalise_run_and_teardown_teststack(  # noqa: C901
         # Handle playlist advancement or teardown
         should_teardown = True
         if run.playlist_execution_id and run.playlist_order is not None:
-            # Lock the playlist's rows so the playlist cant be altered on finalise (race)
+            # Lock the playlist rows so a playlist update can't interleave with advancement
             await select_playlist_runs_for_update(db.session, run.playlist_execution_id)
             next_run = await select_next_playlist_run(db.session, run.playlist_execution_id, run.playlist_order)
             if next_run:
-                next_run_request = _build_run_request(next_run, run_group, user)
                 async with ClientSession(
                     base_url=pod_routes.internal_base_url,
                     timeout=ClientTimeout(settings.comms_timeout_seconds),
                 ) as session:
                     try:
+                        next_run_request = _build_run_request(next_run, run_group, user)
                         next_test_result = await RunnerClient.next_test(session, next_run_request)
                         new_status = RunStatus.started if next_test_result.is_started else RunStatus.initialised
                         await update_run_run_status(db.session, next_run.run_id, new_status)
@@ -669,9 +668,9 @@ async def finalise_run_and_teardown_teststack(  # noqa: C901
                         logger.info(
                             f"Playlist advanced: run {run.run_id} finalized, next run {next_run.run_id} -> {new_status.name}"  # noqa: E501
                         )
-                    except RunnerClientError as exc:
+                    except Exception as exc:
+                        # Any failure to advance (bad test id, missing cert, runner error) falls back to teardown
                         logger.error(f"Error advancing playlist to next test: {exc}")
-                        # should_teardown stays True
 
         if should_teardown:
             await destroy_pod_resources(settings.podman_socket, pod_resources)
@@ -732,8 +731,8 @@ async def finalise_playlist(
     else:
         artifact = run.run_artifact
 
-    # Mark all remaining initialised runs as skipped
-    playlist_runs = await select_playlist_runs(db.session, run.playlist_execution_id)
+    # Mark all remaining initialised runs as skipped (lock rows so a playlist update can't interleave)
+    playlist_runs = await select_playlist_runs_for_update(db.session, run.playlist_execution_id)
     for playlist_run in playlist_runs:
         if playlist_run.run_status == RunStatus.initialised:
             await update_run_run_status(db.session, playlist_run.run_id, RunStatus.skipped)
@@ -763,11 +762,22 @@ async def update_playlist(
 
     Pure DB operation - the active and completed runs are untouched and the runner is never contacted.
     Applied by delete-and-recreate: the old upcoming rows are deleted and fresh ones inserted.
+
+    NOTE: pre-creating Run rows for upcoming tests (and editing via delete-and-recreate) is slightly
+    janky - a future rework would likely replace this with a first-class Playlist table.
     """
     _, _, run = await select_user_run_group_run_or_raise(db.session, user_context, run_id)
 
     if not run.playlist_execution_id:
         raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail="Run is not part of a playlist")
+
+    for procedure_id in body.test_procedure_ids:
+        try:
+            TestProcedureId(procedure_id)
+        except ValueError as err:
+            raise HTTPException(
+                status_code=HTTPStatus.BAD_REQUEST, detail=f"Unknown test procedure id '{procedure_id}'"
+            ) from err
 
     # Lock the playlist's rows for the duration of the mutation so it cannot interleave with advancement.
     playlist_runs = await select_playlist_runs_for_update(db.session, run.playlist_execution_id)

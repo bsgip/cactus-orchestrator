@@ -1727,6 +1727,39 @@ async def test_update_playlist_non_playlist_run_returns_400(
 
 
 @pytest.mark.asyncio
+async def test_update_playlist_invalid_test_procedure_id_returns_400(
+    client, mocked_pod: MockedPod, pg_base_config, client_cert_pem_bytes, valid_jwt_user1
+):
+    response_model = await create_playlist_for_test(
+        client,
+        mocked_pod,
+        pg_base_config,
+        client_cert_pem_bytes,
+        valid_jwt_user1,
+        [TestProcedureId.ALL_01, TestProcedureId.ALL_02],
+    )
+    assert response_model.playlist_runs is not None
+    first_run_id = response_model.playlist_runs[0].run_id
+
+    req = UpdatePlaylistRequest(test_procedure_ids=["NOT-A-TEST"], expected_active_run_id=first_run_id)
+    response = await client.post(
+        f"/run/{first_run_id}/playlist",
+        content=req.to_json(),
+        headers={"Authorization": f"Bearer {valid_jwt_user1}"},
+    )
+    assert response.status_code == HTTPStatus.BAD_REQUEST
+
+    # Playlist is unchanged
+    async with generate_async_session(pg_base_config) as session:
+        runs = (
+            (await session.execute(select(Run).where(Run.run_id.in_([r.run_id for r in response_model.playlist_runs]))))
+            .scalars()
+            .all()
+        )
+        assert len(runs) == 2
+
+
+@pytest.mark.asyncio
 async def test_update_playlist_retry_failed_test(
     client, mocked_pod: MockedPod, pg_base_config, client_cert_pem_bytes, valid_jwt_user1
 ):
