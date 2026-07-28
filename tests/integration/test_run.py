@@ -37,12 +37,13 @@ from cactus_schema.runner import (
     RunnerStatus,
     RunRequest,
     StepStatus,
+    WarningEntry,
 )
 from cactus_test_definitions.client import TestProcedureId
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import selectinload
 
-from cactus_orchestrator.api.run import finalise_run, is_all_criteria_met
+from cactus_orchestrator.api.run import finalise_run, get_run_warnings, is_all_criteria_met
 from cactus_orchestrator.model import Run, RunArtifact, RunGroup, RunStatus, User
 from cactus_orchestrator.pod.models import generate_dynamic_uri_external_host, generate_static_uri_external_host
 
@@ -738,6 +739,28 @@ def test_is_all_criteria_met(runner_status: RunnerStatus | None, expected: bool 
 
 
 @pytest.mark.parametrize(
+    "runner_status",
+    [
+        None,
+        generate_class_instance(RunnerStatus, step_status={}, warnings=[]),
+        generate_class_instance(
+            RunnerStatus,
+            step_status={},
+            warnings=[
+                WarningEntry("der-settings.set-max-w-varied", "desc", "msg", datetime(2025, 1, 1, tzinfo=UTC))
+            ],
+        ),
+    ],
+)
+def test_get_run_warnings(runner_status: RunnerStatus | None):
+    actual = get_run_warnings(runner_status)
+    if runner_status is None:
+        assert actual is None
+    else:
+        assert actual == [w.to_dict() for w in runner_status.warnings]
+
+
+@pytest.mark.parametrize(
     "runner_status, all_criteria_met",
     [
         (
@@ -809,6 +832,7 @@ async def test_finalise_run_creates_run_artifact_and_updates_run(
         assert run.finalised_at == finalise_time
         assert run.run_status == RunStatus.finalised_by_client
         assert run.all_criteria_met is all_criteria_met
+        assert run.warnings == [w.to_dict() for w in runner_status.warnings]
         assert run.run_artifact.file_data == finalize_data
 
 
@@ -890,6 +914,7 @@ async def test_finalise_run_handles_runner_status_failure(
         assert run.finalised_at == finalise_time
         assert run.run_status == RunStatus.finalised_by_client
         assert run.all_criteria_met is None
+        assert run.warnings is None
         assert run.run_artifact.file_data == finalize_data
 
 
