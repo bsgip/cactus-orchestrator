@@ -50,8 +50,11 @@ from cactus_orchestrator.power_limit_chart.limits import (
 )
 from cactus_orchestrator.power_limit_chart.replay import (
     _FAR_FUTURE,
+    _build_control_versions,
     _Known,
     _KnownControlSegment,
+    _Observation,
+    _replay_control_knowledge,
 )
 
 OUTPUT_DIR = Path("/tmp/cactus_charts")
@@ -875,14 +878,19 @@ def _u_doe(
     load_limit: float | None = None,
     storage_target: float | None = None,
     site_control_group_id: int = 1,
+    dynamic_operating_envelope_id: int = 1,
+    created_time: datetime = T0,
+    start_time: datetime = T0,
+    duration_seconds: int = 3600,
+    superseded: bool = False,
 ) -> _RawDOE:
     return _RawDOE(
-        dynamic_operating_envelope_id=1,
+        dynamic_operating_envelope_id=dynamic_operating_envelope_id,
         site_control_group_id=site_control_group_id,
-        created_time=T0,
-        start_time=T0,
-        duration_seconds=3600,
-        superseded=False,
+        created_time=created_time,
+        start_time=start_time,
+        duration_seconds=duration_seconds,
+        superseded=superseded,
         export_limit_watts=export_limit,
         generation_limit_active_watts=gen_limit,
         import_limit_active_watts=import_limit,
@@ -1033,6 +1041,88 @@ def test_get_effective_lower_at_storage_target_from_default():
     assert isinstance(src, _Known) and src.row is default
 
 
+# ─── Unit tests: superseded DOEs (cross-group primacy loss, can still be returned to)
+
+
+def test_build_control_versions_includes_superseded_doe():
+    doe = _u_doe(export_limit=2000.0, superseded=True)
+
+    versions_by_id = _build_control_versions([doe])
+
+    versions = versions_by_id[doe.dynamic_operating_envelope_id]
+    assert len(versions) == 1
+    assert versions[0].row is doe
+    assert versions[0].valid_from == doe.created_time
+    assert versions[0].valid_to == _FAR_FUTURE
+
+
+def test_replay_control_knowledge_resumes_lower_priority_after_superseded_override():
+    """A lower-priority control that gets cross-group superseded by a shorter, higher-priority
+    override must still govern before the override starts AND resume once it ends - a
+    compliant client is not permanently barred from a superseded control, only masked by
+    the higher-priority one while it's live (see limits.py's per-instant primacy resolution).
+
+    Control A: primacy 2, T0 -> T0+10m, export=2000W. Marked superseded=True once B appears.
+    Control B: primacy 1, T0+2m -> T0+4m, export=500W.
+    Expected: A governs [T0, T0+2m) and [T0+4m, T0+10m); B governs [T0+2m, T0+4m)."""
+    grp_a = _u_group(site_control_group_id=1, primacy=2)
+    grp_b = _u_group(site_control_group_id=2, primacy=1)
+    groups_by_id = {grp_a.site_control_group_id: grp_a, grp_b.site_control_group_id: grp_b}
+
+    doe_a = _u_doe(
+        dynamic_operating_envelope_id=1,
+        site_control_group_id=grp_a.site_control_group_id,
+        export_limit=2000.0,
+        created_time=T0,
+        start_time=T0,
+        duration_seconds=600,
+        superseded=True,
+    )
+    doe_b = _u_doe(
+        dynamic_operating_envelope_id=2,
+        site_control_group_id=grp_b.site_control_group_id,
+        export_limit=500.0,
+        created_time=T0 + timedelta(minutes=2),
+        start_time=T0 + timedelta(minutes=2),
+        duration_seconds=120,
+        superseded=False,
+    )
+
+    observations_by_group = {
+        grp_a.site_control_group_id: [_Observation(time=T0)],
+        grp_b.site_control_group_id: [_Observation(time=T0 + timedelta(minutes=2))],
+    }
+
+    segments = _replay_control_knowledge(
+        all_does=[doe_a, doe_b],
+        observations_by_group=observations_by_group,
+        groups_by_id=groups_by_id,
+        doe_tags={},
+        test_start=T0,
+    )
+    segments_by_group: dict[int, list[_KnownControlSegment]] = {}
+    for seg in segments:
+        segments_by_group.setdefault(seg.site_control_group_id, []).append(seg)
+
+    sorted_groups = [grp_b, grp_a]  # primacy order: highest priority (lowest primacy) first
+
+    before = T0 + timedelta(minutes=1)
+    during = T0 + timedelta(minutes=3)
+    after = T0 + timedelta(minutes=5)
+
+    val, src = _get_effective_upper_at(before, sorted_groups, segments_by_group, {})
+    assert val == pytest.approx(2000.0)
+    assert isinstance(src, _KnownControlSegment) and src.row is doe_a
+
+    val, src = _get_effective_upper_at(during, sorted_groups, segments_by_group, {})
+    assert val == pytest.approx(500.0)
+    assert isinstance(src, _KnownControlSegment) and src.row is doe_b
+
+    val, src = _get_effective_upper_at(after, sorted_groups, segments_by_group, {})
+    assert val == pytest.approx(2000.0)
+    assert isinstance(src, _KnownControlSegment) and src.row is doe_a
+
+
 # ─── Scenario A: Single program, export curtailment steps with AS4777 ramps ──
 
 
@@ -1096,6 +1186,9 @@ async def test_chart_single_program_export_curtailment(pg_envoy_base_config):
 
     assert html is not None, "Chart generation returned None"
     assert "Device Power Chart" in html
+    assert "Ramping from 10000 W to 5000 W" in html
+    assert "Ramping from 5000 W to 0 W" in html
+    assert "Ramping from 0 W to 10000 W" in html
     out = _out("scenario_A_single_program_export0.html")
     out.write_text(html)
 
@@ -1255,6 +1348,14 @@ async def test_chart_multi_program_primacy(pg_envoy_base_config):
 
     assert html is not None
     assert "Device Power Chart" in html
+    # Upper (export, Program 2): unconstrained -> 4000 -> unconstrained -> 2000
+    assert "Ramping from 10000 W to 4000 W" in html
+    assert "Ramping from 4000 W to 10000 W" in html
+    assert "Ramping from 10000 W to 2000 W" in html
+    # Lower (import, Program 1): unconstrained -> 0 -> unconstrained -> 3000
+    assert "Ramping from -10000 W to -0 W" in html
+    assert "Ramping from -0 W to -10000 W" in html
+    assert "Ramping from -1667 W to -3000 W" in html
     out = _out("scenario_B_multi_program_primacy0.html")
     out.write_text(html)
 
@@ -1338,6 +1439,13 @@ async def test_chart_ramptms_and_defaults(pg_envoy_base_config):
 
     assert html is not None
     assert "Device Power Chart" in html
+    # ctrl1: default(8000) -> 1000 via explicit rampTms=120s, then back to default via grad_w
+    assert "Ramping from 8000 W to 1000 W" in html
+    assert "Ramp rate: rampTms=120s" in html
+    assert "Ramping from 1000 W to 8000 W" in html
+    # ctrl2: default(8000) -> 0 via grad_w (no rampTms), then back to default
+    assert "Ramping from 8000 W to 0 W" in html
+    assert "Ramping from 0 W to 8000 W" in html
     out = _out("scenario_C_ramptms_and_defaults0.html")
     out.write_text(html)
 
@@ -1429,6 +1537,15 @@ async def test_chart_op_mod_connect(pg_envoy_base_config):
 
     assert html is not None
     assert "Device Power Chart" in html
+    # Upper: unconstrained -> default(7000) -> export(5000) -> disconnect(0) -> resumes 5000 -> back to default 7000
+    assert "Ramping from 7000 W to 5000 W" in html
+    assert "Ramping from 5000 W to 0 W" in html
+    assert "Ramping from 0 W to 5000 W" in html
+    assert "Ramping from 5000 W to 7000 W" in html
+    # Lower: disconnect also pins the import/load floor to 0 for the same window
+    assert "Ramping from -10000 W to 0 W" in html
+    assert "Ramping from 0 W to -10000 W" in html
+    assert "Device reconnected" in html
     out = _out("scenario_D_op_mod_connect0.html")
     out.write_text(html)
 
@@ -1510,6 +1627,10 @@ async def test_chart_op_mod_connect_expiry(pg_envoy_base_config):
 
     assert html is not None
     assert "Device Power Chart" in html
+    assert "Ramping from 7000 W to 5000 W" in html
+    assert "Ramping from 5000 W to 0 W" in html
+    assert "Ramping from 0 W to 5000 W" in html
+    assert "Device reconnected" in html
     out = _out("scenario_D2_op_mod_connect_expiry0.html")
     out.write_text(html)
 
