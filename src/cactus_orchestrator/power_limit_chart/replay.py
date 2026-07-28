@@ -87,9 +87,10 @@ def _build_control_versions(all_does: list[_RawDOE]) -> dict[int, list[_ControlV
 
     Archive rows hold the values that applied up until their archive/deleted time; the
     active row (if any) holds the current values. Chaining those boundaries yields each
-    version's validity window. Windows in which the server presented the DOE as superseded
-    are omitted (the client sees no live control there), and after a deletion boundary the
-    DOE no longer exists."""
+    version's validity window, and after a deletion boundary the DOE no longer exists.
+
+    `row.superseded` tricky. A superseded DOE can still be returned to, so superseded status
+    is deliberately ignored for windowing."""
     versions_by_id: dict[int, list[_ControlVersion]] = {}
     for doe_id, rows in _rows_by_doe_id(all_does).items():
         # Deterministic on boundary ties: a same-instant delete snapshot must sort after the
@@ -100,8 +101,7 @@ def _build_control_versions(all_does: list[_RawDOE]) -> dict[int, list[_ControlV
         for row in rows:
             valid_to = _boundary_time(row)
             if valid_to > valid_from:
-                if not row.superseded:
-                    versions.append(_ControlVersion(row=row, valid_from=valid_from, valid_to=valid_to))
+                versions.append(_ControlVersion(row=row, valid_from=valid_from, valid_to=valid_to))
                 valid_from = valid_to
             if row.deleted_time is not None:
                 break  # The DOE ceased to exist here; later rows are duplicate snapshots
