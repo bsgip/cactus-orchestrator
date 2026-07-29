@@ -501,6 +501,12 @@ def _build_trace(  # noqa: C901
             current_v = ramp_start_v + frac * (ramp_end_v - ramp_start_v)
 
         if abs(ev.target - current_v) < 0.1:
+            if ev.time < ramp_end_t:
+                # The new limit pins the trace at the ramp's current value: the ramp stops
+                # here and holds rather than continuing toward its old target.
+                points.append((ev.time, current_v, f"{current_v:.0f} W"))
+                ramp_start_t = ramp_end_t = ev.time
+                ramp_start_v = ramp_end_v = current_v
             continue
 
         delta_w = abs(ev.target - current_v)
