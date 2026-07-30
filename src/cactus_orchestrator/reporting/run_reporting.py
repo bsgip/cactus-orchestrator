@@ -29,6 +29,7 @@ from cactus_schema.runner import (
     ClientInteractionType,
     RequestEntry,
     StepStatus,
+    WarningEntry,
 )
 from cactus_test_definitions import CSIPAusVersion
 from cactus_test_definitions import __version__ as cactus_test_definitions_version
@@ -485,8 +486,8 @@ def generate_criteria_failure_table(check_results: dict[str, CheckResult], style
     return table
 
 
-def generate_set_max_w_warning_banner(stylesheet: StyleSheet) -> list[Flowable]:
-    """Generate a warning banner indicating that setMaxW was varied during the test."""
+def generate_warnings_banner(passed: bool, stylesheet: StyleSheet) -> list[Flowable]:
+    """Generate a generic warning banner indicating that this run raised one or more warnings."""
     warning_style = TableStyle(
         [
             ("BACKGROUND", (0, 0), (-1, -1), WARNING_BANNER_COLOR),
@@ -499,13 +500,54 @@ def generate_set_max_w_warning_banner(stylesheet: StyleSheet) -> list[Flowable]:
             ("BOX", (0, 0), (-1, -1), 1, HexColor(0xE65100)),
         ]
     )
-    warning_text = Paragraph(
-        "<font color='#E65100'><b>! Warning:</b></font> setMaxW was varied during this test. "
-        "This unexpected behaviour may affect test assumptions and DERControls."
+    message = (
+        "This run passed with warnings - see the Warnings table below for details."
+        if passed
+        else "This run failed and also raised warnings - see the Warnings table below for details."
     )
+    warning_text = Paragraph(f"<font color='#E65100'><b>! Warning:</b></font> {message}")
     table = Table([[warning_text]], colWidths=[stylesheet.table_width])
     table.setStyle(warning_style)
     return [table, stylesheet.spacer]
+
+
+def generate_warnings_table(warnings: list[WarningEntry], stylesheet: StyleSheet) -> Table:
+    data = [["Type", "Description", "Message", "Timestamp (UTC)"]]
+    for warning in warnings:
+        data.append(
+            [
+                Paragraph(warning.type),
+                Paragraph(warning.description),
+                Paragraph(warning.message),
+                warning.timestamp.strftime("%Y-%m-%d %H:%M"),
+            ]
+        )
+
+    column_widths = [int(fraction * stylesheet.table_width) for fraction in [0.2, 0.22, 0.43, 0.15]]
+    table = Table(data, colWidths=column_widths)
+    table.setStyle(stylesheet.table)
+    return table
+
+
+def generate_warnings_section(warnings: list[WarningEntry], stylesheet: StyleSheet) -> list[Flowable]:
+    """Warnings section, grouped by dotted type-prefix category (e.g. "der-settings.*")."""
+    if not warnings:
+        return []
+
+    elements: list[Flowable] = [Paragraph("Warnings", stylesheet.heading)]
+
+    grouped: dict[str, list[WarningEntry]] = {}
+    for warning in warnings:
+        category = warning.type.split(".", 1)[0]
+        grouped.setdefault(category, []).append(warning)
+
+    for category, category_warnings in grouped.items():
+        elements.append(Paragraph(f"<b>{category}</b>"))
+        elements.append(stylesheet.spacer)
+        elements.append(generate_warnings_table(category_warnings, stylesheet))
+        elements.append(stylesheet.spacer)
+
+    return elements
 
 
 def generate_criteria_section(
@@ -1683,8 +1725,9 @@ def generate_page_elements(
     sites: list[Site],
     timeline: Timeline | None,
     stylesheet: StyleSheet,
-    set_max_w_varied: bool = False,
+    warnings: list[WarningEntry] | None = None,
 ) -> list[Flowable]:
+    warnings = warnings or []
     active_test_procedure = runner_state.active_test_procedure
     if active_test_procedure is None:
         raise ValueError("'active_test_procedure' attribute of 'runner_state' cannot be None")
@@ -1740,9 +1783,11 @@ def generate_page_elements(
         # the appropriate client interactions SHOULD be defined in the runner state.
         logger.error(f"Unable to add 'test procedure overview' to PDF report. Reason={repr(e)}")
 
-    # setMaxW Warning Banner
-    if set_max_w_varied:
-        page_elements.extend(generate_set_max_w_warning_banner(stylesheet=stylesheet))
+    # Warnings Banner + Section
+    if warnings:
+        all_criteria_passed = all(check_result.passed for check_result in check_results.values())
+        page_elements.extend(generate_warnings_banner(passed=all_criteria_passed, stylesheet=stylesheet))
+        page_elements.extend(generate_warnings_section(warnings=warnings, stylesheet=stylesheet))
 
     # Criteria Section
     page_elements.extend(
@@ -1787,7 +1832,7 @@ def pdf_report_as_bytes(
     sites: list[Site],
     timeline: Timeline | None,
     no_spacers: bool = False,
-    set_max_w_varied: bool = False,
+    warnings: list[WarningEntry] | None = None,
 ) -> bytes:
     stylesheet = get_stylesheet()
     if no_spacers:
@@ -1811,7 +1856,7 @@ def pdf_report_as_bytes(
         sites=sites,
         timeline=timeline,
         stylesheet=stylesheet,
-        set_max_w_varied=set_max_w_varied,
+        warnings=warnings,
     )
 
     test_procedure_name = runner_state.active_test_procedure.name
