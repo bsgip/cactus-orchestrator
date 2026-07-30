@@ -3,6 +3,7 @@ from http import HTTPStatus
 
 from cactus_schema.orchestrator import PlaylistRunInfo, RunResponse, RunStatusResponse
 from cactus_schema.orchestrator.schema import ComplianceRequestResponse
+from cactus_schema.runner import WarningEntry
 from cactus_test_definitions.client.test_procedures import TestProcedure, TestProcedureId
 from envoy_schema.server.schema.uri import DeviceCapabilityUri
 from fastapi import HTTPException
@@ -71,6 +72,7 @@ def map_run_to_run_response(
         playlist_runs=playlist_runs,
         classes=definition.classes if definition else None,
         immediate_start=bool(definition and definition.preconditions and definition.preconditions.immediate_start),
+        warnings=[WarningEntry.from_dict(w) for w in run.warnings] if run.warnings is not None else None,
     )
 
 
