@@ -1,4 +1,5 @@
 import io
+import json
 from datetime import UTC, datetime
 
 import pandas as pd
@@ -10,6 +11,7 @@ from cactus_runner.models import (
     CheckResult,
     PackedReadings,
     ReadingType,
+    ReportingData,
     ReportingData_v1,
     ResourceAnnotations,
     RunnerState,
@@ -132,6 +134,37 @@ async def test_generate_pdf_report_v1_with_readings():
     )
 
     pdf_data = await generate_pdf_report_v1(reporting_data=reporting_data)
+
+    assert isinstance(pdf_data, bytes)
+    assert len(pdf_data) > 0
+
+
+@pytest.mark.asyncio
+async def test_generate_pdf_report_v1_regenerates_pre_warnings_artifact():
+    """Artifacts stored before the warnings feature existed have no "set_max_w_varied" bool instead of "warnings" key.
+    Check it doesnt break, just drops the varied bool"""
+    runner_state = generate_class_instance(
+        RunnerState,
+        active_test_procedure=generate_class_instance(
+            ActiveTestProcedure,
+            definition=get_test_procedure(test_procedure_id=TestProcedureId.ALL_01),
+            step_status={},
+            finished_zip_path=None,
+            resource_annotations=ResourceAnnotations(der_control_ids_by_alias={"a": 1}),
+        ),
+    )
+    reporting_data = generate_class_instance(
+        ReportingData_v1, check_results={"key": generate_class_instance(CheckResult)}, runner_state=runner_state
+    )
+    raw = json.loads(reporting_data.to_json())
+    del raw["warnings"]
+    raw["set_max_w_varied"] = True  # legacy field
+    pre_warnings_json = json.dumps(raw)
+
+    parsed = ReportingData.from_json(1, pre_warnings_json)
+    assert parsed.warnings == []
+
+    pdf_data = await generate_pdf_report_v1(reporting_data=parsed)
 
     assert isinstance(pdf_data, bytes)
     assert len(pdf_data) > 0

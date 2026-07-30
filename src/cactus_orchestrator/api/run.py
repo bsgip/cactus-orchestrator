@@ -489,6 +489,14 @@ def is_all_criteria_met(runner_status: RunnerStatus | None) -> bool | None:
     return all(c.success for c in criteria) and all(not bool(r.body_xml_errors) for r in request_history)
 
 
+def get_run_warnings(runner_status: RunnerStatus | None) -> list[dict] | None:
+
+    if runner_status is None:
+        return None
+
+    return [w.to_dict() for w in runner_status.warnings]
+
+
 async def finalise_run(
     run: Run, url: str, session: AsyncSession, run_status: RunStatus, finalised_at: datetime, comms_timeout_seconds: int
 ) -> RunArtifact | None:
@@ -512,6 +520,7 @@ async def finalise_run(
         compression = "zip"  # TODO: should also return compression or allow access to response header
 
     all_criteria_met = is_all_criteria_met(final_status)
+    warnings = get_run_warnings(final_status)
 
     # If we were able to finalize - save the data. If not, we will still shut it down - people will be forced to redo
     if file_data:
@@ -551,7 +560,13 @@ async def finalise_run(
         artifact = None
 
     await update_run_with_runartifact_and_finalise(
-        session, run, None if artifact is None else artifact.run_artifact_id, run_status, finalised_at, all_criteria_met
+        session,
+        run,
+        None if artifact is None else artifact.run_artifact_id,
+        run_status,
+        finalised_at,
+        all_criteria_met,
+        warnings,
     )
     await session.commit()
 

@@ -2,6 +2,7 @@ from datetime import datetime
 from enum import IntEnum, auto
 
 from sqlalchemy import BOOLEAN, DateTime, ForeignKey, Index, Integer, LargeBinary, String, UniqueConstraint, desc, func
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -145,6 +146,10 @@ class Run(Base):
     all_criteria_met: Mapped[bool | None] = mapped_column(
         BOOLEAN, nullable=True
     )  # True if EVERY criteria was met at run finalisation. False if there were issues. None if no data/still running
+    warnings: Mapped[list[dict] | None] = mapped_column(
+        JSONB, nullable=True
+    )  # list[WarningEntry], as reported by the runner. None if no data/still running, [] if
+    # finalised with no warnings raised.
     is_device_cert: Mapped[bool] = mapped_column(
         BOOLEAN, server_default="0"
     )  # If True - this run was initialised using device certificate. Otherwise initialised using aggregator certificate
