@@ -148,7 +148,14 @@ async def test_select_user_run_group_run_or_raise_raises_exception(
     [
         None,  # not yet finalised - unknown
         [],  # finalised, no warnings raised
-        [{"type": "der-settings.set-max-w-varied", "description": "d", "message": "m", "timestamp": "2026-01-01T00:00:00+00:00"}],
+        [
+            {
+                "type": "der-settings.set-max-w-varied",
+                "description": "d",
+                "message": "m",
+                "timestamp": "2026-01-01T00:00:00+00:00",
+            }
+        ],
     ],
 )
 def test_map_run_to_run_response_warnings(run_warnings: list[dict] | None):

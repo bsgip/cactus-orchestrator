@@ -746,9 +746,7 @@ def test_is_all_criteria_met(runner_status: RunnerStatus | None, expected: bool 
         generate_class_instance(
             RunnerStatus,
             step_status={},
-            warnings=[
-                WarningEntry("der-settings.set-max-w-varied", "desc", "msg", datetime(2025, 1, 1, tzinfo=UTC))
-            ],
+            warnings=[WarningEntry("der-settings.set-max-w-varied", "desc", "msg", datetime(2025, 1, 1, tzinfo=UTC))],
         ),
     ],
 )
