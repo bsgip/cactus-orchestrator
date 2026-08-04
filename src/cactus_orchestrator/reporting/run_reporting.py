@@ -2,6 +2,7 @@ import io
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from enum import IntFlag
 from functools import partial
 from http import HTTPStatus
 from typing import cast
@@ -659,7 +660,12 @@ def generate_der_table_data(obj: object, attributes_to_include: list[str]) -> li
         multiplier_attribute = attribute_short_form(attribute) + multiplier_suffix
         if hasattr(obj, multiplier_attribute):
             return Paragraph(f"{getattr(obj, attribute)} x 10<super>{getattr(obj, multiplier_attribute)}</super>")
-        return f"{getattr(obj, attribute)}"
+
+        value = getattr(obj, attribute)
+        if isinstance(value, IntFlag):
+            # Have modes_supported... etc just matche exactly what was submitted for easier debugging
+            return f"0x{int(value):0X}"
+        return f"{value}"
 
     table_data = [
         [attribute_short_form(attribute), attribute_value(obj, attribute)] for attribute in attributes_to_include
