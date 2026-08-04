@@ -645,9 +645,13 @@ def get_non_null_attributes(obj: object, attributes_to_include: list[str]) -> li
 
 def generate_der_table_data(obj: object, attributes_to_include: list[str]) -> list:
     def attribute_short_form(attribute: str) -> str:
-        suffix = "_value"
-        if attribute.endswith(suffix):
-            return attribute.removesuffix(suffix)
+        # Sad but necessary hack: most SEP2 value/multiplier pairs are named "<x>_value"/"<x>_multiplier",
+        # but the PF-with-excitation fields instead pair "<x>_displacement" with "<x>_multiplier" (no
+        # "_displacement" in the multiplier name). Stripping both suffixes here is what lets the multiplier
+        # lookup below find the right field for both naming conventions.
+        for suffix in ("_value", "_displacement"):
+            if attribute.endswith(suffix):
+                return attribute.removesuffix(suffix)
         return attribute
 
     def attribute_value(obj: object, attribute: str) -> Paragraph | str:
