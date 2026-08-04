@@ -216,17 +216,19 @@ def test_build_control_versions_same_instant_update_and_delete(reverse_row_order
     assert _version_at(versions, t_boundary) is None  # deletion terminates the chain
 
 
-def test_build_control_versions_superseded_window_omitted():
-    """A window in which the server presented the DOE as superseded yields no live version."""
+def test_build_control_versions_superseded_flag_ignored():
+    """The DB `superseded` flag does not affect server-side version windowing - it is fully
+    ignored; supersession is derived client-side from observations (_supersession_kill_times)."""
     t_supersede = T0 + timedelta(seconds=300)
     old_pre = _make_doe_row(1, 1, T0, 900, export_limit=5000.0, is_archive=True, archive_time=t_supersede)
     old_post = _make_doe_row(1, 1, T0, 900, export_limit=5000.0, superseded=True)
 
     versions = _build_control_versions([old_post, old_pre])[1]
 
-    assert len(versions) == 1
+    assert len(versions) == 2
     assert versions[0].row is old_pre
-    assert _version_at(versions, t_supersede) is None
+    assert versions[1].row is old_post
+    assert _version_at(versions, t_supersede) is versions[1]
 
 
 # ─── _replay_control_knowledge ────────────────────────────────────────────────
@@ -294,14 +296,17 @@ def test_replay_never_observed_control_excluded():
     assert segments == []
 
 
-def test_replay_superseded_at_first_observation_excluded():
-    """A control that was already superseded when first observed is never followed."""
+def test_replay_superseded_flag_alone_does_not_exclude():
+    """The DB `superseded` flag is ignored; without an observed superseding control in the same
+    program, the control runs its full course regardless of the flag."""
     doe = _make_doe_row(1, 1, T0, 900, superseded=True)
     observations = {1: _obs(30, 90)}
 
     segments = _replay_control_knowledge([doe], observations, _GROUPS, {}, T0 - timedelta(minutes=5))
 
-    assert segments == []
+    assert len(segments) == 1
+    assert segments[0].effective_start == T0 + timedelta(seconds=30)
+    assert segments[0].effective_end == T0 + timedelta(seconds=900)
 
 
 def test_replay_supersession_observed_at_next_poll():

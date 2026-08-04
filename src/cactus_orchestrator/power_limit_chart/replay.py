@@ -87,9 +87,12 @@ def _build_control_versions(all_does: list[_RawDOE]) -> dict[int, list[_ControlV
 
     Archive rows hold the values that applied up until their archive/deleted time; the
     active row (if any) holds the current values. Chaining those boundaries yields each
-    version's validity window. Windows in which the server presented the DOE as superseded
-    are omitted (the client sees no live control there), and after a deletion boundary the
-    DOE no longer exists."""
+    version's validity window, and after a deletion boundary the DOE no longer exists.
+
+    `row.superseded` is deliberately ignored: the flag records when the SERVER decided a
+    same-program conflicting control superseded this one, but what matters for the chart is
+    when the CLIENT observed the superseding control - derived from the client's own
+    observations in _supersession_kill_times."""
     versions_by_id: dict[int, list[_ControlVersion]] = {}
     for doe_id, rows in _rows_by_doe_id(all_does).items():
         # Deterministic on boundary ties: a same-instant delete snapshot must sort after the
@@ -100,8 +103,7 @@ def _build_control_versions(all_does: list[_RawDOE]) -> dict[int, list[_ControlV
         for row in rows:
             valid_to = _boundary_time(row)
             if valid_to > valid_from:
-                if not row.superseded:
-                    versions.append(_ControlVersion(row=row, valid_from=valid_from, valid_to=valid_to))
+                versions.append(_ControlVersion(row=row, valid_from=valid_from, valid_to=valid_to))
                 valid_from = valid_to
             if row.deleted_time is not None:
                 break  # The DOE ceased to exist here; later rows are duplicate snapshots
@@ -347,6 +349,66 @@ class _KnownControlSegment:
         return self.step_name or f"DERC{self.row.dynamic_operating_envelope_id}"
 
 
+@dataclass
+class _ObservedControl:
+    """A DOE the client actually observed, with its knowledge spans (never empty)."""
+
+    doe_id: int
+    group: _RawControlGroup
+    spans: list[_Known[_RawDOE]]
+
+
+# Fields envoy considers for same-program supersession conflicts (storage target excluded,
+# matching DOEFieldSet in envoy's admin/crud/doe.py).
+_SUPERSEDABLE_FIELDS = (
+    "export_limit_watts",
+    "generation_limit_active_watts",
+    "import_limit_active_watts",
+    "load_limit_active_watts",
+    "set_connected",
+    "set_energized",
+)
+
+
+def _fields_conflict(a: _RawDOE, b: _RawDOE) -> bool:
+    return any(getattr(a, f) is not None and getattr(b, f) is not None for f in _SUPERSEDABLE_FIELDS)
+
+
+def _row_schedule(row: _RawDOE) -> tuple[datetime, datetime]:
+    return row.start_time, row.start_time + timedelta(seconds=row.duration_seconds)
+
+
+def _supersession_kill_times(controls: list[_ObservedControl]) -> dict[int, datetime]:
+    """sep2 10.2.3.3 same-program supersession, from the client's perspective.
+
+    Within one DERProgram, a newer control whose schedule overlaps an older one's in time and
+    that shares ANY control field supersedes the older control IN ITS ENTIRETY: the client
+    stops executing the older control at the observation that first reveals the newer one and
+    never returns to it. Across programs there is no supersession - overlap is primacy masking,
+    resolved per-instant in limits.py, and the masked control resumes when the mask ends.
+
+    Returns doe_id -> the earliest observation time at which that DOE became dead to the client.
+    Schedules/fields are taken from each control's first-observed version."""
+    kill: dict[int, datetime] = {}
+    by_group: dict[int, list[_ObservedControl]] = {}
+    for c in controls:
+        by_group.setdefault(c.group.site_control_group_id, []).append(c)
+    for group_controls in by_group.values():
+        for a in group_controls:
+            a_row = a.spans[0].row
+            a_start, a_end = _row_schedule(a_row)
+            for b in group_controls:
+                b_row = b.spans[0].row
+                if (b_row.created_time, b.doe_id) <= (a_row.created_time, a.doe_id):
+                    continue
+                b_start, b_end = _row_schedule(b_row)
+                if b_start < a_end and a_start < b_end and _fields_conflict(a_row, b_row):
+                    revealed = b.spans[0].known_from
+                    if a.doe_id not in kill or revealed < kill[a.doe_id]:
+                        kill[a.doe_id] = revealed
+    return kill
+
+
 def _replay_control_knowledge(
     all_does: list[_RawDOE],
     observations_by_group: dict[int, list[_Observation]],
@@ -359,9 +421,11 @@ def _replay_control_knowledge(
     A control enters the client's world at the first observation that shows it. Between
     observations the client executes the schedule it last saw; a cancellation, supersession
     or value update only takes effect at the next observation that reveals it. A control the
-    client never observed contributes nothing."""
+    client never observed contributes nothing. A control superseded within its own program
+    (see _supersession_kill_times) contributes nothing after the observation that revealed
+    its superseder."""
     versions_by_id = _build_control_versions(all_does)
-    segments: list[_KnownControlSegment] = []
+    observed: list[_ObservedControl] = []
 
     for doe_id, versions in versions_by_id.items():
         if not versions:
@@ -375,23 +439,32 @@ def _replay_control_knowledge(
             continue
 
         observations = observations_by_group.get(group.site_control_group_id, [])
-        for span in _observed_spans(observations, partial(_live_row_at, versions)):
+        spans = _observed_spans(observations, partial(_live_row_at, versions))
+        if spans:
+            observed.append(_ObservedControl(doe_id=doe_id, group=group, spans=spans))
+
+    kill_times = _supersession_kill_times(observed)
+
+    segments: list[_KnownControlSegment] = []
+    for control in observed:
+        dead_from = kill_times.get(control.doe_id, _FAR_FUTURE)
+        for span in control.spans:
             row = span.row
             seg_start = max(row.start_time, span.known_from)
-            seg_end = min(row.start_time + timedelta(seconds=row.duration_seconds), span.known_until)
+            seg_end = min(row.start_time + timedelta(seconds=row.duration_seconds), span.known_until, dead_from)
             if seg_end <= seg_start:
                 continue
             segments.append(
                 _KnownControlSegment(
                     row=row,
-                    site_control_group_id=group.site_control_group_id,
-                    primacy=group.primacy,
+                    site_control_group_id=control.group.site_control_group_id,
+                    primacy=control.group.primacy,
                     observed_at=span.known_from,
                     effective_start=seg_start,
                     effective_end=seg_end,
                     # Prefer the tag recorded at control-creation time; fall back to the step
                     # name active at the observation that revealed this version.
-                    step_name=doe_tags.get(doe_id, span.step_name),
+                    step_name=doe_tags.get(control.doe_id, span.step_name),
                 )
             )
     return segments
