@@ -19,6 +19,7 @@ from cactus_orchestrator.model import (
     ComplianceRequestFinalisation,
     ComplianceRequestRun,
     ComplianceRequestStatus,
+    DeployRelease,
     Run,
     RunArtifact,
     RunGroup,
@@ -916,3 +917,10 @@ async def select_admin_stats(
         runs_per_user=runs_per_user,
         procedures=procedures,
     )
+
+
+async def select_deploy_releases(session: AsyncSession, limit: int) -> Sequence[DeployRelease]:
+    """Get the most recently deployed releases, ordered by deploy time DESCENDING"""
+    stmt = select(DeployRelease).order_by(DeployRelease.created_at.desc()).limit(limit)
+    result = await session.execute(stmt)
+    return result.scalars().all()
