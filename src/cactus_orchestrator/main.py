@@ -14,6 +14,7 @@ from cactus_orchestrator.api import (
     certificate_router,
     compliance_router,
     config_router,
+    deploy_release_router,
     procedure_router,
     run_group_router,
     run_router,
@@ -50,6 +51,7 @@ def generate_app(new_main_settings: CactusOrchestratorSettings) -> FastAPI:
     app.include_router(run_group_router)
     app.include_router(procedure_router)
     app.include_router(config_router)
+    app.include_router(deploy_release_router)
     app.include_router(admin_router)
     app.include_router(compliance_router)
 

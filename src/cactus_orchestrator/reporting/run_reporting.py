@@ -11,7 +11,6 @@ import pandas as pd
 import PIL.Image as PilImage
 import plotly.express as px
 import plotly.graph_objects as go
-from cactus_runner import __version__ as cactus_runner_version
 from cactus_runner.app.envoy_common import ReadingLocation
 from cactus_runner.app.timeline import Timeline, duration_to_label
 from cactus_runner.models import (
@@ -185,6 +184,7 @@ def first_page_template(
     test_procedure_name: str,
     test_run_id: str,
     csip_aus_version: CSIPAusVersion,
+    deploy_release_tag: str | None,
 ) -> None:
     """Template for the first/front/title page of the report"""
 
@@ -236,10 +236,12 @@ def first_page_template(
         PAGE_HEIGHT - BANNER_HEIGHT - 0.35 * inch,
         f"Cactus Test Definitions v{cactus_test_definitions_version}",
     )
+    # The deploy release tag reflects the cactus-deploy release that was actually live when this run's pod was
+    # created (recorded on Run at pod-creation)
     canvas.drawRightString(
         PAGE_WIDTH - MARGIN,
         PAGE_HEIGHT - BANNER_HEIGHT - 0.5 * inch,
-        f"Cactus Runner v{cactus_runner_version}",
+        f"Deploy Release {deploy_release_tag if deploy_release_tag is not None else 'unknown'}",
     )
     canvas.drawRightString(
         PAGE_WIDTH - MARGIN,
@@ -1796,6 +1798,7 @@ def pdf_report_as_bytes(
     reading_counts: dict[ReadingType, int],
     sites: list[Site],
     timeline: Timeline | None,
+    deploy_release_tag: str | None = None,
     no_spacers: bool = False,
     set_max_w_varied: bool = False,
 ) -> bytes:
@@ -1830,6 +1833,7 @@ def pdf_report_as_bytes(
         test_procedure_name=test_procedure_name,
         test_run_id=test_run_id,
         csip_aus_version=runner_state.active_test_procedure.csip_aus_version,
+        deploy_release_tag=deploy_release_tag,
     )
     later_pages = partial(
         later_pages_template,
