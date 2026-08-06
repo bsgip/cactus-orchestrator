@@ -924,3 +924,13 @@ async def select_deploy_releases(session: AsyncSession, limit: int) -> Sequence[
     stmt = select(DeployRelease).order_by(DeployRelease.created_at.desc()).limit(limit)
     result = await session.execute(stmt)
     return result.scalars().all()
+
+
+async def select_deploy_release_at(session: AsyncSession, at: datetime) -> DeployRelease | None:
+    """Get the release that was live at a given point in time - the most recently deployed release with
+    created_at <= at. Returns None if `at` predates every recorded deploy (e.g. deploy_release wasn't tracked yet)."""
+    stmt = (
+        select(DeployRelease).where(DeployRelease.created_at <= at).order_by(DeployRelease.created_at.desc()).limit(1)
+    )
+    result = await session.execute(stmt)
+    return result.scalars().first()
