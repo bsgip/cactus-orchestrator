@@ -580,7 +580,9 @@ async def test_get_does_not_scoped_to_a_single_site(pg_envoy_base_config):
         result = await _get_does(session, has_storage_target=has_storage_target)
 
     assert len(result) == 2
-    assert sorted(r.export_limit_watts for r in result) == pytest.approx([1111.0, 9999.0])
+    export_limit_watts = sorted(v for r in result if (v := r.export_limit_watts) is not None)
+    assert len(export_limit_watts) == 2
+    assert export_limit_watts == pytest.approx([1111.0, 9999.0])
 
 
 # ─── _get_defaults ────────────────────────────────────────────────────────────
