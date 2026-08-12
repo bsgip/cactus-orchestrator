@@ -45,13 +45,18 @@ from cactus_orchestrator.power_limit_chart.db import (
     _RawDOE,
 )
 from cactus_orchestrator.power_limit_chart.limits import (
+    _build_trace,
     _get_effective_lower_at,
     _get_effective_upper_at,
+    _LimitEvent,
 )
 from cactus_orchestrator.power_limit_chart.replay import (
     _FAR_FUTURE,
+    _build_control_versions,
     _Known,
     _KnownControlSegment,
+    _Observation,
+    _replay_control_knowledge,
 )
 
 OUTPUT_DIR = Path("/tmp/cactus_charts")
@@ -875,14 +880,19 @@ def _u_doe(
     load_limit: float | None = None,
     storage_target: float | None = None,
     site_control_group_id: int = 1,
+    dynamic_operating_envelope_id: int = 1,
+    created_time: datetime = T0,
+    start_time: datetime = T0,
+    duration_seconds: int = 3600,
+    superseded: bool = False,
 ) -> _RawDOE:
     return _RawDOE(
-        dynamic_operating_envelope_id=1,
+        dynamic_operating_envelope_id=dynamic_operating_envelope_id,
         site_control_group_id=site_control_group_id,
-        created_time=T0,
-        start_time=T0,
-        duration_seconds=3600,
-        superseded=False,
+        created_time=created_time,
+        start_time=start_time,
+        duration_seconds=duration_seconds,
+        superseded=superseded,
         export_limit_watts=export_limit,
         generation_limit_active_watts=gen_limit,
         import_limit_active_watts=import_limit,
@@ -1033,6 +1043,224 @@ def test_get_effective_lower_at_storage_target_from_default():
     assert isinstance(src, _Known) and src.row is default
 
 
+# ─── Unit tests: supersession semantics (cross-program = masking, resumes; same-program = dead forever)
+
+
+def test_build_control_versions_includes_superseded_doe():
+    doe = _u_doe(export_limit=2000.0, superseded=True)
+
+    versions_by_id = _build_control_versions([doe])
+
+    versions = versions_by_id[doe.dynamic_operating_envelope_id]
+    assert len(versions) == 1
+    assert versions[0].row is doe
+    assert versions[0].valid_from == doe.created_time
+    assert versions[0].valid_to == _FAR_FUTURE
+
+
+def test_replay_control_knowledge_resumes_lower_priority_after_superseded_override():
+    """A lower-priority control that gets cross-group superseded by a shorter, higher-priority
+    override must still govern before the override starts AND resume once it ends - a
+    compliant client is not permanently barred from a superseded control, only masked by
+    the higher-priority one while it's live (see limits.py's per-instant primacy resolution).
+
+    Control A: primacy 2, T0 -> T0+10m, export=2000W. Marked superseded=True once B appears.
+    Control B: primacy 1, T0+2m -> T0+4m, export=500W.
+    Expected: A governs [T0, T0+2m) and [T0+4m, T0+10m); B governs [T0+2m, T0+4m)."""
+    grp_a = _u_group(site_control_group_id=1, primacy=2)
+    grp_b = _u_group(site_control_group_id=2, primacy=1)
+    groups_by_id = {grp_a.site_control_group_id: grp_a, grp_b.site_control_group_id: grp_b}
+
+    doe_a = _u_doe(
+        dynamic_operating_envelope_id=1,
+        site_control_group_id=grp_a.site_control_group_id,
+        export_limit=2000.0,
+        created_time=T0,
+        start_time=T0,
+        duration_seconds=600,
+        superseded=True,
+    )
+    doe_b = _u_doe(
+        dynamic_operating_envelope_id=2,
+        site_control_group_id=grp_b.site_control_group_id,
+        export_limit=500.0,
+        created_time=T0 + timedelta(minutes=2),
+        start_time=T0 + timedelta(minutes=2),
+        duration_seconds=120,
+        superseded=False,
+    )
+
+    observations_by_group = {
+        grp_a.site_control_group_id: [_Observation(time=T0)],
+        grp_b.site_control_group_id: [_Observation(time=T0 + timedelta(minutes=2))],
+    }
+
+    segments = _replay_control_knowledge(
+        all_does=[doe_a, doe_b],
+        observations_by_group=observations_by_group,
+        groups_by_id=groups_by_id,
+        doe_tags={},
+        test_start=T0,
+    )
+    segments_by_group: dict[int, list[_KnownControlSegment]] = {}
+    for seg in segments:
+        segments_by_group.setdefault(seg.site_control_group_id, []).append(seg)
+
+    sorted_groups = [grp_b, grp_a]  # primacy order: highest priority (lowest primacy) first
+
+    before = T0 + timedelta(minutes=1)
+    during = T0 + timedelta(minutes=3)
+    after = T0 + timedelta(minutes=5)
+
+    val, src = _get_effective_upper_at(before, sorted_groups, segments_by_group, {})
+    assert val == pytest.approx(2000.0)
+    assert isinstance(src, _KnownControlSegment) and src.row is doe_a
+
+    val, src = _get_effective_upper_at(during, sorted_groups, segments_by_group, {})
+    assert val == pytest.approx(500.0)
+    assert isinstance(src, _KnownControlSegment) and src.row is doe_b
+
+    val, src = _get_effective_upper_at(after, sorted_groups, segments_by_group, {})
+    assert val == pytest.approx(2000.0)
+    assert isinstance(src, _KnownControlSegment) and src.row is doe_a
+
+
+def _replay_single_group_pair(
+    doe_a: _RawDOE, doe_b: _RawDOE, observations: list[_Observation]
+) -> tuple[_RawControlGroup, dict[int, list[_KnownControlSegment]]]:
+    """Replay two DOEs in one group under a shared observation list; returns (group, segments_by_group)."""
+    group = _u_group(site_control_group_id=doe_a.site_control_group_id, primacy=1)
+    segments = _replay_control_knowledge(
+        all_does=[doe_a, doe_b],
+        observations_by_group={group.site_control_group_id: observations},
+        groups_by_id={group.site_control_group_id: group},
+        doe_tags={},
+        test_start=T0,
+    )
+    segments_by_group: dict[int, list[_KnownControlSegment]] = {}
+    for seg in segments:
+        segments_by_group.setdefault(seg.site_control_group_id, []).append(seg)
+    return group, segments_by_group
+
+
+def test_replay_control_knowledge_same_program_supersession_is_permanent():
+    """sep2 10.2.3.3: within one DERProgram, a newer time-overlapping control sharing any
+    control field supersedes the older control IN ITS ENTIRETY. Once the client observes the
+    superseder, the older control is dead - it must NOT resume after the superseder expires.
+
+    Control A: T0 -> T0+10m, export=2000W.
+    Control B: created/starts T0+2m, 2m duration, export=500W (same group).
+    Expected: A governs [T0, T0+2m); B governs [T0+2m, T0+4m); NOTHING governs after T0+4m."""
+    doe_a = _u_doe(dynamic_operating_envelope_id=1, export_limit=2000.0, duration_seconds=600)
+    doe_b = _u_doe(
+        dynamic_operating_envelope_id=2,
+        export_limit=500.0,
+        created_time=T0 + timedelta(minutes=2),
+        start_time=T0 + timedelta(minutes=2),
+        duration_seconds=120,
+    )
+    group, segments_by_group = _replay_single_group_pair(
+        doe_a, doe_b, [_Observation(time=T0), _Observation(time=T0 + timedelta(minutes=2))]
+    )
+
+    val, src = _get_effective_upper_at(T0 + timedelta(minutes=1), [group], segments_by_group, {})
+    assert val == pytest.approx(2000.0)
+    assert isinstance(src, _KnownControlSegment) and src.row is doe_a
+
+    val, src = _get_effective_upper_at(T0 + timedelta(minutes=3), [group], segments_by_group, {})
+    assert val == pytest.approx(500.0)
+    assert isinstance(src, _KnownControlSegment) and src.row is doe_b
+
+    # After B expires, A does NOT resume - superseded is superseded
+    val, src = _get_effective_upper_at(T0 + timedelta(minutes=5), [group], segments_by_group, {})
+    assert val is None
+    assert src is None
+
+
+def test_replay_control_knowledge_same_program_supersession_applies_at_observation():
+    """Supersession only takes effect when the client OBSERVES the superseder: the server
+    created B at T0+2m but the client's next poll is at T0+6m, so A keeps executing (per the
+    client's stale knowledge) until T0+6m, then is dead forever."""
+    doe_a = _u_doe(dynamic_operating_envelope_id=1, export_limit=2000.0, duration_seconds=1200)
+    doe_b = _u_doe(
+        dynamic_operating_envelope_id=2,
+        export_limit=500.0,
+        created_time=T0 + timedelta(minutes=2),
+        start_time=T0 + timedelta(minutes=2),
+        duration_seconds=300,
+    )
+    group, segments_by_group = _replay_single_group_pair(
+        doe_a, doe_b, [_Observation(time=T0), _Observation(time=T0 + timedelta(minutes=6))]
+    )
+
+    # Client is unaware of B until T0+6m: A still governs at T0+3m despite B being live server-side
+    val, src = _get_effective_upper_at(T0 + timedelta(minutes=3), [group], segments_by_group, {})
+    assert val == pytest.approx(2000.0)
+    assert isinstance(src, _KnownControlSegment) and src.row is doe_a
+
+    # At T0+6m the poll reveals B (still live until T0+7m): B governs, A is dead
+    val, src = _get_effective_upper_at(T0 + timedelta(minutes=6, seconds=30), [group], segments_by_group, {})
+    assert val == pytest.approx(500.0)
+    assert isinstance(src, _KnownControlSegment) and src.row is doe_b
+
+    # After B expires, A must not resume even though its schedule runs to T0+20m
+    val, src = _get_effective_upper_at(T0 + timedelta(minutes=8), [group], segments_by_group, {})
+    assert val is None
+    assert src is None
+
+
+def test_replay_control_knowledge_same_program_disjoint_fields_do_not_supersede():
+    """sep2 10.2.3.3: differing controls within a program are independent and may overlap
+    without superseding. B (import-only) overlapping A (export-only) must not kill A."""
+    doe_a = _u_doe(dynamic_operating_envelope_id=1, export_limit=2000.0, duration_seconds=600)
+    doe_b = _u_doe(
+        dynamic_operating_envelope_id=2,
+        import_limit=3000.0,
+        created_time=T0 + timedelta(minutes=2),
+        start_time=T0 + timedelta(minutes=2),
+        duration_seconds=120,
+    )
+    group, segments_by_group = _replay_single_group_pair(
+        doe_a, doe_b, [_Observation(time=T0), _Observation(time=T0 + timedelta(minutes=2))]
+    )
+
+    # A's export limit holds during AND after B's import-only overlap
+    for t in (T0 + timedelta(minutes=3), T0 + timedelta(minutes=5)):
+        val, src = _get_effective_upper_at(t, [group], segments_by_group, {})
+        assert val == pytest.approx(2000.0)
+        assert isinstance(src, _KnownControlSegment) and src.row is doe_a
+
+    val, src = _get_effective_lower_at(T0 + timedelta(minutes=3), [group], segments_by_group, {})
+    assert val == pytest.approx(3000.0)
+    assert isinstance(src, _KnownControlSegment) and src.row is doe_b
+
+
+def test_build_trace_equal_target_event_stops_active_ramp():
+    """A limit event whose target equals the trace's current mid-ramp value must stop the
+    ramp and hold there - not let the trace keep climbing to the interrupted ramp's target."""
+    row = _u_doe(export_limit=2000.0)
+    row.ramp_time_seconds = 100.0
+    seg = _KnownControlSegment(
+        row=row,
+        site_control_group_id=1,
+        primacy=1,
+        observed_at=T0,
+        effective_start=T0,
+        effective_end=T0 + timedelta(hours=1),
+        step_name="",
+    )
+    events = [
+        # Ramp 0 -> 2000 over rampTms=100s (20 W/s), starting T0+60s
+        _LimitEvent(time=T0 + timedelta(seconds=60), target=2000.0, source=seg),
+        # At T0+110s the ramp sits at exactly 1000 W; the new limit IS 1000 W
+        _LimitEvent(time=T0 + timedelta(seconds=110), target=1000.0, source=None),
+    ]
+
+    points = _build_trace(events, T0, T0 + timedelta(seconds=300), 0.0, 10000.0, [], {})
+
+    assert points[-1] == (T0 + timedelta(seconds=300), 1000.0, "1000 W")
+
+
 # ─── Scenario A: Single program, export curtailment steps with AS4777 ramps ──
 
 
@@ -1096,6 +1324,9 @@ async def test_chart_single_program_export_curtailment(pg_envoy_base_config):
 
     assert html is not None, "Chart generation returned None"
     assert "Device Power Chart" in html
+    assert "Ramping from 10000 W to 5000 W" in html
+    assert "Ramping from 5000 W to 10000 W" in html  # interrupted mid-ramp by the T+15m step down
+    assert "Ramping from 0 W to 10000 W" in html
     out = _out("scenario_A_single_program_export0.html")
     out.write_text(html)
 
@@ -1255,8 +1486,95 @@ async def test_chart_multi_program_primacy(pg_envoy_base_config):
 
     assert html is not None
     assert "Device Power Chart" in html
+    # Upper (export, Program 2): unconstrained -> 4000 -> unconstrained -> 2000
+    assert "Ramping from 10000 W to 4000 W" in html
+    assert "Ramping from 4000 W to 10000 W" in html
+    assert "Ramping from 10000 W to 2000 W" in html
+    # Lower (import, Program 1): unconstrained -> 0 -> unconstrained -> 3000
+    assert "Ramping from -10000 W to -0 W" in html
+    assert "Ramping from -0 W to -10000 W" in html
+    assert "Ramping from -1667 W to -3000 W" in html
     out = _out("scenario_B_multi_program_primacy0.html")
     out.write_text(html)
+
+
+# ─── Scenario B2: multi-program, same-program supersession with a live tail ───
+
+
+async def test_chart_same_program_supersession_dead_tail(pg_envoy_base_config):
+    """GEN-10-shaped supersession: two DERPrograms, and a same-program superseder that expires
+    BEFORE the control it superseded would have naturally ended. The superseded control's tail
+    must NOT resume - superseded is superseded, in its entirety (sep2 10.2.3.3).
+
+    Program 1 (primacy 1), Program 2 (primacy 2), setMaxW=10000, no defaults.
+      DERC5-like: program 2, export=20000 (200%), T+1m -> T+21m
+      DERC6-like: program 2, export=5000 (50%), rampTms=60s, T+8m -> T+13m (supersedes DERC5)
+      P1 ctrl:    program 1, export=3000, rampTms=60s, T+15m -> T+18m
+    Polls 30s after each control starts (created = start-30s, poll = created+60s).
+
+    Expected upper trace:
+      T+1m30  ramp 10000 -> 20000 (DERC5 revealed)
+      T+8m30  ramp 20000 -> 5000 (DERC6 revealed; DERC5 dead from here, forever)
+      T+13m   DERC6 expires -> ramp 5000 toward 10000 (unconstrained - NOT back to 20000)
+      T+15m30 P1 ctrl revealed mid-ramp at ~9168 -> ramp to 3000
+      T+18m   P1 ctrl expires -> ramp 3000 -> 10000 (DERC5 still dead)
+    """
+    test_end = T0 + timedelta(minutes=25)
+
+    async with generate_async_session(pg_envoy_base_config) as session:
+        site = _make_site_with_setting(aggregator_id=1)
+        session.add(site)
+        group1 = generate_class_instance(SiteControlGroup, seed=1, site_control_group_id=1, primacy=1)
+        group2 = generate_class_instance(SiteControlGroup, seed=2, site_control_group_id=2, primacy=2)
+        session.add_all([group1, group2])
+
+        session.add_all(
+            [
+                _make_doe(site, group2, offset_minutes=1, duration_minutes=20, export_limit=Decimal("20000"), seed=10),
+                _make_doe(
+                    site,
+                    group2,
+                    offset_minutes=8,
+                    duration_minutes=5,
+                    export_limit=Decimal("5000"),
+                    ramp_time_seconds=Decimal("60"),
+                    seed=20,
+                ),
+                _make_doe(
+                    site,
+                    group1,
+                    offset_minutes=15,
+                    duration_minutes=3,
+                    export_limit=Decimal("3000"),
+                    ramp_time_seconds=Decimal("60"),
+                    seed=30,
+                ),
+            ]
+        )
+        await session.commit()
+
+    polls = [
+        _poll(2, T0 + timedelta(minutes=1, seconds=30), req_id=1),
+        _poll(2, T0 + timedelta(minutes=8, seconds=30), req_id=2),
+        _poll(1, T0 + timedelta(minutes=15, seconds=30), req_id=3),
+    ]
+
+    async with generate_async_session(pg_envoy_base_config) as session:
+        html = await generate_power_limit_chart_html(session, T0, test_end, polls)
+
+    assert html is not None
+    out = _out("scenario_B2_same_program_supersession0.html")
+    out.write_text(html)
+    assert "Device Power Chart" in html
+    assert "Ramping from 10000 W to 20000 W" in html
+    assert "Ramping from 20000 W to 5000 W" in html
+    # DERC6 expiry ramps toward unconstrained - DERC5's tail is dead, not resumed
+    assert "Ramping from 5000 W to 10000 W" in html
+    # P1 control interrupts that ramp; on its expiry the device again heads to unconstrained
+    assert "Ramping from 9168 W to 3000 W" in html
+    assert "Ramping from 3000 W to 10000 W" in html
+    # The only transition targeting 20000 W is DERC5's initial reveal
+    assert html.count("to 20000 W") == 1
 
 
 # ─── Scenario C: rampTms on controls, default control as baseline ─────────────
@@ -1338,6 +1656,13 @@ async def test_chart_ramptms_and_defaults(pg_envoy_base_config):
 
     assert html is not None
     assert "Device Power Chart" in html
+    # ctrl1: default(8000) -> 1000 via explicit rampTms=120s, then back to default via grad_w
+    assert "Ramping from 8000 W to 1000 W" in html
+    assert "Ramp rate: rampTms=120s" in html
+    assert "Ramping from 1000 W to 8000 W" in html
+    # ctrl2: default(8000) -> 0 via grad_w (no rampTms), then back to default
+    assert "Ramping from 8000 W to 0 W" in html
+    assert "Ramping from 0 W to 8000 W" in html
     out = _out("scenario_C_ramptms_and_defaults0.html")
     out.write_text(html)
 
@@ -1429,6 +1754,15 @@ async def test_chart_op_mod_connect(pg_envoy_base_config):
 
     assert html is not None
     assert "Device Power Chart" in html
+    # Upper: unconstrained -> default(7000) -> export(5000) -> disconnect(0) -> resumes 5000 -> back to default 7000
+    assert "Ramping from 7000 W to 5000 W" in html
+    assert "Ramping from 5000 W to 0 W" in html
+    assert "Ramping from 0 W to 5000 W" in html
+    assert "Ramping from 5000 W to 7000 W" in html
+    # Lower: disconnect also pins the import/load floor to 0 for the same window
+    assert "Ramping from -10000 W to 0 W" in html
+    assert "Ramping from 0 W to -10000 W" in html
+    assert "Device reconnected" in html
     out = _out("scenario_D_op_mod_connect0.html")
     out.write_text(html)
 
@@ -1510,6 +1844,10 @@ async def test_chart_op_mod_connect_expiry(pg_envoy_base_config):
 
     assert html is not None
     assert "Device Power Chart" in html
+    assert "Ramping from 7000 W to 5000 W" in html
+    assert "Ramping from 5000 W to 0 W" in html
+    assert "Ramping from 0 W to 5000 W" in html
+    assert "Device reconnected" in html
     out = _out("scenario_D2_op_mod_connect_expiry0.html")
     out.write_text(html)
 
@@ -1519,7 +1857,8 @@ async def test_chart_op_mod_connect_expiry(pg_envoy_base_config):
 
 async def test_chart_gen10_derc456(pg_envoy_base_config):
     """
-    Approximates the GEN-10 DERC4/5/6 phase (primacy validation for generators).
+    Mirrors the GEN-10 DERC4/5/6 phase faithfully (primacy validation for generators),
+    including the real procedure's same-program supersession of DERC5 by DERC6.
 
     Two groups mirror GEN-10's FSA1 (primacy 1) and FSA2 (primacy 2):
 
@@ -1527,31 +1866,30 @@ async def test_chart_gen10_derc456(pg_envoy_base_config):
         opModConnect=False + genLim=0.  Device is disconnected (power→0) from its
         receipt at T+1m until 1-min after expiry at T+6m.
 
-      DERC5 — group 2, primacy 2, T+1m to T+8m:
+      DERC5 — group 2, primacy 2, T+1m to T+21m (20 min, as in the real GEN-10):
         opModExpLimW=200% (20000 W — shown above setMaxW reference line).
         Effective once DERC4 grace ends at T+6m; group 1 has no export default
         so group 2's control wins.
 
       DERC6 — group 2, primacy 2, T+8m to T+13m:
-        opModExpLimW=50% (5000 W).  Received at T+9m (non-overlapping with DERC5,
-        no supersede record needed).  Upper trace ramps from 20000→10000→5000 W.
+        opModExpLimW=50% (5000 W).  Created at T+7m30s, overlapping DERC5 in the same
+        program on the same field → supersedes DERC5 in its entirety.  The DB carries
+        the envoy-style supersede record (archive snapshot + superseded flag), though
+        the chart derives the kill from the client's observations alone.
 
-    Device is polled (no subscriptions). grad_w=200 keeps ramps short enough to
-    see clearly on a 20-minute chart.
+    Device is polled (no subscriptions).
 
     Expected visual:
       Upper trace:
         T+0→T+1m    unconstrained (10000 W)
-        T+1m        DERC4 received → ramp down to 0 W (50 s, AS4777 wGra)
+        T+1m        DERC4 received → instant to 0 W (disconnect)
         T+1m→T+6m   0 W (disconnected + grace)
-        T+6m        grace ends → ramp up to 20000 W (DERC5, 100 s)
-        T+8m        DERC5 expires → ramp to 10000 W (unconstrained, 50 s)
-        T+9m        DERC6 received → ramp down to 5000 W (25 s)
-        T+13m       DERC6 expires → ramp back to 10000 W (25 s)
-      Lower trace: flat at −10000 W (no import controls or defaults)
-      Step strips: GET-DERC-4 / GET-DERC-5 / WAIT-OBSERVE-DERC-5 /
-                   GET-DERC-6 / WAIT-OBSERVE-DERC-6 / WAIT-OBSERVE-DERP-1-6-DEFAULTS
-      Orange receipt markers at T+1m (grp 1), T+1m30s (grp 2), T+9m (grp 2).
+        T+6m        grace ends → ramp toward 20000 W (DERC5, post-reconnect wGra, 720 s)
+        T+10m       poll reveals DERC6 → DERC5 dead; ramp interrupted at 6668 W → 5000 W
+        T+13m       DERC6 expires → ramp toward 10000 W (unconstrained).  DERC5 must NOT
+                    resume despite 8 min of schedule remaining — superseded is superseded.
+      Lower trace: −10000 W, pinned to 0 during the disconnect window
+      Orange receipt markers at T+1m (grp 1), T+1m30s (grp 2), T+10m (grp 2).
     """
     test_end = T0 + timedelta(minutes=20)
 
@@ -1575,17 +1913,16 @@ async def test_chart_gen10_derc456(pg_envoy_base_config):
             set_connected=False,
             seed=40,
         )
-        # DERC5: export 200% on group 2 (T+1m to T+8m — ends just before DERC6 starts)
-        # offset=1 so created_time=T0+30s; 7min duration keeps end at T+8m.
+        # DERC5: export 200% on group 2, 20 minutes (T+1m to T+21m) — superseded mid-flight
         derc5 = _make_doe(
             site,
             grp2,
             offset_minutes=1,
-            duration_minutes=7,
+            duration_minutes=20,
             export_limit=Decimal("20000"),
             seed=50,
         )
-        # DERC6: export 50% on group 2 (5 min — non-overlapping with DERC5)
+        # DERC6: export 50% on group 2 (T+8m to T+13m), created T+7m30s while DERC5 is live
         derc6 = _make_doe(
             site,
             grp2,
@@ -1597,6 +1934,24 @@ async def test_chart_gen10_derc456(pg_envoy_base_config):
         session.add_all([derc4, derc5, derc6])
         await session.flush()
         ct4, ct5, ct6 = derc4.created_time, derc5.created_time, derc6.created_time
+
+        # Envoy's supersede bookkeeping at DERC6 creation: archive the pre-supersede DERC5
+        # snapshot and flag the active row. The chart ignores the flag (kill is derived from
+        # observations) but a faithful dump carries both.
+        session.add(
+            _make_archive_doe(
+                site.site_id,
+                grp2.site_control_group_id,
+                derc5.dynamic_operating_envelope_id,
+                T0 + timedelta(minutes=1),
+                duration_seconds=1200,
+                export_limit=Decimal("20000"),
+                superseded=False,
+                archive_time=ct6,
+                seed=51,
+            )
+        )
+        derc5.superseded = True
         await session.commit()
 
     polls = [
@@ -1608,8 +1963,8 @@ async def test_chart_gen10_derc456(pg_envoy_base_config):
         _poll(2, ct5 + timedelta(minutes=1), req_id=2, step_name="GET-DERC-5"),
         # T+7m: re-poll during wait step — device should now be following DERC5 (200%)
         _poll(2, T0 + timedelta(minutes=7), req_id=3, step_name="WAIT-OBSERVE-DERC-5"),
-        # T+9m: device polls /derp/2/derc — DERC6 received (DERC5 already expired at T+8m)
-        _poll(2, ct6 + timedelta(minutes=1, seconds=30), req_id=4, step_name="GET-DERC-6"),
+        # T+10m: device polls /derp/2/derc — DERC6 received; DERC5 observed superseded
+        _poll(2, ct6 + timedelta(minutes=2, seconds=30), req_id=4, step_name="GET-DERC-6"),
         # T+11m: re-poll during wait step — device should be following DERC6 (50%)
         _poll(2, T0 + timedelta(minutes=11), req_id=5, step_name="WAIT-OBSERVE-DERC-6"),
         # T+15m: poll after DERC6 expires — device returns to unconstrained
@@ -1626,6 +1981,17 @@ async def test_chart_gen10_derc456(pg_envoy_base_config):
 
     assert html is not None
     assert "Device Power Chart" in html
+    # DERC4 disconnects (upper+lower pinned to 0), grace ends and DERC5 (200%) takes over,
+    # DERC6 supersedes DERC5 mid-ramp, then expires toward unconstrained (NOT back to DERC5).
+    assert "Ramping from 10000 W to 0 W" in html
+    assert "Ramping from 0 W to 20000 W" in html
+    assert "Ramping from 6668 W to 5000 W" in html
+    assert "Ramping from 5000 W to 10000 W" in html
+    assert "Ramping from -10000 W to 0 W" in html
+    assert "Ramping from 0 W to -10000 W" in html
+    assert "Device reconnected" in html
+    # DERC5's dead tail must not resurface after DERC6 expires
+    assert html.count("to 20000 W") == 1
     out = _out("scenario_E_gen10_derc4560.html")
     out.write_text(html)
 
@@ -1637,25 +2003,27 @@ async def test_chart_gen10_derc456_subscribed(pg_envoy_base_config):
     """
     Subscription variant of test_chart_gen10_derc456.
 
-    Identical DERC4/5/6 setup but both groups are subscribed — controls are received
-    at created_time (notification delivery assumed instant):
+    Identical DERC4/5/6 setup (including DERC6's same-program supersession of DERC5) but
+    both groups are subscribed — controls are received at created_time (notification
+    delivery assumed instant):
 
       DERC4 effective_start = T+1m  (created_time T+0m30s < start_time T+1m)
       DERC5 effective_start = T+1m  (same created_time as DERC4)
-      DERC6 effective_start = T+8m  (created_time T+7m30s < start_time T+8m)
-
-    Key difference from the polled scenario: DERC6 is effective from T+8m (its
-    start_time) so there is NO gap between DERC5 and DERC6 in the Controls strip.
+      DERC6 revealed at created_time T+7m30s → DERC5 dead from that instant, 30s
+                    earlier than its T+8m start_time
 
     Expected visual:
       Upper trace:
         T+0→T+1m    unconstrained (10000 W)
         T+1m        DERC4 received (notification) → instant to 0 W (disconnect)
         T+1m→T+6m   0 W (disconnected + grace)
-        T+6m        grace ends → ramp up to 10000 W (DERC5 capped at setMaxW, 50 s)
-        T+8m        DERC5 expires / DERC6 starts → ramp to 5000 W (25 s, contiguous)
-        T+13m       DERC6 expires → ramp back to 10000 W (25 s)
-      Controls strip: GET-DERC-4 (T+1m→T+5m) / GET-DERC-5 (T+5m→T+8m) / GET-DERC-6 (no gap between DERC5→6)
+        T+6m        grace ends → ramp toward 20000 W (DERC5, post-reconnect wGra, 720 s;
+                    not cropped to setMaxW — the trace shows the commanded limit)
+        T+7m30s     DERC6 notification → DERC5 dead AT REVEAL (kill precedes DERC6's own
+                    start); ramp interrupted at 2500 W → heads toward unconstrained
+        T+8m        DERC6 starts → interrupted again at 3334 W → ramp to 5000 W
+        T+13m       DERC6 expires → ramp toward 10000 W (unconstrained).  DERC5 must NOT
+                    resume despite its schedule running to T+21m.
       Green receipt markers at T+0m30s (grp 1 + grp 2) and T+7m30s (grp 2).
     """
     test_end = T0 + timedelta(minutes=20)
@@ -1680,7 +2048,7 @@ async def test_chart_gen10_derc456_subscribed(pg_envoy_base_config):
             site,
             grp2,
             offset_minutes=1,
-            duration_minutes=7,
+            duration_minutes=20,
             export_limit=Decimal("20000"),
             seed=50,
         )
@@ -1699,6 +2067,22 @@ async def test_chart_gen10_derc456_subscribed(pg_envoy_base_config):
 
         await session.flush()
         ct4, ct6 = derc4.created_time, derc6.created_time
+
+        # Envoy's supersede bookkeeping at DERC6 creation (see the polled variant)
+        session.add(
+            _make_archive_doe(
+                site.site_id,
+                grp2.site_control_group_id,
+                derc5.dynamic_operating_envelope_id,
+                T0 + timedelta(minutes=1),
+                duration_seconds=1200,
+                export_limit=Decimal("20000"),
+                superseded=False,
+                archive_time=ct6,
+                seed=51,
+            )
+        )
+        derc5.superseded = True
         await session.commit()
 
     # No DERC polls needed (subscribed). Requests carry step names for strip labelling:
@@ -1725,6 +2109,14 @@ async def test_chart_gen10_derc456_subscribed(pg_envoy_base_config):
 
     assert html is not None
     assert "Device Power Chart" in html
+    assert "Ramping from 10000 W to 0 W" in html
+    assert "Ramping from 0 W to 20000 W" in html
+    # DERC6 notification kills DERC5 at reveal (T+7m30s), 30s before DERC6 itself starts
+    assert "Ramping from 2500 W to 10000 W" in html
+    assert "Ramping from 3334 W to 5000 W" in html
+    assert "Ramping from 5000 W to 10000 W" in html
+    # DERC5's dead tail must not resurface after DERC6 expires
+    assert html.count("to 20000 W") == 1
     out = _out("scenario_E2_gen10_derc456_subscribed0.html")
     out.write_text(html)
 
@@ -1816,6 +2208,13 @@ async def test_chart_op_mod_energise(pg_envoy_base_config):
 
     assert html is not None
     assert "Device Power Chart" in html
+    assert "Ramping from 7000 W to 5000 W" in html
+    assert "Ramping from 5000 W to 0 W" in html
+    assert "Ramping from 0 W to 5000 W" in html
+    assert "Ramping from 5000 W to 7000 W" in html
+    assert "Ramping from -10000 W to 0 W" in html
+    assert "Ramping from 0 W to -10000 W" in html
+    assert "Device reconnected" in html
     out = _out("scenario_F_op_mod_energise0.html")
     out.write_text(html)
 
