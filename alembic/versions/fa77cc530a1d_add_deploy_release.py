@@ -1,7 +1,7 @@
 """add deploy_release
 
 Revision ID: fa77cc530a1d
-Revises: 4bc8586aa906
+Revises: 3cfee29820b0
 Create Date: 2026-08-04 10:12:33.104512
 
 """
@@ -14,7 +14,7 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "fa77cc530a1d"
-down_revision: str | None = "4bc8586aa906"
+down_revision: str | None = "3cfee29820b0"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
