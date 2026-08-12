@@ -152,7 +152,11 @@ def _add_text_file_to_zip_data(zip_data: bytes, filename: str, content: str) -> 
 
 
 async def regenerate_pdf_report(
-    file_data: bytes, raw_reporting_data: str, version: int, playlist_info: str | None = None
+    file_data: bytes,
+    raw_reporting_data: str,
+    version: int,
+    playlist_info: str | None = None,
+    deploy_release_tag: str | None = None,
 ) -> bytes:
     """A pdf run report is generated from `reporting_data`, and replaces the existing
     pdf stored in the `file_data` zip.
@@ -167,6 +171,8 @@ async def regenerate_pdf_report(
         raw_reporting_data (str): ReportingData as a json encoded string
         version (int): the version of the reporting data in `raw_reporting_data`.
         playlist_info (str | None): "Test N of M" label for playlist runs.
+        deploy_release_tag (str | None): the cactus-deploy release tag that was live for this run's pod
+            (Run.deploy_release_tag).
     Returns:
         bytes: the updated zip file data.
     Raises:
@@ -184,7 +190,9 @@ async def regenerate_pdf_report(
 
     try:
         if version == 1:
-            pdf_data = await generate_pdf_report_v1(reporting_data=reporting_data, playlist_info=playlist_info)
+            pdf_data = await generate_pdf_report_v1(
+                reporting_data=reporting_data, deploy_release_tag=deploy_release_tag, playlist_info=playlist_info
+            )
         else:
             raise ValueError(f"Unknown version of reporting data ({version})")
     except Exception as exc:
@@ -213,7 +221,9 @@ async def regenerate_pdf_report(
     return updated_zip_data
 
 
-async def regenerate_run_artifact(session: AsyncSession, run: Run, run_artifact: RunArtifact) -> RunArtifact:
+async def regenerate_run_artifact(
+    session: AsyncSession, run: Run, run_artifact: RunArtifact, deploy_release_tag: str | None = None
+) -> RunArtifact:
     """Regenerates the RunArtifact.
 
     - Uses the reporting data to (re)generate the run report.
@@ -225,6 +235,8 @@ async def regenerate_run_artifact(session: AsyncSession, run: Run, run_artifact:
         session: A database session.
         run (Run): The Run the artifact belongs to.
         run_artifact (RunArtifact): The RunArtifact to update.
+        deploy_release_tag (str | None): the cactus-deploy release tag that was live for this run's pod
+            (Run.deploy_release_tag).
     Returns:
         RunArtifact: the updated RunArtifact
     Raises:
@@ -239,6 +251,7 @@ async def regenerate_run_artifact(session: AsyncSession, run: Run, run_artifact:
         raw_reporting_data=run_artifact.reporting_data,  # ty: ignore[invalid-argument-type]
         version=run_artifact.version,  # ty: ignore[invalid-argument-type]
         playlist_info=playlist_info,
+        deploy_release_tag=deploy_release_tag,
     )
 
     # Update the file data

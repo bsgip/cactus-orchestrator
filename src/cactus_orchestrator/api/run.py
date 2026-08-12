@@ -64,6 +64,7 @@ from cactus_orchestrator.crud import (
     insert_playlist_runs,
     insert_playlist_tail_runs,
     insert_run_for_run_group,
+    select_deploy_release_at,
     select_next_playlist_run,
     select_passed_runs_for_user,
     select_playlist_position_label,
@@ -113,11 +114,13 @@ async def get_run_artifact_response_for_user(user: User, run_id: int) -> Respons
         else:
             try:
                 playlist_info = await select_playlist_position_label(db.session, run)
+                deploy_release = await select_deploy_release_at(db.session, run.created_at)
                 updated = await regenerate_pdf_report(
                     file_data=artifact.file_data,
                     raw_reporting_data=artifact.reporting_data,
                     version=artifact.version,
                     playlist_info=playlist_info,
+                    deploy_release_tag=deploy_release.release_tag if deploy_release else None,
                 )
                 await update_runartifact_with_file_data(db.session, artifact, updated)
                 await db.session.commit()
@@ -518,11 +521,13 @@ async def finalise_run(
             try:
                 reporting_data_version = json.loads(reporting_data)["version"]
                 playlist_info = await select_playlist_position_label(session, run)
+                deploy_release = await select_deploy_release_at(session, run.created_at)
                 file_data = await regenerate_pdf_report(
                     file_data=file_data,
                     raw_reporting_data=reporting_data,
                     version=reporting_data_version,
                     playlist_info=playlist_info,
+                    deploy_release_tag=deploy_release.release_tag if deploy_release else None,
                 )
             except Exception as exc:
                 msg = f"Unable to regenerate run report for run {run.run_id}. Reason={exc}"

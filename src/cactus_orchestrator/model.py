@@ -308,3 +308,14 @@ class ComplianceRequestRun(Base):
     compliance_request_id: Mapped[int] = mapped_column(ForeignKey("compliance_request.id"))
     compliance_run_id: Mapped[int] = mapped_column(ForeignKey("run.id"))
     compliance_run: Mapped[Run] = relationship(lazy="selectin")
+
+
+class DeployRelease(Base):
+    """Records each time update.sh deploys a cactus-deploy release. Append only - a rollback appends a new record
+    with the older tag, so ordering is by created_at, not by release_tag."""
+
+    __tablename__ = "deploy_release"
+
+    deploy_release_id: Mapped[int] = mapped_column(name="id", primary_key=True, autoincrement=True)
+    release_tag: Mapped[str] = mapped_column(String, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
