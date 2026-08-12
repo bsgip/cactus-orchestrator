@@ -10,6 +10,7 @@ from cactus_runner.models import (
     ActiveTestProcedure,
     CheckResult,
     PackedReadings,
+    RandomValues,
     ReadingType,
     ReportingData,
     ReportingData_v1,
@@ -151,6 +152,7 @@ async def test_generate_pdf_report_v1_regenerates_pre_warnings_artifact():
             step_status={},
             finished_zip_path=None,
             resource_annotations=ResourceAnnotations(der_control_ids_by_alias={"a": 1}),
+            random_values=RandomValues(),
         ),
     )
     reporting_data = generate_class_instance(

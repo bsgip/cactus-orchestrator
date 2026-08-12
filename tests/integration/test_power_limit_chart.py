@@ -19,6 +19,7 @@ from assertical.asserts.generator import assert_class_instance_equality
 from assertical.fake.generator import clone_class_instance, generate_class_instance
 from assertical.fixtures.postgres import generate_async_session
 from cactus_schema.runner.schema import HTTPMethod, RequestEntry
+from envoy.server.model import SiteGroup, SiteGroupAssignment
 from envoy.server.model.archive.doe import (
     ArchiveDynamicOperatingEnvelope,
     ArchiveSiteControlGroupDefault,
@@ -98,7 +99,7 @@ def _dderc_poll(group_id: int, when: datetime, req_id: int = 0, step_name: str =
 
 
 def _make_doe(
-    site: Site,
+    site_group: SiteGroup,
     group: SiteControlGroup,
     offset_minutes: float,
     duration_minutes: float,
@@ -118,7 +119,7 @@ def _make_doe(
     return generate_class_instance(
         DynamicOperatingEnvelope,
         seed=seed,
-        site=site,
+        site_group_id=site_group.site_group_id,
         site_control_group=group,
         calculation_log_id=None,
         start_time=start,
@@ -140,15 +141,15 @@ def _make_doe(
     )
 
 
-def _make_site_with_setting(
+def _make_site_and_group_with_setting(
     aggregator_id: int,
     max_w: int = 10000,
     grad_w: int = 28,
     seed: int = 1,
     charge_rate_w: int | None = None,
     discharge_rate_w: int | None = None,
-) -> Site:
-    """Build a Site with one SiteDERSetting."""
+) -> tuple[Site, SiteGroup, SiteGroupAssignment]:
+    """Build a Site with one SiteDERSetting that is assigned to a specific SiteGroup."""
     der_setting = generate_class_instance(
         SiteDERSetting,
         seed=seed,
@@ -165,11 +166,15 @@ def _make_site_with_setting(
     )
     site = generate_class_instance(Site, seed=seed, aggregator_id=aggregator_id)
     site.site_der_setting = der_setting
-    return site
+
+    site_group = generate_class_instance(SiteGroup, seed=seed + 101, default_group=False)
+
+    site_group_assignment = generate_class_instance(SiteGroupAssignment, seed=seed + 202, site=site, group=site_group)
+    return site, site_group, site_group_assignment
 
 
 def _make_archive_doe(
-    site_id: int,
+    site_group_id: int,
     group_id: int,
     doe_id: int,
     start: datetime,
@@ -189,7 +194,7 @@ def _make_archive_doe(
         seed=seed,
         archive_id=None,
         dynamic_operating_envelope_id=doe_id,
-        site_id=site_id,
+        site_group_id=site_group_id,
         site_control_group_id=group_id,
         calculation_log_id=None,
         start_time=start,
@@ -258,8 +263,8 @@ async def test_get_der_setting_returns_max_w_fields(pg_envoy_base_config):
     """Returns the correct max_w_value and max_w_multiplier from the active site's DER setting,
     with NULL charge/discharge rates passed through as None."""
     async with generate_async_session(pg_envoy_base_config) as session:
-        site = _make_site_with_setting(aggregator_id=1, max_w=7500)
-        session.add(site)
+        site_group_ass = _make_site_and_group_with_setting(aggregator_id=1, max_w=7500)
+        session.add_all(site_group_ass)
         await session.commit()
 
     async with generate_async_session(pg_envoy_base_config) as session:
@@ -277,8 +282,10 @@ async def test_get_der_setting_returns_max_w_fields(pg_envoy_base_config):
 async def test_get_der_setting_returns_charge_discharge_rate_fields(pg_envoy_base_config):
     """Returns the charge/discharge rate fields when populated."""
     async with generate_async_session(pg_envoy_base_config) as session:
-        site = _make_site_with_setting(aggregator_id=1, max_w=7500, charge_rate_w=3000, discharge_rate_w=5000)
-        session.add(site)
+        site_group_ass = _make_site_and_group_with_setting(
+            aggregator_id=1, max_w=7500, charge_rate_w=3000, discharge_rate_w=5000
+        )
+        session.add_all(site_group_ass)
         await session.commit()
 
     async with generate_async_session(pg_envoy_base_config) as session:
@@ -294,14 +301,14 @@ async def test_get_der_setting_returns_charge_discharge_rate_fields(pg_envoy_bas
 async def test_get_der_setting_uses_most_recently_changed_site(pg_envoy_base_config):
     """When multiple sites exist, returns the DER setting belonging to the site with the latest changed_time."""
     async with generate_async_session(pg_envoy_base_config) as session:
-        old_site = _make_site_with_setting(aggregator_id=1, max_w=1000, seed=1)
-        old_site.changed_time = T0 - timedelta(hours=2)
-        session.add(old_site)
+        old_site_group_ass = _make_site_and_group_with_setting(aggregator_id=1, max_w=1000, seed=1)
+        old_site_group_ass[0].changed_time = T0 - timedelta(hours=2)
+        session.add_all(old_site_group_ass)
         await session.flush()
 
-        new_site = _make_site_with_setting(aggregator_id=1, max_w=9000, seed=2)
-        new_site.changed_time = T0 - timedelta(hours=1)
-        session.add(new_site)
+        new_site_group_ass = _make_site_and_group_with_setting(aggregator_id=1, max_w=9000, seed=2)
+        new_site_group_ass[0].changed_time = T0 - timedelta(hours=1)
+        session.add_all(new_site_group_ass)
         await session.commit()
 
     async with generate_async_session(pg_envoy_base_config) as session:
@@ -324,8 +331,12 @@ async def test_get_control_groups_empty(pg_envoy_base_config):
 async def test_get_control_groups_returns_all_with_correct_fields(pg_envoy_base_config):
     """Returns all groups with the correct site_control_group_id and primacy values."""
     async with generate_async_session(pg_envoy_base_config) as session:
-        grp1 = generate_class_instance(SiteControlGroup, seed=1, site_control_group_id=1, primacy=10)
-        grp2 = generate_class_instance(SiteControlGroup, seed=2, site_control_group_id=2, primacy=20)
+        grp1 = generate_class_instance(
+            SiteControlGroup, seed=1, site_control_group_id=1, primacy=10, required_site_group_id=None
+        )
+        grp2 = generate_class_instance(
+            SiteControlGroup, seed=2, site_control_group_id=2, primacy=20, required_site_group_id=None
+        )
         session.add_all([grp1, grp2])
         await session.commit()
 
@@ -405,15 +416,20 @@ async def test_get_does_active_doe_fields(pg_envoy_base_config, seed: int, optio
     """Active DOE rows are returned with is_archive=False and correct field values."""
 
     async with generate_async_session(pg_envoy_base_config) as session:
-        site = _make_site_with_setting(aggregator_id=1)
+        site, site_group, assignment = _make_site_and_group_with_setting(aggregator_id=1)
         session.add(site)
-        grp = generate_class_instance(SiteControlGroup, seed=1, site_control_group_id=1, primacy=1)
+        session.add(site_group)
+        session.add(assignment)
+        await session.flush()
+        grp = generate_class_instance(
+            SiteControlGroup, seed=1, site_control_group_id=1, primacy=1, required_site_group_id=None
+        )
         session.add(grp)
         doe = generate_class_instance(
             DynamicOperatingEnvelope,
             seed=seed,
             optional_is_none=optional_is_none,
-            site=site,
+            site_group_id=site_group.site_group_id,
             site_control_group=grp,
             calculation_log_id=None,
         )
@@ -443,16 +459,22 @@ async def test_get_does_archive_doe_fields(pg_envoy_base_config, seed: int, opti
     """Archive DOE rows are returned with is_archive=True and correct field values."""
 
     async with generate_async_session(pg_envoy_base_config) as session:
-        site = _make_site_with_setting(aggregator_id=1)
+        site, site_group, assignment = _make_site_and_group_with_setting(aggregator_id=1)
         session.add(site)
-        grp = generate_class_instance(SiteControlGroup, seed=1, site_control_group_id=1, primacy=1)
+        session.add(site_group)
+        session.add(assignment)
+        await session.flush()
+
+        grp = generate_class_instance(
+            SiteControlGroup, seed=1, site_control_group_id=1, primacy=1, required_site_group_id=None
+        )
         session.add(grp)
         archive_doe = generate_class_instance(
             ArchiveDynamicOperatingEnvelope,
             seed=seed,
             optional_is_none=optional_is_none,
             calculation_log_id=None,
-            site_id=site.site_id,
+            site_group_id=site_group.site_group_id,
             site_control_group_id=grp.site_control_group_id,
         )
         session.add(archive_doe)
@@ -480,14 +502,19 @@ async def test_get_does_combines_active_and_archive(pg_envoy_base_config):
     duration = 300
 
     async with generate_async_session(pg_envoy_base_config) as session:
-        site = _make_site_with_setting(aggregator_id=1)
+        site, site_group, assignment = _make_site_and_group_with_setting(aggregator_id=1)
         session.add(site)
-        grp = generate_class_instance(SiteControlGroup, seed=1, site_control_group_id=1, primacy=1)
+        session.add(site_group)
+        session.add(assignment)
+        await session.flush()
+        grp = generate_class_instance(
+            SiteControlGroup, seed=1, site_control_group_id=1, primacy=1, required_site_group_id=None
+        )
         session.add(grp)
         active_doe = generate_class_instance(
             DynamicOperatingEnvelope,
             seed=2,
-            site=site,
+            site_group_id=site_group.site_group_id,
             site_control_group=grp,
             calculation_log_id=None,
             start_time=doe_start,
@@ -508,10 +535,9 @@ async def test_get_does_combines_active_and_archive(pg_envoy_base_config):
         )
         session.add(active_doe)
         await session.flush()
-        site_id = site.site_id
 
         archive_doe = _make_archive_doe(
-            site_id=site_id,
+            site_group_id=site_group.site_group_id,
             group_id=1,
             doe_id=999,
             start=doe_start + timedelta(minutes=10),
@@ -544,22 +570,28 @@ async def test_get_does_not_scoped_to_a_single_site(pg_envoy_base_config):
     """
 
     async with generate_async_session(pg_envoy_base_config) as session:
-        old_site = _make_site_with_setting(aggregator_id=1, seed=1)
+        old_site, old_site_group, old_assignment = _make_site_and_group_with_setting(aggregator_id=1, seed=1)
         old_site.changed_time = T0 - timedelta(hours=2)
         session.add(old_site)
+        session.add(old_site_group)
+        session.add(old_assignment)
 
-        new_site = _make_site_with_setting(aggregator_id=1, seed=2)
+        new_site, new_site_group, new_assignment = _make_site_and_group_with_setting(aggregator_id=1, seed=2)
         new_site.changed_time = T0 - timedelta(hours=1)
         session.add(new_site)
+        session.add(new_site_group)
+        session.add(new_assignment)
 
-        grp = generate_class_instance(SiteControlGroup, seed=1, site_control_group_id=1, primacy=1)
+        grp = generate_class_instance(
+            SiteControlGroup, seed=1, site_control_group_id=1, primacy=1, required_site_group_id=None
+        )
         session.add(grp)
         await session.flush()
 
         old_doe = generate_class_instance(
             DynamicOperatingEnvelope,
             seed=11,
-            site=old_site,
+            site_group_id=old_site_group.site_group_id,
             site_control_group=grp,
             calculation_log_id=None,
             export_limit_watts=Decimal("1111"),
@@ -567,7 +599,7 @@ async def test_get_does_not_scoped_to_a_single_site(pg_envoy_base_config):
         new_doe = generate_class_instance(
             DynamicOperatingEnvelope,
             seed=22,
-            site=new_site,
+            site_group_id=new_site_group.site_group_id,
             site_control_group=grp,
             calculation_log_id=None,
             export_limit_watts=Decimal("9999"),
@@ -601,7 +633,9 @@ async def test_get_defaults_active_default_fields(pg_envoy_base_config, seed: in
     """Active default rows are returned with is_archive=False and correct field values."""
 
     async with generate_async_session(pg_envoy_base_config) as session:
-        grp = generate_class_instance(SiteControlGroup, seed=1, site_control_group_id=3, primacy=1)
+        grp = generate_class_instance(
+            SiteControlGroup, seed=1, site_control_group_id=3, primacy=1, required_site_group_id=None
+        )
         session.add(grp)
         default = generate_class_instance(
             SiteControlGroupDefault,
@@ -665,7 +699,9 @@ async def test_get_defaults_combines_active_and_archive(pg_envoy_base_config):
     """Both active and archive defaults are returned together; is_archive distinguishes them."""
 
     async with generate_async_session(pg_envoy_base_config) as session:
-        grp = generate_class_instance(SiteControlGroup, seed=1, site_control_group_id=1, primacy=1)
+        grp = generate_class_instance(
+            SiteControlGroup, seed=1, site_control_group_id=1, primacy=1, required_site_group_id=None
+        )
         session.add(grp)
         active_default = generate_class_instance(
             SiteControlGroupDefault,
@@ -729,11 +765,17 @@ async def test_check_has_storage_target_on_schema(pg_envoy_base_config):
 async def test_get_does_storage_target_none_when_column_absent(pg_envoy_base_config):
     """When has_storage_target=False, storage_target_active_watts is None for every row."""
     async with generate_async_session(pg_envoy_base_config) as session:
-        site = _make_site_with_setting(aggregator_id=1)
+        site, site_group, assignment = _make_site_and_group_with_setting(aggregator_id=1)
         session.add(site)
-        grp = generate_class_instance(SiteControlGroup, seed=1, site_control_group_id=1, primacy=1)
+        session.add(site_group)
+        session.add(assignment)
+        grp = generate_class_instance(
+            SiteControlGroup, seed=1, site_control_group_id=1, primacy=1, required_site_group_id=None
+        )
         session.add(grp)
-        doe = _make_doe(site, grp, offset_minutes=5, duration_minutes=10, export_limit=Decimal("8000"), seed=1)
+
+        await session.flush()
+        doe = _make_doe(site_group, grp, offset_minutes=5, duration_minutes=10, export_limit=Decimal("8000"), seed=1)
         session.add(doe)
         await session.commit()
 
@@ -759,12 +801,17 @@ async def test_get_does_reads_storage_target_when_column_present(pg_envoy_base_c
                 "ADD COLUMN IF NOT EXISTS storage_target_active_watts DECIMAL(16,2)"
             )
         )
-        site = _make_site_with_setting(aggregator_id=1)
+        site, site_group, assignment = _make_site_and_group_with_setting(aggregator_id=1)
         session.add(site)
-        grp = generate_class_instance(SiteControlGroup, seed=1, site_control_group_id=1, primacy=1)
+        session.add(site_group)
+        session.add(assignment)
+        grp = generate_class_instance(
+            SiteControlGroup, seed=1, site_control_group_id=1, primacy=1, required_site_group_id=None
+        )
         session.add(grp)
+        await session.flush()
         doe = _make_doe(
-            site,
+            site_group,
             grp,
             offset_minutes=5,
             duration_minutes=10,
@@ -820,20 +867,25 @@ async def test_chart_storage_target_constrains_upper_and_lower_bounds(
                 text(f"ALTER TABLE {tbl} ADD COLUMN IF NOT EXISTS storage_target_active_watts DECIMAL(16,2)")
             )
 
-        site = _make_site_with_setting(aggregator_id=1)
+        site, site_group, assignment = _make_site_and_group_with_setting(aggregator_id=1)
         session.add(site)
-        grp = generate_class_instance(SiteControlGroup, seed=1, site_control_group_id=1, primacy=1)
+        session.add(site_group)
+        session.add(assignment)
+        grp = generate_class_instance(
+            SiteControlGroup, seed=1, site_control_group_id=1, primacy=1, required_site_group_id=None
+        )
         session.add(grp)
+        await session.flush()
 
         doe_upper = _make_doe(
-            site,
+            site_group,
             grp,
             offset_minutes=5,
             duration_minutes=10,
             export_limit=Decimal("9000"),
             seed=10,
         )
-        doe_lower = _make_doe(site, grp, offset_minutes=20, duration_minutes=10, seed=20)
+        doe_lower = _make_doe(site_group, grp, offset_minutes=20, duration_minutes=10, seed=20)
         session.add_all([doe_upper, doe_lower])
         await session.flush()
         created_upper = doe_upper.created_time
@@ -1287,14 +1339,19 @@ async def test_chart_single_program_export_curtailment(pg_envoy_base_config):
     created_times: list[datetime] = []
 
     async with generate_async_session(pg_envoy_base_config) as session:
-        site = _make_site_with_setting(aggregator_id=1)
+        site, site_group, assignment = _make_site_and_group_with_setting(aggregator_id=1)
         session.add(site)
-        group = generate_class_instance(SiteControlGroup, seed=1, site_control_group_id=1, primacy=1)
+        session.add(site_group)
+        session.add(assignment)
+        group = generate_class_instance(
+            SiteControlGroup, seed=1, site_control_group_id=1, primacy=1, required_site_group_id=None
+        )
         session.add(group)
+        await session.flush()
 
         ctrls = [
             _make_doe(
-                site,
+                site_group,
                 group,
                 offset_minutes=5,
                 duration_minutes=10,
@@ -1302,7 +1359,7 @@ async def test_chart_single_program_export_curtailment(pg_envoy_base_config):
                 seed=10,
             ),
             _make_doe(
-                site,
+                site_group,
                 group,
                 offset_minutes=15,
                 duration_minutes=10,
@@ -1310,7 +1367,7 @@ async def test_chart_single_program_export_curtailment(pg_envoy_base_config):
                 seed=20,
             ),
             _make_doe(
-                site,
+                site_group,
                 group,
                 offset_minutes=25,
                 duration_minutes=15,
@@ -1352,12 +1409,19 @@ async def test_chart_control_above_device_max_not_cropped(pg_envoy_base_config):
     test_end = T0 + timedelta(minutes=30)
 
     async with generate_async_session(pg_envoy_base_config) as session:
-        site = _make_site_with_setting(aggregator_id=1)
+        site, site_group, assignment = _make_site_and_group_with_setting(aggregator_id=1)
         session.add(site)
-        group = generate_class_instance(SiteControlGroup, seed=1, site_control_group_id=1, primacy=1)
+        session.add(site_group)
+        session.add(assignment)
+        group = generate_class_instance(
+            SiteControlGroup, seed=1, site_control_group_id=1, primacy=1, required_site_group_id=None
+        )
         session.add(group)
+        await session.flush()
 
-        ctrl = _make_doe(site, group, offset_minutes=5, duration_minutes=15, export_limit=Decimal("20000"), seed=10)
+        ctrl = _make_doe(
+            site_group, group, offset_minutes=5, duration_minutes=15, export_limit=Decimal("20000"), seed=10
+        )
         session.add(ctrl)
         await session.flush()
         created = ctrl.created_time
@@ -1393,12 +1457,21 @@ async def test_chart_directional_device_maxes_from_charge_discharge_rates(pg_env
     test_end = T0 + timedelta(minutes=30)
 
     async with generate_async_session(pg_envoy_base_config) as session:
-        site = _make_site_with_setting(aggregator_id=1, charge_rate_w=4000, discharge_rate_w=6000)
+        site, site_group, assignment = _make_site_and_group_with_setting(
+            aggregator_id=1, charge_rate_w=4000, discharge_rate_w=6000
+        )
         session.add(site)
-        group = generate_class_instance(SiteControlGroup, seed=1, site_control_group_id=1, primacy=1)
+        session.add(site_group)
+        session.add(assignment)
+        group = generate_class_instance(
+            SiteControlGroup, seed=1, site_control_group_id=1, primacy=1, required_site_group_id=None
+        )
         session.add(group)
+        await session.flush()
 
-        ctrl = _make_doe(site, group, offset_minutes=5, duration_minutes=10, export_limit=Decimal("3000"), seed=10)
+        ctrl = _make_doe(
+            site_group, group, offset_minutes=5, duration_minutes=10, export_limit=Decimal("3000"), seed=10
+        )
         session.add(ctrl)
         await session.flush()
         created = ctrl.created_time
@@ -1435,15 +1508,22 @@ async def test_chart_multi_program_primacy(pg_envoy_base_config):
     created_times: dict[str, datetime] = {}
 
     async with generate_async_session(pg_envoy_base_config) as session:
-        site = _make_site_with_setting(aggregator_id=1)
+        site, site_group, assignment = _make_site_and_group_with_setting(aggregator_id=1)
         session.add(site)
-        grp1 = generate_class_instance(SiteControlGroup, seed=1, site_control_group_id=1, primacy=1)
-        grp2 = generate_class_instance(SiteControlGroup, seed=2, site_control_group_id=2, primacy=2)
+        session.add(site_group)
+        session.add(assignment)
+        grp1 = generate_class_instance(
+            SiteControlGroup, seed=1, site_control_group_id=1, primacy=1, required_site_group_id=None
+        )
+        grp2 = generate_class_instance(
+            SiteControlGroup, seed=2, site_control_group_id=2, primacy=2, required_site_group_id=None
+        )
         session.add_all([grp1, grp2])
+        await session.flush()
 
         ctrls = {
             "imp1": _make_doe(
-                site,
+                site_group,
                 grp1,
                 offset_minutes=5,
                 duration_minutes=15,
@@ -1451,7 +1531,7 @@ async def test_chart_multi_program_primacy(pg_envoy_base_config):
                 seed=11,
             ),
             "imp2": _make_doe(
-                site,
+                site_group,
                 grp1,
                 offset_minutes=20,
                 duration_minutes=15,
@@ -1459,7 +1539,7 @@ async def test_chart_multi_program_primacy(pg_envoy_base_config):
                 seed=12,
             ),
             "exp1": _make_doe(
-                site,
+                site_group,
                 grp2,
                 offset_minutes=10,
                 duration_minutes=10,
@@ -1467,7 +1547,7 @@ async def test_chart_multi_program_primacy(pg_envoy_base_config):
                 seed=21,
             ),
             "exp2": _make_doe(
-                site,
+                site_group,
                 grp2,
                 offset_minutes=30,
                 duration_minutes=15,
@@ -1528,17 +1608,26 @@ async def test_chart_same_program_supersession_dead_tail(pg_envoy_base_config):
     test_end = T0 + timedelta(minutes=25)
 
     async with generate_async_session(pg_envoy_base_config) as session:
-        site = _make_site_with_setting(aggregator_id=1)
+        site, site_group, assignment = _make_site_and_group_with_setting(aggregator_id=1)
         session.add(site)
-        group1 = generate_class_instance(SiteControlGroup, seed=1, site_control_group_id=1, primacy=1)
-        group2 = generate_class_instance(SiteControlGroup, seed=2, site_control_group_id=2, primacy=2)
+        session.add(site_group)
+        session.add(assignment)
+        group1 = generate_class_instance(
+            SiteControlGroup, seed=1, site_control_group_id=1, primacy=1, required_site_group_id=None
+        )
+        group2 = generate_class_instance(
+            SiteControlGroup, seed=2, site_control_group_id=2, primacy=2, required_site_group_id=None
+        )
         session.add_all([group1, group2])
+        await session.flush()
 
         session.add_all(
             [
-                _make_doe(site, group2, offset_minutes=1, duration_minutes=20, export_limit=Decimal("20000"), seed=10),
                 _make_doe(
-                    site,
+                    site_group, group2, offset_minutes=1, duration_minutes=20, export_limit=Decimal("20000"), seed=10
+                ),
+                _make_doe(
+                    site_group,
                     group2,
                     offset_minutes=8,
                     duration_minutes=5,
@@ -1547,7 +1636,7 @@ async def test_chart_same_program_supersession_dead_tail(pg_envoy_base_config):
                     seed=20,
                 ),
                 _make_doe(
-                    site,
+                    site_group,
                     group1,
                     offset_minutes=15,
                     duration_minutes=3,
@@ -1606,9 +1695,13 @@ async def test_chart_ramptms_and_defaults(pg_envoy_base_config):
     created_times: dict[str, datetime] = {}
 
     async with generate_async_session(pg_envoy_base_config) as session:
-        site = _make_site_with_setting(aggregator_id=1)
+        site, site_group, assignment = _make_site_and_group_with_setting(aggregator_id=1)
         session.add(site)
-        grp1 = generate_class_instance(SiteControlGroup, seed=1, site_control_group_id=1, primacy=1)
+        session.add(site_group)
+        session.add(assignment)
+        grp1 = generate_class_instance(
+            SiteControlGroup, seed=1, site_control_group_id=1, primacy=1, required_site_group_id=None
+        )
         session.add(grp1)
 
         session.add(
@@ -1625,10 +1718,11 @@ async def test_chart_ramptms_and_defaults(pg_envoy_base_config):
                 changed_time=T0 - timedelta(minutes=1),
             )
         )
+        await session.flush()
 
         ctrls = {
             "ctrl1": _make_doe(
-                site,
+                site_group,
                 grp1,
                 offset_minutes=5,
                 duration_minutes=10,
@@ -1637,7 +1731,7 @@ async def test_chart_ramptms_and_defaults(pg_envoy_base_config):
                 seed=10,
             ),
             "ctrl2": _make_doe(
-                site,
+                site_group,
                 grp1,
                 offset_minutes=25,
                 duration_minutes=10,
@@ -1697,9 +1791,13 @@ async def test_chart_op_mod_connect(pg_envoy_base_config):
     created_times: dict[str, datetime] = {}
 
     async with generate_async_session(pg_envoy_base_config) as session:
-        site = _make_site_with_setting(aggregator_id=1)
+        site, site_group, assignment = _make_site_and_group_with_setting(aggregator_id=1)
         session.add(site)
-        grp1 = generate_class_instance(SiteControlGroup, seed=1, site_control_group_id=1, primacy=1)
+        session.add(site_group)
+        session.add(assignment)
+        grp1 = generate_class_instance(
+            SiteControlGroup, seed=1, site_control_group_id=1, primacy=1, required_site_group_id=None
+        )
         session.add(grp1)
 
         session.add(
@@ -1716,10 +1814,11 @@ async def test_chart_op_mod_connect(pg_envoy_base_config):
                 changed_time=T0 - timedelta(minutes=1),
             )
         )
+        await session.flush()
 
         ctrls = {
             "export": _make_doe(
-                site,
+                site_group,
                 grp1,
                 offset_minutes=5,
                 duration_minutes=25,
@@ -1727,7 +1826,7 @@ async def test_chart_op_mod_connect(pg_envoy_base_config):
                 seed=10,
             ),
             "disconnect": _make_doe(
-                site,
+                site_group,
                 grp1,
                 offset_minutes=10,
                 duration_minutes=5,
@@ -1735,7 +1834,7 @@ async def test_chart_op_mod_connect(pg_envoy_base_config):
                 seed=20,
             ),
             "reconnect": _make_doe(
-                site,
+                site_group,
                 grp1,
                 offset_minutes=20,
                 duration_minutes=5,
@@ -1796,9 +1895,13 @@ async def test_chart_op_mod_connect_expiry(pg_envoy_base_config):
     created_times: dict[str, datetime] = {}
 
     async with generate_async_session(pg_envoy_base_config) as session:
-        site = _make_site_with_setting(aggregator_id=1)
+        site, site_group, assignment = _make_site_and_group_with_setting(aggregator_id=1)
         session.add(site)
-        grp1 = generate_class_instance(SiteControlGroup, seed=1, site_control_group_id=1, primacy=1)
+        session.add(site_group)
+        session.add(assignment)
+        grp1 = generate_class_instance(
+            SiteControlGroup, seed=1, site_control_group_id=1, primacy=1, required_site_group_id=None
+        )
         session.add(grp1)
 
         session.add(
@@ -1815,10 +1918,11 @@ async def test_chart_op_mod_connect_expiry(pg_envoy_base_config):
                 changed_time=T0 - timedelta(minutes=1),
             )
         )
+        await session.flush()
 
         ctrls = {
             "export": _make_doe(
-                site,
+                site_group,
                 grp1,
                 offset_minutes=5,
                 duration_minutes=25,
@@ -1826,7 +1930,7 @@ async def test_chart_op_mod_connect_expiry(pg_envoy_base_config):
                 seed=10,
             ),
             "disconnect": _make_doe(
-                site,
+                site_group,
                 grp1,
                 offset_minutes=10,
                 duration_minutes=5,
@@ -1900,18 +2004,25 @@ async def test_chart_gen10_derc456(pg_envoy_base_config):
     test_end = T0 + timedelta(minutes=20)
 
     async with generate_async_session(pg_envoy_base_config) as session:
-        site = _make_site_with_setting(aggregator_id=1, max_w=10000, grad_w=200)
+        site, site_group, assignment = _make_site_and_group_with_setting(aggregator_id=1, max_w=10000, grad_w=200)
         session.add(site)
+        session.add(site_group)
+        session.add(assignment)
         # Group 1 = FSA1 / DERP1, high priority. No export default → group 2 can win after DERC4.
-        grp1 = generate_class_instance(SiteControlGroup, seed=1, site_control_group_id=1, primacy=1)
+        grp1 = generate_class_instance(
+            SiteControlGroup, seed=1, site_control_group_id=1, primacy=1, required_site_group_id=None
+        )
         # Group 2 = FSA2 / DERP6, lower priority, holds the export controls.
-        grp2 = generate_class_instance(SiteControlGroup, seed=2, site_control_group_id=2, primacy=2)
+        grp2 = generate_class_instance(
+            SiteControlGroup, seed=2, site_control_group_id=2, primacy=2, required_site_group_id=None
+        )
         session.add_all([grp1, grp2])
+        await session.flush()
 
         # DERC4: opModConnect=False + genLim=0 on group 1 (T+1m to T+5m)
         # offset=1 so created_time=T0+30s (after test_start); 4min duration keeps end at T+5m.
         derc4 = _make_doe(
-            site,
+            site_group,
             grp1,
             offset_minutes=1,
             duration_minutes=4,
@@ -1921,7 +2032,7 @@ async def test_chart_gen10_derc456(pg_envoy_base_config):
         )
         # DERC5: export 200% on group 2, 20 minutes (T+1m to T+21m) — superseded mid-flight
         derc5 = _make_doe(
-            site,
+            site_group,
             grp2,
             offset_minutes=1,
             duration_minutes=20,
@@ -1930,7 +2041,7 @@ async def test_chart_gen10_derc456(pg_envoy_base_config):
         )
         # DERC6: export 50% on group 2 (T+8m to T+13m), created T+7m30s while DERC5 is live
         derc6 = _make_doe(
-            site,
+            site_group,
             grp2,
             offset_minutes=8,
             duration_minutes=5,
@@ -1946,7 +2057,7 @@ async def test_chart_gen10_derc456(pg_envoy_base_config):
         # observations) but a faithful dump carries both.
         session.add(
             _make_archive_doe(
-                site.site_id,
+                site_group.site_group_id,
                 grp2.site_control_group_id,
                 derc5.dynamic_operating_envelope_id,
                 T0 + timedelta(minutes=1),
@@ -2035,14 +2146,21 @@ async def test_chart_gen10_derc456_subscribed(pg_envoy_base_config):
     test_end = T0 + timedelta(minutes=20)
 
     async with generate_async_session(pg_envoy_base_config) as session:
-        site = _make_site_with_setting(aggregator_id=1, max_w=10000, grad_w=200)
+        site, site_group, assignment = _make_site_and_group_with_setting(aggregator_id=1, max_w=10000, grad_w=200)
         session.add(site)
-        grp1 = generate_class_instance(SiteControlGroup, seed=1, site_control_group_id=1, primacy=1)
-        grp2 = generate_class_instance(SiteControlGroup, seed=2, site_control_group_id=2, primacy=2)
+        session.add(site_group)
+        session.add(assignment)
+        grp1 = generate_class_instance(
+            SiteControlGroup, seed=1, site_control_group_id=1, primacy=1, required_site_group_id=None
+        )
+        grp2 = generate_class_instance(
+            SiteControlGroup, seed=2, site_control_group_id=2, primacy=2, required_site_group_id=None
+        )
         session.add_all([grp1, grp2])
+        await session.flush()
 
         derc4 = _make_doe(
-            site,
+            site_group,
             grp1,
             offset_minutes=1,
             duration_minutes=4,
@@ -2051,7 +2169,7 @@ async def test_chart_gen10_derc456_subscribed(pg_envoy_base_config):
             seed=40,
         )
         derc5 = _make_doe(
-            site,
+            site_group,
             grp2,
             offset_minutes=1,
             duration_minutes=20,
@@ -2059,7 +2177,7 @@ async def test_chart_gen10_derc456_subscribed(pg_envoy_base_config):
             seed=50,
         )
         derc6 = _make_doe(
-            site,
+            site_group,
             grp2,
             offset_minutes=8,
             duration_minutes=5,
@@ -2077,7 +2195,7 @@ async def test_chart_gen10_derc456_subscribed(pg_envoy_base_config):
         # Envoy's supersede bookkeeping at DERC6 creation (see the polled variant)
         session.add(
             _make_archive_doe(
-                site.site_id,
+                site_group.site_group_id,
                 grp2.site_control_group_id,
                 derc5.dynamic_operating_envelope_id,
                 T0 + timedelta(minutes=1),
@@ -2151,9 +2269,13 @@ async def test_chart_op_mod_energise(pg_envoy_base_config):
     created_times: dict[str, datetime] = {}
 
     async with generate_async_session(pg_envoy_base_config) as session:
-        site = _make_site_with_setting(aggregator_id=1)
+        site, site_group, assignment = _make_site_and_group_with_setting(aggregator_id=1)
         session.add(site)
-        grp1 = generate_class_instance(SiteControlGroup, seed=1, site_control_group_id=1, primacy=1)
+        session.add(site_group)
+        session.add(assignment)
+        grp1 = generate_class_instance(
+            SiteControlGroup, seed=1, site_control_group_id=1, primacy=1, required_site_group_id=None
+        )
         session.add(grp1)
 
         session.add(
@@ -2170,10 +2292,11 @@ async def test_chart_op_mod_energise(pg_envoy_base_config):
                 changed_time=T0 - timedelta(minutes=1),
             )
         )
+        await session.flush()
 
         ctrls = {
             "export": _make_doe(
-                site,
+                site_group,
                 grp1,
                 offset_minutes=5,
                 duration_minutes=25,
@@ -2181,7 +2304,7 @@ async def test_chart_op_mod_energise(pg_envoy_base_config):
                 seed=10,
             ),
             "de-energise": _make_doe(
-                site,
+                site_group,
                 grp1,
                 offset_minutes=10,
                 duration_minutes=5,
@@ -2189,7 +2312,7 @@ async def test_chart_op_mod_energise(pg_envoy_base_config):
                 seed=20,
             ),
             "re-energise": _make_doe(
-                site,
+                site_group,
                 grp1,
                 offset_minutes=20,
                 duration_minutes=5,
@@ -2249,9 +2372,13 @@ async def test_chart_all28_cancellation_to_changed_default(pg_envoy_base_config)
     derc3_cancelled_at = T0 + timedelta(minutes=8)
 
     async with generate_async_session(pg_envoy_base_config) as session:
-        site = _make_site_with_setting(aggregator_id=1)
+        site, site_group, assignment = _make_site_and_group_with_setting(aggregator_id=1)
         session.add(site)
-        grp1 = generate_class_instance(SiteControlGroup, seed=1, site_control_group_id=1, primacy=1)
+        session.add(site_group)
+        session.add(assignment)
+        grp1 = generate_class_instance(
+            SiteControlGroup, seed=1, site_control_group_id=1, primacy=1, required_site_group_id=None
+        )
         session.add(grp1)
         await session.flush()
 
@@ -2291,7 +2418,7 @@ async def test_chart_all28_cancellation_to_changed_default(pg_envoy_base_config)
         # DERC3: 50% limits, deliberately long duration, cancelled (deleted) at T+8m
         session.add(
             _make_archive_doe(
-                site_id=site.site_id,
+                site_group_id=site_group.site_group_id,
                 group_id=1,
                 doe_id=333,
                 start=T0 + timedelta(minutes=3),
@@ -2304,7 +2431,7 @@ async def test_chart_all28_cancellation_to_changed_default(pg_envoy_base_config)
         )
         # DERC4: 30% limits, created at T+10m30s, starts T+11m
         derc4 = _make_doe(
-            site,
+            site_group,
             grp1,
             offset_minutes=11,
             duration_minutes=5,
