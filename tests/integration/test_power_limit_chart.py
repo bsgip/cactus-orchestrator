@@ -534,16 +534,20 @@ async def test_get_does_combines_active_and_archive(pg_envoy_base_config):
     assert archive_flags[999] is True
 
 
-async def test_get_does_scoped_to_active_site(pg_envoy_base_config):
-    """Only DOEs belonging to the most-recently-changed site are returned."""
+async def test_get_does_not_scoped_to_a_single_site(pg_envoy_base_config):
+    """DOEs are returned regardless of which site they belong to (unfiltered).
+
+    envoy's site-group migration dropped dynamic_operating_envelope.site_id entirely, so DOEs
+    can no longer be filtered to a single "active" site; a teststack pod runs a single EndDevice
+    anyway, so multi-site DOEs (e.g. from P01/P02) are accepted as chart noise rather than
+    filtered out.
+    """
 
     async with generate_async_session(pg_envoy_base_config) as session:
-        # Older site — its DOEs should NOT be returned
         old_site = _make_site_with_setting(aggregator_id=1, seed=1)
         old_site.changed_time = T0 - timedelta(hours=2)
         session.add(old_site)
 
-        # Newer site — the "active" site whose DOEs should be returned
         new_site = _make_site_with_setting(aggregator_id=1, seed=2)
         new_site.changed_time = T0 - timedelta(hours=1)
         session.add(new_site)
@@ -575,8 +579,10 @@ async def test_get_does_scoped_to_active_site(pg_envoy_base_config):
         has_storage_target = await _check_has_storage_target(session)
         result = await _get_does(session, has_storage_target=has_storage_target)
 
-    assert len(result) == 1
-    assert result[0].export_limit_watts == pytest.approx(9999.0)
+    assert len(result) == 2
+    export_limit_watts = sorted(v for r in result if (v := r.export_limit_watts) is not None)
+    assert len(export_limit_watts) == 2
+    assert export_limit_watts == pytest.approx([1111.0, 9999.0])
 
 
 # ─── _get_defaults ────────────────────────────────────────────────────────────

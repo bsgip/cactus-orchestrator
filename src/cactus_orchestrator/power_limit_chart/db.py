@@ -148,7 +148,13 @@ async def _check_has_storage_target(session: AsyncSession) -> bool:
 
 
 async def _get_does(session: AsyncSession, has_storage_target: bool) -> list[_RawDOE]:
-    """Fetch all active and archived DOEs for the active site using explicit column selection."""
+    """Fetch all active and archived DOEs using explicit column selection.
+
+    Unfiltered by site: envoy's site-group migration (envoy#373 / c678e057f420) dropped
+    dynamic_operating_envelope.site_id entirely (DOEs are now attributed to a SiteGroup, not a
+    Site), and a teststack pod runs a single EndDevice anyway. Multi-EndDevice test procedures
+    (e.g. P01/P02, which aren't witness tests) may show DOEs belonging to other sites as extra
+    noise on the chart, but this can't crash chart generation."""
     storage_col = "storage_target_active_watts" if has_storage_target else "NULL AS storage_target_active_watts"
     result = await session.execute(
         text(
@@ -172,7 +178,6 @@ SELECT
     NULL AS deleted_time,
     NULL AS archive_time
     FROM dynamic_operating_envelope
-    WHERE site_id = (SELECT site_id FROM site ORDER BY changed_time DESC LIMIT 1)
 UNION ALL
 SELECT
     dynamic_operating_envelope_id,
@@ -193,7 +198,6 @@ SELECT
     deleted_time,
     archive_time
     FROM archive_dynamic_operating_envelope
-    WHERE site_id = (SELECT site_id FROM site ORDER BY changed_time DESC LIMIT 1)
             """  # noqa: S608  # nosec B608
         )
     )
