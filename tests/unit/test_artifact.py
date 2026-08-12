@@ -186,7 +186,7 @@ async def test_regenerate_run_artifact(pg_base_config, run_artifact: RunArtifact
         original_file_data = run.run_artifact.file_data
 
         # Act
-        updated_run_artifact = await regenerate_run_artifact(session=s, run_artifact=run.run_artifact)
+        updated_run_artifact = await regenerate_run_artifact(session=s, run=run, run_artifact=run.run_artifact)
 
         # Assert
         check_run = await select_user_run_with_artifact(session=s, user_id=1, run_id=2)
