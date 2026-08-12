@@ -519,17 +519,17 @@ async def test_select_user_run(pg_base_config, user_id: int, run_id: int, succes
 
 
 @pytest.mark.parametrize(
-    "user_id, run_id, run_status, finalised_at, all_criteria_met",
+    "user_id, run_id, run_status, finalised_at, all_criteria_met, warnings",
     [
-        (1, 1, RunStatus.finalised_by_client, datetime(2025, 1, 1, tzinfo=UTC), True),
-        (1, 1, RunStatus.finalised_by_timeout, datetime(2025, 2, 2, tzinfo=UTC), False),
-        (1, 1, RunStatus.finalised_by_client, datetime(2025, 3, 3, tzinfo=UTC), None),
-        (2, 6, RunStatus.finalised_by_client, datetime(2025, 1, 1, tzinfo=UTC), True),
+        (1, 1, RunStatus.finalised_by_client, datetime(2025, 1, 1, tzinfo=UTC), True, []),
+        (1, 1, RunStatus.finalised_by_timeout, datetime(2025, 2, 2, tzinfo=UTC), False, [{"type": "foo"}]),
+        (1, 1, RunStatus.finalised_by_client, datetime(2025, 3, 3, tzinfo=UTC), None, None),
+        (2, 6, RunStatus.finalised_by_client, datetime(2025, 1, 1, tzinfo=UTC), True, []),
     ],
 )
 @pytest.mark.asyncio
 async def test_update_run_with_runartifact_and_finalise(
-    pg_base_config, user_id, run_id, run_status, finalised_at, all_criteria_met
+    pg_base_config, user_id, run_id, run_status, finalised_at, all_criteria_met, warnings
 ):
     """Test updating a run with a run artifact and finalisation status."""
     # Arrange
@@ -544,7 +544,7 @@ async def test_update_run_with_runartifact_and_finalise(
     async with generate_async_session(pg_base_config) as session:
         run = await select_user_run(session, user_id, run_id)
         await update_run_with_runartifact_and_finalise(
-            session, run, run_artifact_id, run_status, finalised_at, all_criteria_met
+            session, run, run_artifact_id, run_status, finalised_at, all_criteria_met, warnings
         )
         await session.commit()
 
@@ -555,6 +555,7 @@ async def test_update_run_with_runartifact_and_finalise(
         assert updated_run.run_status == run_status
         assert updated_run.finalised_at == finalised_at
         assert updated_run.all_criteria_met is all_criteria_met
+        assert updated_run.warnings == warnings
 
 
 @pytest.mark.asyncio

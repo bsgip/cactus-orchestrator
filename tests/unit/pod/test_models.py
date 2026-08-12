@@ -7,7 +7,7 @@ from cactus_orchestrator.pod.models import DEV_RUNNER_PORT_RANGE, PodResources, 
 
 @pytest.mark.parametrize("is_static_uri", [True, False])
 def test_from_run_without_dev_port_base_uses_pod_dns(is_static_uri: bool):
-    run = generate_class_instance(Run, run_id=11, run_group_id=22, pod_name=None)
+    run = generate_class_instance(Run, run_id=11, run_group_id=22, pod_name=None, warnings=None)
     run_group = generate_class_instance(RunGroup, is_static_uri=is_static_uri, certificate_pem=bytes([1]))
     resources = PodResources.from_run("cactus-net", run)
 
@@ -19,7 +19,7 @@ def test_from_run_without_dev_port_base_uses_pod_dns(is_static_uri: bool):
 
 @pytest.mark.parametrize("is_static_uri", [True, False])
 def test_from_run_with_dev_port_base_uses_localhost(is_static_uri: bool):
-    run = generate_class_instance(Run, run_id=11, run_group_id=22, pod_name=None)
+    run = generate_class_instance(Run, run_id=11, run_group_id=22, pod_name=None, warnings=None)
     run_group = generate_class_instance(RunGroup, is_static_uri=is_static_uri, certificate_pem=bytes([1]))
     resources = PodResources.from_run("cactus-net", run)
 
@@ -42,8 +42,12 @@ def test_dev_runner_localhost_port_deterministic_on_pod_name():
     assert dev_runner_localhost_port(20000, "run-11") == dev_runner_localhost_port(20000, "run-11")
     assert dev_runner_localhost_port(20000, "run-11") != dev_runner_localhost_port(20000, "run-12")
 
-    shared_pod_run_a = generate_class_instance(Run, seed=1, run_id=11, run_group_id=22, pod_name="shared-pod")
-    shared_pod_run_b = generate_class_instance(Run, seed=2, run_id=99, run_group_id=22, pod_name="shared-pod")
+    shared_pod_run_a = generate_class_instance(
+        Run, seed=1, run_id=11, run_group_id=22, pod_name="shared-pod", warnings=None
+    )
+    shared_pod_run_b = generate_class_instance(
+        Run, seed=2, run_id=99, run_group_id=22, pod_name="shared-pod", warnings=None
+    )
     run_group = generate_class_instance(RunGroup, is_static_uri=True, certificate_pem=bytes([1]))
 
     routes_a = PodRoutes.from_run(

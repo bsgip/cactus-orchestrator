@@ -28,7 +28,7 @@ async def generate_pdf_report_v1(reporting_data: ReportingData_v1, playlist_info
         reading_counts=reading_counts,
         sites=reporting_data.sites,
         timeline=reporting_data.timeline,
-        set_max_w_varied=reporting_data.set_max_w_varied,
+        warnings=reporting_data.warnings,
         playlist_info=playlist_info,
     )
 

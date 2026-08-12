@@ -9,20 +9,20 @@ from cactus_orchestrator.reporting.compliance import determine_compliance, is_co
     "compliance_runs, required_test_procedures, expected_result",
     [
         ({}, {"ALL-01"}, False),
-        ({"ALL-01": generate_class_instance(Run, all_criteria_met=False)}, {"ALL-01"}, False),
-        ({"ALL-01": generate_class_instance(Run, all_criteria_met=True)}, {"ALL-01"}, True),
+        ({"ALL-01": generate_class_instance(Run, all_criteria_met=False, warnings=None)}, {"ALL-01"}, False),
+        ({"ALL-01": generate_class_instance(Run, all_criteria_met=True, warnings=None)}, {"ALL-01"}, True),
         (
             {
-                "ALL-01": generate_class_instance(Run, all_criteria_met=True),
-                "ALL-02": generate_class_instance(Run, all_criteria_met=False),
+                "ALL-01": generate_class_instance(Run, all_criteria_met=True, warnings=None),
+                "ALL-02": generate_class_instance(Run, all_criteria_met=False, warnings=None),
             },
             {"ALL-01", "ALL-02"},
             False,
         ),
         (
             {
-                "ALL-01": generate_class_instance(Run, all_criteria_met=True),
-                "ALL-03": generate_class_instance(Run, all_criteria_met=True),
+                "ALL-01": generate_class_instance(Run, all_criteria_met=True, warnings=None),
+                "ALL-03": generate_class_instance(Run, all_criteria_met=True, warnings=None),
             },
             {"ALL-01", "ALL-02"},
             False,
@@ -82,7 +82,8 @@ def test_determine_compliance():
         "ALL-25-EXT",
     ]
     expected_compliance_runs = {
-        tp: generate_class_instance(Run, testprocedure_id=tp, all_criteria_met=True) for tp in class_A_test_procedures
+        tp: generate_class_instance(Run, testprocedure_id=tp, all_criteria_met=True, warnings=None)
+        for tp in class_A_test_procedures
     }
     compliance_request = generate_class_instance(
         ComplianceRequest,
@@ -116,7 +117,9 @@ def test_determine_compliance():
     del expected_compliance_runs[FAILED_RUN]
 
     submitted_runs = expected_compliance_runs.copy()
-    submitted_runs[FAILED_RUN] = generate_class_instance(Run, testprocedure_id=FAILED_RUN, all_criteria_met=False)
+    submitted_runs[FAILED_RUN] = generate_class_instance(
+        Run, testprocedure_id=FAILED_RUN, all_criteria_met=False, warnings=None
+    )
     compliance_request = generate_class_instance(
         ComplianceRequest,
         csip_aus_version="v1.2",
