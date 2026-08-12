@@ -2,6 +2,7 @@ import io
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from enum import IntFlag
 from functools import partial
 from http import HTTPStatus
 from typing import cast
@@ -687,9 +688,13 @@ def get_non_null_attributes(obj: object, attributes_to_include: list[str]) -> li
 
 def generate_der_table_data(obj: object, attributes_to_include: list[str]) -> list:
     def attribute_short_form(attribute: str) -> str:
-        suffix = "_value"
-        if attribute.endswith(suffix):
-            return attribute.removesuffix(suffix)
+        # Sad but necessary hack: most SEP2 value/multiplier pairs are named "<x>_value"/"<x>_multiplier",
+        # but the PF-with-excitation fields instead pair "<x>_displacement" with "<x>_multiplier" (no
+        # "_displacement" in the multiplier name). Stripping both suffixes here is what lets the multiplier
+        # lookup below find the right field for both naming conventions.
+        for suffix in ("_value", "_displacement"):
+            if attribute.endswith(suffix):
+                return attribute.removesuffix(suffix)
         return attribute
 
     def attribute_value(obj: object, attribute: str) -> Paragraph | str:
@@ -697,7 +702,12 @@ def generate_der_table_data(obj: object, attributes_to_include: list[str]) -> li
         multiplier_attribute = attribute_short_form(attribute) + multiplier_suffix
         if hasattr(obj, multiplier_attribute):
             return Paragraph(f"{getattr(obj, attribute)} x 10<super>{getattr(obj, multiplier_attribute)}</super>")
-        return f"{getattr(obj, attribute)}"
+
+        value = getattr(obj, attribute)
+        if isinstance(value, IntFlag):
+            # Have modes_supported... etc just matche exactly what was submitted for easier debugging
+            return f"0x{int(value):0X}"
+        return f"{value}"
 
     table_data = [
         [attribute_short_form(attribute), attribute_value(obj, attribute)] for attribute in attributes_to_include
@@ -1725,6 +1735,7 @@ def generate_page_elements(
     sites: list[Site],
     timeline: Timeline | None,
     stylesheet: StyleSheet,
+    playlist_info: str | None = None,
     warnings: list[WarningEntry] | None = None,
 ) -> list[Flowable]:
     warnings = warnings or []
@@ -1770,11 +1781,7 @@ def generate_page_elements(
                 client_pen=active_test_procedure.pen,
                 duration=duration,
                 stylesheet=stylesheet,
-                playlist_info=(
-                    f"Test {runner_state.playlist_index + 1} of {len(runner_state.playlist)}"
-                    if runner_state.playlist
-                    else None
-                ),
+                playlist_info=playlist_info,
             )
         )
     except ValueError as e:
@@ -1832,6 +1839,7 @@ def pdf_report_as_bytes(
     sites: list[Site],
     timeline: Timeline | None,
     no_spacers: bool = False,
+    playlist_info: str | None = None,
     warnings: list[WarningEntry] | None = None,
 ) -> bytes:
     stylesheet = get_stylesheet()
@@ -1856,6 +1864,7 @@ def pdf_report_as_bytes(
         sites=sites,
         timeline=timeline,
         stylesheet=stylesheet,
+        playlist_info=playlist_info,
         warnings=warnings,
     )
 

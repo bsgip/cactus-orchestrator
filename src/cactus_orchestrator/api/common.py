@@ -72,6 +72,7 @@ def map_run_to_run_response(
         playlist_runs=playlist_runs,
         classes=definition.classes if definition else None,
         immediate_start=bool(definition and definition.preconditions and definition.preconditions.immediate_start),
+        run_group_id=run.run_group_id,
         warnings=[WarningEntry.from_dict(w) for w in run.warnings] if run.warnings is not None else None,
     )
 

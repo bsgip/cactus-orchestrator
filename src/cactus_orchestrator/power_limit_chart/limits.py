@@ -115,45 +115,67 @@ def _resolve_type_limit(
     return None, None
 
 
+def _positive_or_none(value: float | None) -> float | None:
+    return value if value is not None and value > 0 else None
+
+
+def _negative_magnitude_or_none(value: float | None) -> float | None:
+    return abs(value) if value is not None and value < 0 else None
+
+
+_GetterPair = tuple[Callable[[_KnownControlSegment], float | None], Callable[[_KnownDefault], float | None]]
+
+# (control_getter, default_getter) per control type contributing to each bound.
+_UPPER_GETTERS: list[_GetterPair] = [
+    (lambda c: c.row.export_limit_watts, lambda d: d.row.export_limit_active_watts),
+    (lambda c: c.row.generation_limit_active_watts, lambda d: d.row.generation_limit_active_watts),
+    (
+        lambda c: _positive_or_none(c.row.storage_target_active_watts),
+        lambda d: _positive_or_none(d.row.storage_target_active_watts),
+    ),
+]
+
+_LOWER_GETTERS: list[_GetterPair] = [
+    (lambda c: c.row.import_limit_active_watts, lambda d: d.row.import_limit_active_watts),
+    (lambda c: c.row.load_limit_active_watts, lambda d: d.row.load_limit_active_watts),
+    (
+        lambda c: _negative_magnitude_or_none(c.row.storage_target_active_watts),
+        lambda d: _negative_magnitude_or_none(d.row.storage_target_active_watts),
+    ),
+]
+
+
+def _get_effective_limit_at(
+    t: datetime,
+    sorted_groups: list[_RawControlGroup],
+    segments_by_group: _SegmentsByGroup,
+    defaults_by_group: _DefaultsByGroup,
+    getters: list[_GetterPair],
+) -> tuple[float | None, _LimitSource | None]:
+    """Each type in `getters` is resolved independently (active controls → defaults →
+    unconstrained) and then combined with min so the most restrictive applies.
+    The source returned is that of the binding (minimum) type."""
+    candidates: list[tuple[float, _LimitSource | None]] = []
+    for get_ctrl_val, get_default_val in getters:
+        val, src = _resolve_type_limit(
+            t, sorted_groups, segments_by_group, defaults_by_group, get_ctrl_val, get_default_val
+        )
+        if val is not None:
+            candidates.append((val, src))
+    if not candidates:
+        return None, None
+    return min(candidates, key=lambda x: x[0])
+
+
 def _get_effective_upper_at(
     t: datetime,
     sorted_groups: list[_RawControlGroup],
     segments_by_group: _SegmentsByGroup,
     defaults_by_group: _DefaultsByGroup,
 ) -> tuple[float | None, _LimitSource | None]:
-    """Returns (effective_limit_watts, source) for the upper bound at time t.
-
-    Export and generation limits are each resolved independently (active controls →
-    defaults → unconstrained) and then combined with min so the most restrictive
-    applies. The source returned is that of the binding (minimum) type."""
-    exp_val, exp_src = _resolve_type_limit(
-        t,
-        sorted_groups,
-        segments_by_group,
-        defaults_by_group,
-        lambda c: c.row.export_limit_watts,
-        lambda d: d.row.export_limit_active_watts,
-    )
-    gen_val, gen_src = _resolve_type_limit(
-        t,
-        sorted_groups,
-        segments_by_group,
-        defaults_by_group,
-        lambda c: c.row.generation_limit_active_watts,
-        lambda d: d.row.generation_limit_active_watts,
-    )
-    stor_val, stor_src = _resolve_type_limit(
-        t,
-        sorted_groups,
-        segments_by_group,
-        defaults_by_group,
-        lambda c: _positive_or_none(c.row.storage_target_active_watts),
-        lambda d: _positive_or_none(d.row.storage_target_active_watts),
-    )
-    candidates = [(v, s) for v, s in [(exp_val, exp_src), (gen_val, gen_src), (stor_val, stor_src)] if v is not None]
-    if not candidates:
-        return None, None
-    return min(candidates, key=lambda x: x[0])
+    """Returns (effective_limit_watts, source) for the upper bound at time t:
+    min of export / generation / positive storage-target limits."""
+    return _get_effective_limit_at(t, sorted_groups, segments_by_group, defaults_by_group, _UPPER_GETTERS)
 
 
 def _get_effective_lower_at(
@@ -162,48 +184,10 @@ def _get_effective_lower_at(
     segments_by_group: _SegmentsByGroup,
     defaults_by_group: _DefaultsByGroup,
 ) -> tuple[float | None, _LimitSource | None]:
-    """Returns (effective_limit_watts, source) for the lower bound at time t.
-    Returns a positive magnitude value — caller negates it for display.
-
-    Import and load limits are each resolved independently (active controls →
-    defaults → unconstrained) and then combined with min so the most restrictive
-    applies. The source returned is that of the binding (minimum) type."""
-    imp_val, imp_src = _resolve_type_limit(
-        t,
-        sorted_groups,
-        segments_by_group,
-        defaults_by_group,
-        lambda c: c.row.import_limit_active_watts,
-        lambda d: d.row.import_limit_active_watts,
-    )
-    load_val, load_src = _resolve_type_limit(
-        t,
-        sorted_groups,
-        segments_by_group,
-        defaults_by_group,
-        lambda c: c.row.load_limit_active_watts,
-        lambda d: d.row.load_limit_active_watts,
-    )
-    stor_val, stor_src = _resolve_type_limit(
-        t,
-        sorted_groups,
-        segments_by_group,
-        defaults_by_group,
-        lambda c: _negative_magnitude_or_none(c.row.storage_target_active_watts),
-        lambda d: _negative_magnitude_or_none(d.row.storage_target_active_watts),
-    )
-    candidates = [(v, s) for v, s in [(imp_val, imp_src), (load_val, load_src), (stor_val, stor_src)] if v is not None]
-    if not candidates:
-        return None, None
-    return min(candidates, key=lambda x: x[0])
-
-
-def _positive_or_none(value: float | None) -> float | None:
-    return value if value is not None and value > 0 else None
-
-
-def _negative_magnitude_or_none(value: float | None) -> float | None:
-    return abs(value) if value is not None and value < 0 else None
+    """Returns (effective_limit_watts, source) for the lower bound at time t:
+    min of import / load / negative storage-target limits.
+    Returns a positive magnitude value — caller negates it for display."""
+    return _get_effective_limit_at(t, sorted_groups, segments_by_group, defaults_by_group, _LOWER_GETTERS)
 
 
 # ─── Disconnect / opModConnect tracking ───────────────────────────────────────
@@ -314,18 +298,37 @@ def _controller_band_at(
     segments_by_group: _SegmentsByGroup,
     defaults_by_group: _DefaultsByGroup,
 ) -> tuple[tuple | None, str]:
-    """(key, label) of the effective controller at time t: the highest-priority live DOE,
-    else the highest-priority known default, else (None, "")."""
-    for group in sorted_groups:
-        live = _controls_live_at(t, segments_by_group.get(group.site_control_group_id, []))
-        if live:
-            winner = _newest_control(live)
-            doe_id = winner.row.dynamic_operating_envelope_id
-            return ("doe", doe_id), winner.step_name or f"Grp{winner.site_control_group_id} DOE#{doe_id}"
-    for group in sorted_groups:
-        gid = group.site_control_group_id
-        if _find_active_default_at(t, gid, defaults_by_group) is not None:
-            return ("default", gid), f"Default-DERP{gid}"
+    """(key, label) of the controller binding the traces at time t.
+
+    Preference order: the control that is the binding source of the upper or lower limit
+    (highest priority, then newest, if the two bounds have different sources); else a live
+    connect/energise control (which drives the traces during disconnect windows but never
+    binds a limit type); else the default that is the binding source; else (None, "")."""
+    upper_src = _get_effective_limit_at(t, sorted_groups, segments_by_group, defaults_by_group, _UPPER_GETTERS)[1]
+    lower_src = _get_effective_limit_at(t, sorted_groups, segments_by_group, defaults_by_group, _LOWER_GETTERS)[1]
+    sources = [s for s in (upper_src, lower_src) if s is not None]
+
+    control_sources = [s for s in sources if isinstance(s, _KnownControlSegment)]
+    if not control_sources:
+        for group in sorted_groups:
+            live = _controls_live_at(t, segments_by_group.get(group.site_control_group_id, []))
+            connecting = [s for s in live if _connect_polarity(s) is not None]
+            if connecting:
+                control_sources = [_newest_control(connecting)]
+                break
+    if control_sources:
+        best_primacy = min(s.primacy for s in control_sources)
+        winner = _newest_control([s for s in control_sources if s.primacy == best_primacy])
+        doe_id = winner.row.dynamic_operating_envelope_id
+        return ("doe", doe_id), winner.step_name or f"Grp{winner.site_control_group_id} DOE#{doe_id}"
+
+    group_order = {g.site_control_group_id: i for i, g in enumerate(sorted_groups)}
+    default_sources = [s for s in sources if not isinstance(s, _KnownControlSegment)]
+    if default_sources:
+        gid = min(
+            default_sources, key=lambda s: group_order.get(s.row.site_control_group_id, len(group_order))
+        ).row.site_control_group_id
+        return ("default", gid), f"Default-DERP{gid}"
     return None, ""
 
 
@@ -341,10 +344,10 @@ def _sweep_timeline(
 ) -> tuple[list[_LimitEvent], list[_LimitEvent], list[tuple[str, datetime, datetime]]]:
     """Single pass over the event timeline producing (upper_events, lower_events, step_intervals).
 
-    step_intervals are (label, start, end) windows showing the effective controller at each
-    moment: the highest-priority live DOE (labelled by step name, falling back to
-    'Grp{gid} DOE#{id}'), else the highest-priority known default ('Default-DERP{gid}').
-    Periods with neither are omitted."""
+    step_intervals are (label, start, end) windows showing the controller binding the traces
+    at each moment (see _controller_band_at): a binding or connect/energise DOE (labelled by
+    step name, falling back to 'Grp{gid} DOE#{id}'), else the binding default
+    ('Default-DERP{gid}'). Periods with neither are omitted."""
     upper_events: list[_LimitEvent] = []
     lower_events: list[_LimitEvent] = []
     prev_upper: float | None = None
@@ -501,6 +504,12 @@ def _build_trace(  # noqa: C901
             current_v = ramp_start_v + frac * (ramp_end_v - ramp_start_v)
 
         if abs(ev.target - current_v) < 0.1:
+            if ev.time < ramp_end_t:
+                # The new limit pins the trace at the ramp's current value: the ramp stops
+                # here and holds rather than continuing toward its old target.
+                points.append((ev.time, current_v, f"{current_v:.0f} W"))
+                ramp_start_t = ramp_end_t = ev.time
+                ramp_start_v = ramp_end_v = current_v
             continue
 
         delta_w = abs(ev.target - current_v)

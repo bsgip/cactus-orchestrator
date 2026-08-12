@@ -339,7 +339,7 @@ async def admin_regenerate_report_and_get_run_artifact(
         raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="RunArtifact has no reporting data.")
 
     try:
-        await regenerate_run_artifact(session=db.session, run_artifact=run.run_artifact)
+        await regenerate_run_artifact(session=db.session, run=run, run_artifact=run.run_artifact)
     except ValueError as err:
         raise HTTPException(
             status_code=HTTPStatus.INTERNAL_SERVER_ERROR, detail="Unable to regenerate pdf run report"
