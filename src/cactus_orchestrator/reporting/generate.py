@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 
 
 async def generate_pdf_report_v1(
-    reporting_data: ReportingData_v1, deploy_release_tag: str | None = None
+    reporting_data: ReportingData_v1, playlist_info: str | None = None, deploy_release_tag: str | None = None
 ) -> bytes | None:
 
     # Unpack the readings: time_period_start is serialised as epoch ms integers by to_json(), so we explicitly convert
@@ -30,7 +30,8 @@ async def generate_pdf_report_v1(
         reading_counts=reading_counts,
         sites=reporting_data.sites,
         timeline=reporting_data.timeline,
-        set_max_w_varied=reporting_data.set_max_w_varied,
+        warnings=reporting_data.warnings,
+        playlist_info=playlist_info,
         deploy_release_tag=deploy_release_tag,
     )
 

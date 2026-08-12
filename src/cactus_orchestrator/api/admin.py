@@ -343,6 +343,7 @@ async def admin_regenerate_report_and_get_run_artifact(
         deploy_release = await select_deploy_release_at(db.session, run.created_at)
         await regenerate_run_artifact(
             session=db.session,
+            run=run,
             run_artifact=run.run_artifact,
             deploy_release_tag=deploy_release.release_tag if deploy_release else None,
         )

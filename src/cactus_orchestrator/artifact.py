@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from cactus_orchestrator.crud import (
     create_run_report_generation_record,
+    select_playlist_position_label,
     select_run_group_for_user,
     select_user_from_run_group,
     update_runartifact_with_file_data,
@@ -16,6 +17,7 @@ from cactus_orchestrator.crud import (
 from cactus_orchestrator.model import (
     ComplianceRecord,
     ComplianceRequest,
+    Run,
     RunArtifact,
     User,
 )
@@ -153,6 +155,7 @@ async def regenerate_pdf_report(
     file_data: bytes,
     raw_reporting_data: str,
     version: int,
+    playlist_info: str | None = None,
     deploy_release_tag: str | None = None,
 ) -> bytes:
     """A pdf run report is generated from `reporting_data`, and replaces the existing
@@ -167,6 +170,7 @@ async def regenerate_pdf_report(
         file_data (bytes): a zip archive containing a pdf run report (to be replaced)
         raw_reporting_data (str): ReportingData as a json encoded string
         version (int): the version of the reporting data in `raw_reporting_data`.
+        playlist_info (str | None): "Test N of M" label for playlist runs.
         deploy_release_tag (str | None): the cactus-deploy release tag that was live for this run's pod
             (Run.deploy_release_tag).
     Returns:
@@ -187,7 +191,7 @@ async def regenerate_pdf_report(
     try:
         if version == 1:
             pdf_data = await generate_pdf_report_v1(
-                reporting_data=reporting_data, deploy_release_tag=deploy_release_tag
+                reporting_data=reporting_data, deploy_release_tag=deploy_release_tag, playlist_info=playlist_info
             )
         else:
             raise ValueError(f"Unknown version of reporting data ({version})")
@@ -218,7 +222,7 @@ async def regenerate_pdf_report(
 
 
 async def regenerate_run_artifact(
-    session: AsyncSession, run_artifact: RunArtifact, deploy_release_tag: str | None = None
+    session: AsyncSession, run: Run, run_artifact: RunArtifact, deploy_release_tag: str | None = None
 ) -> RunArtifact:
     """Regenerates the RunArtifact.
 
@@ -229,6 +233,7 @@ async def regenerate_run_artifact(
 
     Args:
         session: A database session.
+        run (Run): The Run the artifact belongs to.
         run_artifact (RunArtifact): The RunArtifact to update.
         deploy_release_tag (str | None): the cactus-deploy release tag that was live for this run's pod
             (Run.deploy_release_tag).
@@ -238,11 +243,14 @@ async def regenerate_run_artifact(
         ValueError: if regeneration of pdf report fails
     """
 
+    playlist_info = await select_playlist_position_label(session, run)
+
     # Callers (e.g. admin endpoint) guard reporting_data/version for None before calling: ignore
     updated_zip_data = await regenerate_pdf_report(
         file_data=run_artifact.file_data,
         raw_reporting_data=run_artifact.reporting_data,  # ty: ignore[invalid-argument-type]
         version=run_artifact.version,  # ty: ignore[invalid-argument-type]
+        playlist_info=playlist_info,
         deploy_release_tag=deploy_release_tag,
     )
 

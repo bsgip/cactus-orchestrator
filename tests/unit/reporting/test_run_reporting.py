@@ -21,7 +21,7 @@ from cactus_runner.models import (
     StepInfo,
 )
 from cactus_runner.models import Site as CactusRunnerSite
-from cactus_schema.runner import ClientInteraction, ClientInteractionType, RequestEntry
+from cactus_schema.runner import ClientInteraction, ClientInteractionType, RequestEntry, WarningEntry
 from cactus_test_definitions.client import TestProcedureId, get_test_procedure
 from envoy.server.model.site_reading import SiteReading
 from envoy_schema.server.schema.sep2.types import (
@@ -206,6 +206,32 @@ def test_pdf_report_as_bytes(no_spacers):
         sites=sites(),
         timeline=timeline(),
         no_spacers=no_spacers,
+    )
+    # Assert - we are mainly checking that no uncaught exceptions are raised generating the pdf report
+    assert len(report) > 0
+
+
+@pytest.mark.parametrize("all_criteria_passed", [True, False])
+def test_pdf_report_as_bytes_with_warnings(all_criteria_passed):
+    """Warnings from multiple categories should each get their own grouped table under the banner."""
+    state = runner_state()
+    warnings = [
+        generate_class_instance(WarningEntry, type="der-settings.set-max-w-varied", description="d1", message="m1"),
+        generate_class_instance(WarningEntry, type="der-settings.grad-w-varied", description="d2", message="m2"),
+        generate_class_instance(WarningEntry, type="polling.too-frequent./dcap", description="d3", message="m3"),
+    ]
+    checks = check_results()
+    if not all_criteria_passed:
+        checks = {**checks, "extra_fail": generate_class_instance(CheckResult, passed=False)}
+
+    report = pdf_report_as_bytes(
+        runner_state=state,
+        check_results=checks,
+        readings=readings(),
+        reading_counts=reading_counts(),
+        sites=sites(),
+        timeline=timeline(),
+        warnings=warnings,
     )
     # Assert - we are mainly checking that no uncaught exceptions are raised generating the pdf report
     assert len(report) > 0
@@ -412,6 +438,15 @@ def test_pdf_report_everything_set():
         )
     ]
 
+    warnings = [
+        generate_class_instance(
+            WarningEntry,
+            type="der-settings.set-max-w-varied",
+            description="setMaxW changed during the test",
+            message="setMaxW varied between 5000W and 4000W",
+        ),
+    ]
+
     report = pdf_report_as_bytes(
         runner_state=state,
         check_results=checks,
@@ -420,7 +455,7 @@ def test_pdf_report_everything_set():
         sites=site_list,
         timeline=timeline(),
         no_spacers=False,
-        set_max_w_varied=True,
+        warnings=warnings,
     )
 
     assert len(report) > 0

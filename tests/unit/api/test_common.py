@@ -1,14 +1,17 @@
 import pytest
+from assertical.fake.generator import generate_class_instance
 from assertical.fixtures.postgres import generate_async_session
 from fastapi.exceptions import HTTPException
 
 from cactus_orchestrator.api.common import (
+    map_run_to_run_response,
     select_user_run_group_or_raise,
     select_user_run_group_run_or_raise,
     select_user_run_groups_or_raise,
 )
 from cactus_orchestrator.auth import AuthPerm, UserContext
 from cactus_orchestrator.model import Run, RunGroup, User
+from cactus_orchestrator.pod.models import PodRoutes
 
 admin_user_context = UserContext(subject_id="", issuer_id="", permissions=[AuthPerm.admin_all, AuthPerm.user_all])
 user_1_context = UserContext(
@@ -138,3 +141,31 @@ async def test_select_user_run_group_run_or_raise_raises_exception(
     async with generate_async_session(pg_base_config) as session:
         with pytest.raises(HTTPException):
             _ = await select_user_run_group_run_or_raise(session=session, user_context=user_context, run_id=run_id)
+
+
+@pytest.mark.parametrize(
+    "run_warnings",
+    [
+        None,  # not yet finalised - unknown
+        [],  # finalised, no warnings raised
+        [
+            {
+                "type": "der-settings.set-max-w-varied",
+                "description": "d",
+                "message": "m",
+                "timestamp": "2026-01-01T00:00:00+00:00",
+            }
+        ],
+    ],
+)
+def test_map_run_to_run_response_warnings(run_warnings: list[dict] | None):
+    run = generate_class_instance(Run, warnings=run_warnings)
+    pod_routes = generate_class_instance(PodRoutes)
+
+    response = map_run_to_run_response(run, pod_routes)
+
+    if run_warnings is None:
+        assert response.warnings is None
+    else:
+        assert response.warnings is not None
+        assert len(response.warnings) == len(run_warnings)
