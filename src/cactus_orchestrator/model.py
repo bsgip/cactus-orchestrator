@@ -106,6 +106,7 @@ class RunStatus(IntEnum):
     terminated = auto()  # Run was never explicitly finalised, shutdown somehow.
     provisioning = auto()  # Run has just been created - k8s services will be started next.
     skipped = auto()  # Run was skipped (e.g., playlist started from a later index)
+    finalised_by_completion = auto()  # Run was finalised automatically after the runner reported it had finished
 
 
 class Run(Base):
