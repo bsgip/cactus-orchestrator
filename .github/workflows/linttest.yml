@@ -83,8 +83,10 @@ jobs:
       - name: Debug podman userns pod creation
         run: |
           sudo podman pod create --userns=auto --name debug-userns-pod
+          sudo podman run --pod debug-userns-pod --name debug-container docker.io/library/alpine:3 echo hello || true
+          sudo podman info --debug
           sudo podman pod rm -f debug-userns-pod
-          sudo journalctl -u podman --no-pager -n 200
+          sudo journalctl -u podman --no-pager -n 300
 
       - name: Install Dependencies
         run: uv sync --extra test
