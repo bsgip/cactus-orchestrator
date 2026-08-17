@@ -55,14 +55,17 @@ jobs:
       - name: Install Podman
         run: |
           sudo apt-get update
-          # uidmap (newuidmap/newgidmap) is only a Recommends of podman. Without it userns=auto can't build the ID
-          # mapping and podman fails with "not enough unused IDs in user namespace"
-          sudo apt-get install -y podman uidmap
+          # CI has Install-Recommends disabled, so pull podman's Recommends explicitly
+          sudo apt-get install -y podman uidmap aardvark-dns netavark catatonit
 
-      - name: Allocate subuid/subgid range for root (required for userns=auto)
+      - name: Allocate subuid/subgid range for the 'containers' user (required for userns=auto)
         run: |
-          echo "root:100000:1048576" | sudo tee -a /etc/subuid
-          echo "root:100000:1048576" | sudo tee -a /etc/subgid
+          # Rootful userns=auto draws IDs from a user named "containers", not root
+          # (see cactus-deploy/server/README.md). Some podman builds resolve it via NSS.
+          sudo useradd --system --no-create-home containers || true
+          grep -q '^containers:' /etc/subuid || echo "containers:11000000:1048576" | sudo tee -a /etc/subuid
+          grep -q '^containers:' /etc/subgid || echo "containers:11000000:1048576" | sudo tee -a /etc/subgid
+          sudo podman system migrate
 
       - name: Enable rootful podman socket
         run: |
