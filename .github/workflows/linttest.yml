@@ -75,6 +75,12 @@ jobs:
           sudo chmod 777 /run/podman/podman.sock
           ls -l /run/podman/podman.sock
 
+      - name: Debug podman userns pod creation
+        run: |
+          sudo podman pod create --userns=auto --name debug-userns-pod
+          sudo podman pod rm -f debug-userns-pod
+          sudo journalctl -u podman --no-pager -n 200
+
       - name: Install Dependencies
         run: uv sync --extra test
 
