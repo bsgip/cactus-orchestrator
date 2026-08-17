@@ -52,12 +52,13 @@ jobs:
         with:
           python-version: ${{ matrix.pyver }}
 
-      - name: Install Podman (pinned to prod's v5.7.0, not Ubuntu's ancient apt package)
+      - name: Install Podman (matches cactus-deploy/server/setup.sh exactly)
         run: |
-          sudo apt-get update && sudo apt-get install -y uidmap  # newuidmap/newgidmap
-          curl -fsSL -o podman.tar.gz https://github.com/mgoltzsche/podman-static/releases/download/v5.7.0/podman-linux-amd64.tar.gz
-          echo "f4e21c1d4e4678bb2005a6be0904b242ea3cdd3dd98a39f0df66e46089bc3260  podman.tar.gz" | sha256sum -c -
-          sudo tar -xzf podman.tar.gz -C / --strip-components=1 --no-same-owner --no-overwrite-dir podman-linux-amd64/{usr,etc}
+          sudo apt-get update
+          # aardvark-dns + netavark: container name resolution/networking on cactus-net
+          # catatonit: PID 1 init for pod infra containers; `podman pod create` fails without it
+          # uidmap (newuidmap/newgidmap), for userns=auto, comes via apt Recommends
+          sudo apt-get install -y podman aardvark-dns netavark catatonit
           podman --version
 
       - name: Allocate subuid/subgid range for the 'containers' user (required for userns=auto)
