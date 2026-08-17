@@ -84,6 +84,7 @@ testpaths = "tests"
 env = [
     "D:CACTUS_FQDN=cactus-testing.test.fqdn",
     "D:ORCHESTRATOR_DATABASE_URL=postgresql+asyncpg://fake:fake@fake/fake",
+    "D:FILE_STORE_PATH=/tmp",
     "D:JWTAUTH_JWKS_URL=https://jwks.com/jwks",
     "D:JWTAUTH_ISSUER=https://test-cactus-issuer.example.com",
     "D:JWTAUTH_AUDIENCE=test-cactus-orchestrator",

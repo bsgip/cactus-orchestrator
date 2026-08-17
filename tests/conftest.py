@@ -37,11 +37,12 @@ def preserved_environment():
 
 
 @pytest.fixture(autouse=True)
-def base_environment(preserved_environment, request):
+def base_environment(preserved_environment, tmp_path: Path, request):
 
     os.environ["IDLETEARDOWNTASK_ENABLE"] = "false"
     os.environ["JWTAUTH_ISSUER"] = "https://test-cactus-issuer.example.com"
     os.environ["CACTUS_FQDN"] = "cactus-testing.test.fqdn"
+    os.environ["FILE_STORE_PATH"] = (tmp_path / "fs/").absolute().as_posix()
 
     # Install images
     os.environ["CACTUS_IMAGE__V12__CSIP_AUS_VERSION"] = "v1.2"
