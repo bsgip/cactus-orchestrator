@@ -55,7 +55,9 @@ jobs:
       - name: Install Podman
         run: |
           sudo apt-get update
-          sudo apt-get install -y podman
+          # uidmap (newuidmap/newgidmap) is only a Recommends of podman. Without it userns=auto can't build the ID
+          # mapping and podman fails with "not enough unused IDs in user namespace"
+          sudo apt-get install -y podman uidmap
 
       - name: Allocate subuid/subgid range for root (required for userns=auto)
         run: |
