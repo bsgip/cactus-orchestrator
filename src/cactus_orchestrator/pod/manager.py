@@ -174,7 +174,6 @@ def _create_and_run_container(
     raw_config_options = {
         "image": image,
         "pod": pod,
-        "userns_mode": "auto",
         "name": name,
         "labels": labels,
         "command": command,
@@ -254,9 +253,9 @@ def _create_pod_and_containers(
     # runner by name.
     # userns=auto maps the pod's container-root to a high, unprivileged host UID range (allocated
     # from the rootful user's /etc/subuid + /etc/subgid). Under the rootful socket this is what keeps
-    # a teststack breakout from being host-root. The pod owns the single shared namespace; every
-    # member below must also pass userns_mode="auto" to join it — without it podman-py emits a
-    # conflicting container-level id-mapping and the OCI runtime refuses the join.
+    # a teststack breakout from being host-root. The pod owns the single shared namespace; members
+    # join it automatically via "pod": pod in their own spec - they must NOT also pass their own
+    # userns_mode, or podman treats it as a conflicting id-mapping and refuses/fails the join.
     pod_create_kwargs: dict[str, Any] = {
         "name": resources.pod_name,
         "Networks": {resources.shared_network_name: {}},
