@@ -85,6 +85,12 @@ jobs:
         run: uv sync --extra test
 
       - name: Run Pytest
+        env:
+          # GitHub's Ubuntu 24.04 runner image once shipped without a pre-baked Podman, causing
+          # apt to fall back to Ubuntu's stock conmon package - which is built without journald support
+          # and makes every pod spawn fail with "conmon failed: exit status 1". Prod's conmon has journald
+          # support, so this only overrides the driver here, not the default in settings.py.
+          PODMAN_LOG_DRIVER: k8s-file
         run: uv run pytest -n auto
 
       - name: Debug podman/conmon journal (on failure)

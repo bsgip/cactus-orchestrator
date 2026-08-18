@@ -108,18 +108,24 @@ async def create_pod_run(
     resources: PodResources,
     routes: PodRoutes,
     pki: PodPKI,
+    log_driver: str = "journald",
 ) -> str:
     """Creates a new pod with the specified pod resources using the specified set of images/config options. Will wait
     until the pod is healthy before returning. Raises an exception (and attempts to clean up) on failure.
 
     Will not initialise runner or make any other calls into runner beyond the internal health checks.
 
+    log_driver is the podman container log driver (e.g. "journald", "k8s-file") - defaults to "journald" to match
+    production, but is overridable since it depends on the host's conmon build actually supporting journald.
+
     Returns the name of the pod."""
 
     t0 = time.monotonic()
     with _client(podman_socket) as client:
         try:
-            pod_name = await asyncio.to_thread(_create_pod_and_containers, client, images, resources, routes, pki)
+            pod_name = await asyncio.to_thread(
+                _create_pod_and_containers, client, images, resources, routes, pki, log_driver
+            )
         except Exception as exc:
             logger.warning(f"Failed to create pod {resources.pod_name}, cleaning up", exc_info=exc)
             await _do_destroy_pod_resources(client, resources)
@@ -158,6 +164,7 @@ def _create_and_run_container(
     health_startup_interval_ns: int = 0,
     health_startup_timeout_ns: int = 0,
     health_startup_retries: int = 0,
+    log_driver: str = "journald",
 ) -> Container:
     """Creates a podman container with the specified settings - then ensures it runs. Does NOT wait for health."""
 
@@ -203,7 +210,12 @@ def _create_and_run_container(
         }
 
     # Logging for journald doesn't properly support tagging via the client - but the API DOES support it.
-    spec["log_configuration"] = {"driver": "journald", "labels": {"cactus": "true"}, "options": {"tag": pod}}
+    # "tag" is a journald-specific log option; other drivers (e.g. k8s-file, used where the host's conmon
+    # lacks journald support like our CI) reject unrecognised options, so only attach it for journald.
+    log_configuration: dict[str, Any] = {"driver": log_driver, "labels": {"cactus": "true"}}
+    if log_driver == "journald":
+        log_configuration["options"] = {"tag": pod}
+    spec["log_configuration"] = log_configuration
 
     # Submit the create request via the low-level client (mirrors CreateMixin.create)
     resp = client.api.post(
@@ -239,6 +251,7 @@ def _create_pod_and_containers(
     resources: PodResources,
     routes: PodRoutes,
     pki: PodPKI,
+    log_driver: str = "journald",
 ) -> str:
     """Returns pod-name on success"""
 
@@ -278,6 +291,7 @@ def _create_pod_and_containers(
         name=resources.container_postgres_name,
         command=["-c", "listen_addresses=localhost"],
         volumes=shared_volumes,  # This is only here so we can load up the certs BEFORE starting other containers
+        log_driver=log_driver,
     )
     timings.append(("db", time.monotonic() - t0))
 
@@ -321,6 +335,7 @@ def _create_pod_and_containers(
             "NOTIFICATION_MTLS_SERCA": "/shared/notif-certs/serca.pem",
         },
         volumes=shared_volumes,
+        log_driver=log_driver,
     )
     timings.append(("envoy", time.monotonic() - t0))
 
@@ -344,6 +359,7 @@ def _create_pod_and_containers(
             "LOG_CONFIG": "logconf.admin.json",
         },
         volumes=shared_volumes,
+        log_driver=log_driver,
     )
     timings.append(("envoy-admin", time.monotonic() - t0))
 
@@ -384,6 +400,7 @@ def _create_pod_and_containers(
         health_startup_interval_ns=1 * SEC,
         health_startup_timeout_ns=5 * SEC,
         health_startup_retries=180,
+        log_driver=log_driver,
     )
     timings.append(("runner", time.monotonic() - t0))
 
