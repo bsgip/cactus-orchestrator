@@ -305,7 +305,9 @@ async def spawn_teststack_and_init_run(  # noqa: C901
 
     # create a new pod
     try:
-        pod_name = await create_pod_run(settings.podman_socket, pod_images, pod_resources, pod_routes, pod_pki)
+        pod_name = await create_pod_run(
+            settings.podman_socket, pod_images, pod_resources, pod_routes, pod_pki, settings.podman_log_driver
+        )
     except Exception as exc:
         logger.error(f"Failed to create new pod for run_group {run_group_id}", exc_info=exc)
         raise HTTPException(HTTPStatus.INTERNAL_SERVER_ERROR, detail="Internal Server Error") from exc

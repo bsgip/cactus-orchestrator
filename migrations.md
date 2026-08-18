@@ -27,14 +27,13 @@ docker compose up -d
 
 ```sh
 ORCHESTRATOR_DATABASE_URL="postgresql+asyncpg://user:password@localhost:5433/orchestratordb"
-CACTUS_PYTEST_WITHOUT_KUBERNETES="true"
 CACTUS_FQDN="foo"
 JWTAUTH_JWKS_URL="a"
 JWTAUTH_ISSUER="b"
 JWTAUTH_AUDIENCE="c"
 ```
 
-Most are these environment variables are set to dummy values. `CACTUS_PYTEST_WITHOUT_KUBERNETES` should be set to true. The credentials and port in the `ORCHESTRATOR_DATABASE_URL` environment variable should match the set in the docker compose file in step 1.
+Most are these environment variables are set to dummy values. The credentials and port in the `ORCHESTRATOR_DATABASE_URL` environment variable should match the set in the docker compose file in step 1.
 
 4. Apply the exisiting migrations to the database to get it into the "head" state.
 

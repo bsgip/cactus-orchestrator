@@ -52,10 +52,23 @@ jobs:
         with:
           python-version: ${{ matrix.pyver }}
 
-      - name: Install Podman
+      - name: Install Podman (matches cactus-deploy/server/setup.sh exactly)
         run: |
           sudo apt-get update
-          sudo apt-get install -y podman
+          # aardvark-dns + netavark: container name resolution/networking on cactus-net
+          # catatonit: PID 1 init for pod infra containers; `podman pod create` fails without it
+          # uidmap (newuidmap/newgidmap), for userns=auto, comes via apt Recommends
+          sudo apt-get install -y podman aardvark-dns netavark catatonit
+          podman --version
+
+      - name: Allocate subuid/subgid range for the 'containers' user (required for userns=auto)
+        run: |
+          # Rootful userns=auto draws IDs from a user named "containers", not root
+          # (see cactus-deploy/server/README.md). Some podman builds resolve it via NSS.
+          sudo useradd --system --no-create-home containers || true
+          grep -q '^containers:' /etc/subuid || echo "containers:11000000:1048576" | sudo tee -a /etc/subuid
+          grep -q '^containers:' /etc/subgid || echo "containers:11000000:1048576" | sudo tee -a /etc/subgid
+          sudo podman system migrate
 
       - name: Enable rootful podman socket
         run: |
@@ -72,6 +85,16 @@ jobs:
         run: uv sync --extra test
 
       - name: Run Pytest
+        env:
+          # GitHub's Ubuntu 24.04 runner image doesn't always ship with Podman pre-baked, so apt falls back
+          # to Ubuntu's stock conmon package here - which is built without journald support and makes every
+          # pod spawn fail with "conmon failed: exit status 1". Prod has journald support, so this
+          # only overrides the driver for CI, not the default in settings.py.
+          PODMAN_LOG_DRIVER: k8s-file
         run: uv run pytest -n auto
 
-      
+      - name: Debug podman/conmon journal (on failure)
+        if: failure()
+        run: |
+          sudo journalctl -u podman --no-pager -n 500
+          sudo journalctl --no-pager -n 500 | grep -i "conmon\|crun\|oci runtime" || true
