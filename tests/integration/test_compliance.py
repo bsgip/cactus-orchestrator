@@ -109,7 +109,7 @@ async def test_create_compliance_request(client, pg_compliance_config, valid_jwt
 async def test_update_compliance_request(client, pg_compliance_config, valid_jwt_user1):
     # Arrange
     request_params = generate_class_instance(ComplianceRequestUpdateRequest)
-    attrs_to_set_none = ["der_brand", "der_oem", "der_series", "der_representative_models"]
+    attrs_to_set_none = ["der_brand", "der_oem", "der_series", "der_white_labelled_models"]
     for attr in attrs_to_set_none:
         setattr(request_params, attr, None)
 

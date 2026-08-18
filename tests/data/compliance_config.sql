@@ -37,7 +37,7 @@ VALUES
 
 
 -- Compliance Requests
-INSERT INTO compliance_request (created_at, created_by, updated_at, updated_by, status, csip_aus_version, witnessed_at, der_brand, der_oem, der_series, der_representative_models, software_client_type, software_client_providers, software_client_versions, onsite_hardware_details)
+INSERT INTO compliance_request (created_at, created_by, updated_at, updated_by, status, csip_aus_version, cactus_version, witnessed_at, der_brand, der_oem, der_series, der_cec_listed_models, der_unlisted_models, der_white_labelled_models, software_client_type, software_client_name, software_client_versions, onsite_hardware_details)
 VALUES
 (
 	'2026-05-04T13:15Z',
@@ -46,47 +46,56 @@ VALUES
 	1,
 	4,
 	'v1.2',
+	'v1.0.0',
 	'2026-05-01T15:30Z',
 	'der_brand',
 	'der_oem',
 	'der_series',
-	'der_representative_models',
+	'der_cec_listed_models',
+	'der_unlisted_models',
+	'der_white_labelled_models',
 	'software_client_type',
-	'software_client_providers',
+	'software_client_name',
 	'software_client_versions',
 	'onsite_hardware_details'
 ),  -- compliance_request_id 1
 (
-	'2026-05-07T09:09Z',
+	'2026-05-09T09:09Z',
 	1,
-	'2026-05-07T09:09Z',
+	'2026-05-09T09:09Z',
 	1,
 	1,
 	'v1.2',
+	'v1.0.0',
 	'2026-05-02T00:00Z',
 	'der_brand',
 	'der_oem',
 	'der_series',
-	'der_representative_models',
+	'der_cec_listed_models',
+	'der_unlisted_models',
+	'der_white_labelled_models',
 	'software_client_type',
-	'software_client_providers',
+	'software_client_name',
 	'software_client_versions',
 	'onsite_hardware_details'
 ),  -- compliance_request_id 2
 (
-	'2026-05-07T07:09Z',
+	'2026-05-08T07:09Z',
 	2,
-	'2026-05-07T07:09Z',
+	'2026-05-08T07:09Z',
 	2,
 	1,
 	'v1.2',
+	'v1.0.0',
 	'2026-05-02T00:00Z',
 	'der_brand',
 	'der_oem',
 	'der_series',
-	'der_representative_models',
+	'der_cec_listed_models',
+	'der_unlisted_models',
+	'der_white_labelled_models',
 	'software_client_type',
-	'software_client_providers',
+	'software_client_name',
 	'software_client_versions',
 	'onsite_hardware_details'
 ),  -- compliance_request_id 3
@@ -97,13 +106,16 @@ VALUES
 	2,
 	1,
 	'v1.2',
+	'v1.0.0',
 	'2026-05-02T00:00Z',
 	'der_brand',
 	'der_oem',
 	'der_series',
-	'der_representative_models',
+	'der_cec_listed_models',
+	'der_unlisted_models',
+	'der_white_labelled_models',
 	'software_client_type',
-	'software_client_providers',
+	'software_client_name',
 	'software_client_versions',
 	'onsite_hardware_details'
 );  -- compliance_request_id 4
