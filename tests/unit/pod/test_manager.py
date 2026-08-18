@@ -33,6 +33,7 @@ class MockedPodmanClient:
     containers_get: mock.Mock
     containers_render_payload: mock.Mock
     api_post: mock.Mock
+    api_get: mock.Mock
 
     assert_client: Callable
 
@@ -66,6 +67,7 @@ def mock_client() -> Generator[MockedPodmanClient]:
             mock.Mock(),
             mock.Mock(),
             mock.Mock(),
+            mock.Mock(),
             assert_client,
         )
 
@@ -86,6 +88,7 @@ def mock_client() -> Generator[MockedPodmanClient]:
         mocked_client.containers._render_payload = all_mocks.containers_render_payload
         mocked_client.api = mock.Mock(name="client.api")
         mocked_client.api.post = all_mocks.api_post
+        mocked_client.api.get = all_mocks.api_get
 
         mock_client_fn.return_value = mocked_client
 
@@ -284,20 +287,23 @@ async def test_create_pod_run_success(
     mock_client.containers_render_payload.side_effect = lambda kwargs: kwargs
     mock_client.containers_get.return_value = mock.Mock()
 
-    # We need to mock the low level runner API calls: container creation, and the active healthcheck POST
+    # We need to mock the low level runner API calls: container creation (POST) and the active healthcheck (GET)
     # (health checks are driven via .../healthcheck, popping the next status each call - see _run_container_healthcheck)
     runner_container_id = "abc-123"
     expected_health_check_count = len(health_values)
 
     def api_post_side_effect(path: str, *_args, **_kwargs) -> mock.Mock:
         resp = mock.Mock()
-        if path.endswith("/healthcheck"):
-            resp.json.return_value = {"Status": health_values.pop(0)}
-        else:
-            resp.json.return_value = {"Id": runner_container_id}
+        resp.json.return_value = {"Id": runner_container_id}
+        return resp
+
+    def api_get_side_effect(path: str, *_args, **_kwargs) -> mock.Mock:
+        resp = mock.Mock()
+        resp.json.return_value = {"Status": health_values.pop(0)}
         return resp
 
     mock_client.api_post.side_effect = api_post_side_effect
+    mock_client.api_get.side_effect = api_get_side_effect
 
     # Plumb in a pod/volume removal (to ensure they don't get called)
     mock_pod = mock.Mock()
@@ -338,7 +344,8 @@ async def test_create_pod_run_success(
     # Our containers are created - noting that we create via the low level API due to startup health checks
     assert mock_client.containers_run.call_count == 0
     assert mock_client.containers_render_payload.call_count == 4
-    assert mock_client.api_post.call_count == 4 + expected_health_check_count
+    assert mock_client.api_post.call_count == 4
+    assert mock_client.api_get.call_count == expected_health_check_count
     assert all(
         [c.args[0]["pod"] == resources.pod_name for c in mock_client.containers_render_payload.call_args_list]
     ), "Every container should run in pod"

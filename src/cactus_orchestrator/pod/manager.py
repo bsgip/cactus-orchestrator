@@ -415,27 +415,47 @@ def _create_pod_and_containers(
 
 
 async def _wait_for_runner_healthy(client: podman.PodmanClient, resources: PodResources) -> None:
+    last_status: str | None = None
+    last_error: Exception | None = None
     for attempt in range(POD_READY_MAX_ATTEMPTS):
         try:
             status = await asyncio.to_thread(_run_container_healthcheck, client, resources.container_runner_name)
+            last_status, last_error = status, None
             if status.casefold() == "healthy".casefold():
                 logger.debug(f"Runner container {resources.container_runner_name} healthy after {attempt + 1} attempts")
                 return
             logger.debug(f"Attempt {attempt + 1}: runner health={status!r}")
         except Exception as exc:
+            last_error = exc
             logger.debug(f"Attempt {attempt + 1}: error checking health: {exc}")
         await asyncio.sleep(POD_READY_INTERVAL_SECONDS)
+
+    # TEMPORARY DIAGNOSTICS: the active-healthcheck-POST approach still isn't reaching "healthy" in CI - dump
+    # everything we have before cleanup destroys the container. Remove once the underlying cause is confirmed.
+    logger.warning(f"Runner health timeout - last_status={last_status!r} last_error={last_error!r}")
+    try:
+        container = client.containers.get(resources.container_runner_name)
+        container.reload()
+        logger.warning(f"Runner container raw State on timeout: {container.attrs.get('State')}")
+        raw_logs = b"".join(container.logs(tail=200)).decode(errors="replace")
+        logger.warning(f"Runner container last 200 log lines on timeout:\n{raw_logs}")
+    except Exception as exc:
+        logger.warning(f"Failed to dump runner diagnostics on timeout: {exc}")
+
     raise CactusOrchestratorError(f"Runner container {resources.container_runner_name} did not become healthy in time.")
 
 
 def _run_container_healthcheck(client: podman.PodmanClient, container_name: str) -> str:
-    """Actively runs the container's healthcheck (POST .../healthcheck) and returns the resulting status.
+    """Actively runs the container's healthcheck (GET .../healthcheck) and returns the resulting status.
 
     Podman's own internal healthcheck scheduler does not reliably fire for the startup healthcheck under a
     rootful podman.service started via systemd socket activation (observed: Health.Status stuck at "starting"
     indefinitely, FailingStreak 0, Log null - i.e. the check is simply never invoked). Driving it explicitly via
-    this endpoint runs the same runtime.HealthCheck() codepath the scheduler would use, sidestepping that."""
-    resp = client.api.post(f"/containers/{container_name}/healthcheck")
+    this endpoint runs the same runtime.HealthCheck() codepath the scheduler would use, sidestepping that.
+
+    Registered as GET, not POST, despite triggering an action server-side - see
+    pkg/api/server/register_healthcheck.go in containers/podman."""
+    resp = client.api.get(f"/containers/{container_name}/healthcheck")
     resp.raise_for_status()
     return cast(str, resp.json().get("Status", "unknown"))
 
