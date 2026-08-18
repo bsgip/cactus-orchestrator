@@ -425,6 +425,19 @@ async def _wait_for_runner_healthy(client: podman.PodmanClient, resources: PodRe
         except Exception as exc:
             logger.debug(f"Attempt {attempt + 1}: error checking health: {exc}")
         await asyncio.sleep(POD_READY_INTERVAL_SECONDS)
+
+    # TEMPORARY DIAGNOSTICS: dump raw inspect State + recent container logs before cleanup destroys them,
+    # so we can see whether health polling is reading a stale/wrong field vs the container genuinely
+    # never passing its healthcheck. Remove once the underlying cause is confirmed.
+    try:
+        container = client.containers.get(resources.container_runner_name)
+        container.reload()
+        logger.warning(f"Runner container raw State on timeout: {container.attrs.get('State')}")
+        raw_logs = b"".join(container.logs(tail=200)).decode(errors="replace")
+        logger.warning(f"Runner container last 200 log lines on timeout:\n{raw_logs}")
+    except Exception as exc:
+        logger.warning(f"Failed to dump runner diagnostics on timeout: {exc}")
+
     raise CactusOrchestratorError(f"Runner container {resources.container_runner_name} did not become healthy in time.")
 
 
