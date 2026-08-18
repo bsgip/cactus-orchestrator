@@ -10,6 +10,8 @@ To run it locally against the rootful socket:
     sudo .venv/bin/python -m pytest tests/integration/test_teststack_lifecycle.py -v
 """
 
+import os
+
 import cactus_schema.runner.uri as runner_uri
 import podman
 import pytest
@@ -23,6 +25,8 @@ from cactus_orchestrator.pod.models import PodImages, PodPKI, PodResources, PodR
 
 PODMAN_SOCKET = "/run/podman/podman.sock"
 PODMAN_NETWORK = "pytest-cactus"
+# Overridable so CI can fall back to a driver conmon supports there - see PODMAN_LOG_DRIVER in linttest.yml.
+PODMAN_LOG_DRIVER = os.environ.get("PODMAN_LOG_DRIVER", "journald")
 CSIP_AUS_VERSION = "1.2"
 CURL_IMAGE = "docker.io/curlimages/curl"  # Simple image that has curl installed
 
@@ -139,7 +143,7 @@ async def test_spawn_brings_up_healthy_pod_then_destroy_cleans_up(
         ),
     )
 
-    pod_name = await create_pod_run(PODMAN_SOCKET, images, resources, routes, pki)
+    pod_name = await create_pod_run(PODMAN_SOCKET, images, resources, routes, pki, PODMAN_LOG_DRIVER)
     assert pod_name
 
     # check we can connect - we have to do this from WITHIN the podman-network (as if this test was operating
