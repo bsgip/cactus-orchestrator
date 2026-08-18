@@ -3,6 +3,7 @@ import io
 import logging
 import tarfile
 import time
+from collections.abc import Iterator
 from datetime import datetime
 from typing import Any, cast
 
@@ -430,14 +431,14 @@ async def _wait_for_runner_healthy(client: podman.PodmanClient, resources: PodRe
             logger.debug(f"Attempt {attempt + 1}: error checking health: {exc}")
         await asyncio.sleep(POD_READY_INTERVAL_SECONDS)
 
-    # TEMPORARY DIAGNOSTICS: the active-healthcheck-POST approach still isn't reaching "healthy" in CI - dump
-    # everything we have before cleanup destroys the container. Remove once the underlying cause is confirmed.
+    # A timed-out spawn is destroyed immediately after this raises, taking the container (and its logs) with
+    # it - so surface everything we have here first. Useful for both CI failures and real prod spawn timeouts.
     logger.warning(f"Runner health timeout - last_status={last_status!r} last_error={last_error!r}")
     try:
         container = client.containers.get(resources.container_runner_name)
         container.reload()
         logger.warning(f"Runner container raw State on timeout: {container.attrs.get('State')}")
-        raw_logs = b"".join(container.logs(tail=200)).decode(errors="replace")
+        raw_logs = b"".join(cast(Iterator[bytes], container.logs(tail=200))).decode(errors="replace")
         logger.warning(f"Runner container last 200 log lines on timeout:\n{raw_logs}")
     except Exception as exc:
         logger.warning(f"Failed to dump runner diagnostics on timeout: {exc}")

@@ -86,10 +86,10 @@ jobs:
 
       - name: Run Pytest
         env:
-          # GitHub's Ubuntu 24.04 runner image once shipped without a pre-baked Podman, causing
-          # apt to fall back to Ubuntu's stock conmon package - which is built without journald support
-          # and makes every pod spawn fail with "conmon failed: exit status 1". Prod's conmon has journald
-          # support, so this only overrides the driver here, not the default in settings.py.
+          # GitHub's Ubuntu 24.04 runner image doesn't always ship with Podman pre-baked, so apt falls back
+          # to Ubuntu's stock conmon package here - which is built without journald support and makes every
+          # pod spawn fail with "conmon failed: exit status 1". Prod has journald support, so this
+          # only overrides the driver for CI, not the default in settings.py.
           PODMAN_LOG_DRIVER: k8s-file
         run: uv run pytest -n auto
 
@@ -98,5 +98,3 @@ jobs:
         run: |
           sudo journalctl -u podman --no-pager -n 500
           sudo journalctl --no-pager -n 500 | grep -i "conmon\|crun\|oci runtime" || true
-
-      
