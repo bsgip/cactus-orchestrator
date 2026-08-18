@@ -9,8 +9,11 @@ import pytest
 from cactus_orchestrator.filestore import (
     ERROR_FILE_NAME,
     REPORT_FILE_NAME,
+    compliance_finalisation_report_exists,
+    fetch_compliance_finalisation_report,
     fetch_run_zip,
     run_zip_exists,
+    save_compliance_finalisation_report,
     save_run_finalisation,
     save_run_report,
 )
@@ -26,7 +29,15 @@ class ActionSaveReport:
     pdf_bytes: bytes
 
 
-def _apply_actions(path: Path, run_id: int, actions: list[ActionSaveReport | ActionSaveZip]):
+@dataclass
+class ActionSaveComplianceReport:
+    pdf_bytes: bytes
+
+
+AnyActionType = ActionSaveReport | ActionSaveZip | ActionSaveComplianceReport
+
+
+def _apply_actions(path: Path, tenant_id: int, actions: list[AnyActionType]):
     for action in actions:
         if isinstance(action, ActionSaveZip):
             finalisation_zip_buffer = io.BytesIO()
@@ -35,9 +46,12 @@ def _apply_actions(path: Path, run_id: int, actions: list[ActionSaveReport | Act
                     zf.writestr(name, data)
                 zf.close()
             finalisation_zip_bytes = finalisation_zip_buffer.getvalue()
-            save_run_finalisation(path, run_id, finalisation_zip_bytes)
+            save_run_finalisation(path, tenant_id, finalisation_zip_bytes)
+        elif isinstance(action, ActionSaveComplianceReport):
+            save_compliance_finalisation_report(path, tenant_id, action.pdf_bytes)
+            sleep(0.05)  # If we are writing multiple timestamps - we have microsecond resolution but add a short wait
         else:
-            save_run_report(path, run_id, action.pdf_bytes)
+            save_run_report(path, tenant_id, action.pdf_bytes)
             sleep(0.05)  # If we are writing multiple timestamps - we have microsecond resolution but add a short wait
 
 
@@ -114,7 +128,7 @@ def _apply_actions(path: Path, run_id: int, actions: list[ActionSaveReport | Act
 )
 def test_save_and_load_run_finalisation(
     tmp_path: Path,
-    actions: list[ActionSaveReport | ActionSaveZip],
+    actions: list[AnyActionType],
     expected_files: list[tuple[str, bytes]],
     expect_error: bool,
 ):
@@ -211,12 +225,18 @@ def test_fetch_run_zip_inject_error(tmp_path: Path):
             True,
         ),
         (
+            [
+                ActionSaveComplianceReport(b"mydata1"),
+            ],
+            False,  # Compliance report data is NOT run data
+        ),
+        (
             [],
             False,
         ),
     ],
 )
-def test_run_zip_exists(tmp_path: Path, actions: list[ActionSaveReport | ActionSaveZip], expected: bool):
+def test_run_zip_exists(tmp_path: Path, actions: list[AnyActionType], expected: bool):
     run_id = 123
     _apply_actions(tmp_path, run_id, actions)
     assert run_zip_exists(tmp_path, run_id) is expected
@@ -246,3 +266,86 @@ def test_segmented_run_dirs(tmp_path: Path):
         assert zf.read(REPORT_FILE_NAME) == b"pdfdata2"
         assert zf.read("file.txt") == b"file2"
         assert len(zf.filelist) == 2
+
+
+@pytest.mark.parametrize(
+    "actions, expected",
+    [
+        (
+            [
+                ActionSaveComplianceReport(b"pdfdata1"),
+            ],
+            True,
+        ),
+        (
+            [
+                ActionSaveComplianceReport(b"pdfdata1"),
+                ActionSaveComplianceReport(b"pdfdata2"),
+            ],
+            True,
+        ),
+        (
+            [
+                ActionSaveZip([("file.txt", b"mydata1")]),
+                ActionSaveReport(b"pdfdata1"),
+            ],
+            False,  # This is testing compliance reports - not run data
+        ),
+        (
+            [],
+            False,
+        ),
+    ],
+)
+def test_compliance_finalisation_report_exists(tmp_path: Path, actions: list[AnyActionType], expected: bool):
+    compliance_finalisation_id = 123
+    _apply_actions(tmp_path, compliance_finalisation_id, actions)
+    assert compliance_finalisation_report_exists(tmp_path, compliance_finalisation_id) is expected
+    assert compliance_finalisation_report_exists(tmp_path, compliance_finalisation_id + 1) is False
+    assert compliance_finalisation_report_exists(tmp_path, 0) is False
+    assert compliance_finalisation_report_exists(tmp_path, -1) is False
+
+
+@pytest.mark.parametrize(
+    "id_actions, expected",
+    [
+        (
+            [
+                (123, ActionSaveComplianceReport(b"pdfdata1")),
+            ],
+            [(123, b"pdfdata1"), (99, None), (0, None)],
+        ),
+        (
+            [
+                (123, ActionSaveComplianceReport(b"pdfdata1")),
+                (123, ActionSaveComplianceReport(b"pdfdata2")),
+            ],
+            [(123, b"pdfdata2")],
+        ),
+        (
+            [
+                (123, ActionSaveComplianceReport(b"pdfdata1")),
+                (456, ActionSaveComplianceReport(b"pdfdata2")),
+                (123, ActionSaveComplianceReport(b"pdfdata3")),
+            ],
+            [(123, b"pdfdata3"), (456, b"pdfdata2"), (124, None)],
+        ),
+        (
+            [],
+            [(123, None)],
+        ),
+    ],
+)
+def test_save_fetch_compliance_finalisation_report(
+    tmp_path: Path, id_actions: list[tuple[int, AnyActionType]], expected: list[tuple[int, bytes | None]]
+):
+    """Test the compliance finalisation saving/fetching"""
+
+    # Setup the store
+    for compliance_id, action in id_actions:
+        _apply_actions(tmp_path, compliance_id, [action])
+
+    for compliance_id, expected_data in expected:
+        actual = fetch_compliance_finalisation_report(tmp_path, compliance_id)
+        assert actual is None or isinstance(actual, bytes)
+        assert actual == expected_data

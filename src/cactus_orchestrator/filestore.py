@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import NewType
 
+# We use these types to avoid accidently using the wrong path in the wrong function
 RunPath = NewType("RunPath", Path)
 CompliancePath = NewType("CompliancePath", Path)
 
@@ -73,6 +74,20 @@ def _error_txt(*error_sources: list[str] | None) -> str | None:
     return "\n".join(error for es in error_sources if es is not None for error in es)
 
 
+def _fetch_latest_file(dir: Path) -> Path | None:
+    """Given a directory - return the 'latest' file as defined by file name NOT creation/modified time - This will
+    ensure that a dir filled with timestamp_random_file_name files"""
+    if not dir.exists() or not dir.is_dir():
+        return None
+
+    all_files = sorted((p for p in dir.iterdir() if p.is_file()), key=lambda p: p.name, reverse=True)
+    if len(all_files) == 0:
+        logger.info(f"No files in dir {dir} (none found)")
+        return None
+    else:
+        return all_files[0]
+
+
 def fetch_run_zip(file_store_path: Path, run_id: int, error_info: list[str] | None = None) -> bytes:
     """Recreates a ZIP file containing runner finalisation data AND the latest report PDF. Can also include error data
     which will create a top level"""
@@ -81,17 +96,9 @@ def fetch_run_zip(file_store_path: Path, run_id: int, error_info: list[str] | No
     reports_dir = run_reports_directory(run_dir)
     internal_zip_errors: list[str] = []
 
-    report_pdf_path: Path | None = None
-    if reports_dir.exists():
-        all_reports = sorted((p for p in reports_dir.iterdir() if p.is_file()), key=lambda p: p.name, reverse=True)
-        if len(all_reports) == 0:
-            internal_zip_errors.append(f"No report PDF on record for run {run_id} (none found)")
-        elif all_reports[0].is_file():
-            report_pdf_path = all_reports[0]
-        else:
-            internal_zip_errors.append(f"No report PDF on record for run {run_id} (invalid file)")
-    else:
-        internal_zip_errors.append(f"No runner finalization data on record for run {run_id} (missing)")
+    report_pdf_path: Path | None = _fetch_latest_file(reports_dir)
+    if report_pdf_path is None:
+        internal_zip_errors.append(f"No report PDF on record for run {run_id}.")
 
     zip_buffer = io.BytesIO()
     with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -122,3 +129,39 @@ def run_zip_exists(file_store_path: Path, run_id: int) -> bool:
     finalise_dir = run_finalise_directory(run_dir)
     reports_dir = run_reports_directory(run_dir)
     return finalise_dir.exists() or reports_dir.exists()
+
+
+def save_compliance_finalisation_report(
+    file_store_path: Path, compliance_request_finalisation_id: int, pdf_data: bytes
+) -> None:
+    """Creates a compliance finalisation representing compliance_request_finalisation_id. The resulting file will
+    tagged with a timestamp such that repeated calls to this function will generate new revisions"""
+    compliance_dir = compliance_directory(file_store_path, compliance_request_finalisation_id)
+    compliance_dir.mkdir(parents=True, exist_ok=True)
+
+    report_file = compliance_dir / timestamp_random_file_name("compliance", ".pdf")
+
+    logger.info(f"Persisting {len(pdf_data)} PDF bytes to {report_file}")
+    with open(report_file, "wb") as fp:
+        fp.write(pdf_data)
+
+
+def fetch_compliance_finalisation_report(
+    file_store_path: Path, compliance_request_finalisation_id: int
+) -> bytes | None:
+    """Fetches the bytes from the most recent call to save_compliance_finalisation_report for the specified id. Returns
+    None if there is no most recent call / data is missing."""
+    compliance_dir = compliance_directory(file_store_path, compliance_request_finalisation_id)
+
+    report_file = _fetch_latest_file(compliance_dir)
+    if report_file is None:
+        return None
+
+    with open(report_file, "rb") as fp:
+        return fp.read()
+
+
+def compliance_finalisation_report_exists(file_store_path: Path, compliance_request_finalisation_id: int) -> bool:
+    """True if there are on disk contents for the compliance finalisation report with the specified ID"""
+    compliance_dir = compliance_directory(file_store_path, compliance_request_finalisation_id)
+    return _fetch_latest_file(compliance_dir) is not None
