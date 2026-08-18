@@ -18,7 +18,10 @@ logger = logging.getLogger(__name__)
 
 SEC = 1_000_000_000  # durations in the podman SpecGenerator are integer NANOSECONDS
 
-POD_READY_MAX_ATTEMPTS = 180
+# Must comfortably exceed the runner's own startup healthcheck budget (health_startup_retries *
+# health_startup_interval_ns, currently 180 * 1s = 180s below) - otherwise we give up here before podman's
+# own check would ever report healthy, even on a container that's merely slow to boot.
+POD_READY_MAX_ATTEMPTS = 700
 POD_READY_INTERVAL_SECONDS = 0.3
 
 # These are NOT security concerns - They are only used internally within a test pod and are not exposed externally
