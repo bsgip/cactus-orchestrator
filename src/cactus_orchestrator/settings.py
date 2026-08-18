@@ -68,6 +68,9 @@ class CactusOrchestratorSettings(BaseSettings):
         "cactus-net"  # The network that the test pods will execute under (and that orchestrator runs in)
     )
     podman_runner_port: int = 8080
+    # Container log driver used for teststack pods. Defaults to "journald" to match production; override
+    # (e.g. to "k8s-file") on hosts whose conmon build lacks journald support (like github CI).
+    podman_log_driver: str = "journald"
 
     # podman images
     images: dict[str, PodImages]  # PodImages keyed by CSIP-Aus version

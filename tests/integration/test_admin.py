@@ -71,7 +71,7 @@ def mocked_pod() -> Generator[MockedPod, None, None]:
         patch("cactus_orchestrator.api.run.RunnerClient.proceed") as proceed,
     ):
         # create_pod_run returns pod_name
-        async def create_pod_run_side_effect(podman_socket: str, images, resources, routes, pki=None):
+        async def create_pod_run_side_effect(podman_socket: str, images, resources, routes, pki=None, log_driver=None):
             return resources.pod_name
 
         mock_create_pod_run.side_effect = create_pod_run_side_effect
@@ -617,7 +617,7 @@ async def test_admin_get_compliance_request(
 async def test_update_compliance_request(client, pg_compliance_config, valid_jwt_admin1):
     # Arrange
     request_params = generate_class_instance(ComplianceRequestUpdateRequest)
-    attrs_to_set_none = ["der_brand", "der_oem", "der_series", "der_representative_models"]
+    attrs_to_set_none = ["der_brand", "der_oem", "der_series", "der_white_labelled_models"]
     for attr in attrs_to_set_none:
         setattr(request_params, attr, None)
 

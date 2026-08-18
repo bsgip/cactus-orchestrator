@@ -3,6 +3,7 @@ import io
 import logging
 import tarfile
 import time
+from collections.abc import Iterator
 from datetime import datetime
 from typing import Any, cast
 
@@ -18,7 +19,10 @@ logger = logging.getLogger(__name__)
 
 SEC = 1_000_000_000  # durations in the podman SpecGenerator are integer NANOSECONDS
 
-POD_READY_MAX_ATTEMPTS = 180
+# Must comfortably exceed the runner's own startup healthcheck budget (health_startup_retries *
+# health_startup_interval_ns, currently 180 * 1s = 180s below) - otherwise we give up here before podman's
+# own check would ever report healthy, even on a container that's merely slow to boot.
+POD_READY_MAX_ATTEMPTS = 700
 POD_READY_INTERVAL_SECONDS = 0.3
 
 # These are NOT security concerns - They are only used internally within a test pod and are not exposed externally
@@ -108,18 +112,24 @@ async def create_pod_run(
     resources: PodResources,
     routes: PodRoutes,
     pki: PodPKI,
+    log_driver: str = "journald",
 ) -> str:
     """Creates a new pod with the specified pod resources using the specified set of images/config options. Will wait
     until the pod is healthy before returning. Raises an exception (and attempts to clean up) on failure.
 
     Will not initialise runner or make any other calls into runner beyond the internal health checks.
 
+    log_driver is the podman container log driver (e.g. "journald", "k8s-file") - defaults to "journald" to match
+    production, but is overridable since it depends on the host's conmon build actually supporting journald.
+
     Returns the name of the pod."""
 
     t0 = time.monotonic()
     with _client(podman_socket) as client:
         try:
-            pod_name = await asyncio.to_thread(_create_pod_and_containers, client, images, resources, routes, pki)
+            pod_name = await asyncio.to_thread(
+                _create_pod_and_containers, client, images, resources, routes, pki, log_driver
+            )
         except Exception as exc:
             logger.warning(f"Failed to create pod {resources.pod_name}, cleaning up", exc_info=exc)
             await _do_destroy_pod_resources(client, resources)
@@ -158,6 +168,7 @@ def _create_and_run_container(
     health_startup_interval_ns: int = 0,
     health_startup_timeout_ns: int = 0,
     health_startup_retries: int = 0,
+    log_driver: str = "journald",
 ) -> Container:
     """Creates a podman container with the specified settings - then ensures it runs. Does NOT wait for health."""
 
@@ -174,7 +185,6 @@ def _create_and_run_container(
     raw_config_options = {
         "image": image,
         "pod": pod,
-        "userns_mode": "auto",
         "name": name,
         "labels": labels,
         "command": command,
@@ -204,7 +214,12 @@ def _create_and_run_container(
         }
 
     # Logging for journald doesn't properly support tagging via the client - but the API DOES support it.
-    spec["log_configuration"] = {"driver": "journald", "labels": {"cactus": "true"}, "options": {"tag": pod}}
+    # "tag" is a journald-specific log option; other drivers (e.g. k8s-file, used where the host's conmon
+    # lacks journald support like our CI) reject unrecognised options, so only attach it for journald.
+    log_configuration: dict[str, Any] = {"driver": log_driver, "labels": {"cactus": "true"}}
+    if log_driver == "journald":
+        log_configuration["options"] = {"tag": pod}
+    spec["log_configuration"] = log_configuration
 
     # Submit the create request via the low-level client (mirrors CreateMixin.create)
     resp = client.api.post(
@@ -240,6 +255,7 @@ def _create_pod_and_containers(
     resources: PodResources,
     routes: PodRoutes,
     pki: PodPKI,
+    log_driver: str = "journald",
 ) -> str:
     """Returns pod-name on success"""
 
@@ -254,9 +270,9 @@ def _create_pod_and_containers(
     # runner by name.
     # userns=auto maps the pod's container-root to a high, unprivileged host UID range (allocated
     # from the rootful user's /etc/subuid + /etc/subgid). Under the rootful socket this is what keeps
-    # a teststack breakout from being host-root. The pod owns the single shared namespace; every
-    # member below must also pass userns_mode="auto" to join it — without it podman-py emits a
-    # conflicting container-level id-mapping and the OCI runtime refuses the join.
+    # a teststack breakout from being host-root. The pod owns the single shared namespace; members
+    # join it automatically via "pod": pod in their own spec - they must NOT also pass their own
+    # userns_mode, or podman treats it as a conflicting id-mapping and refuses/fails the join.
     pod_create_kwargs: dict[str, Any] = {
         "name": resources.pod_name,
         "Networks": {resources.shared_network_name: {}},
@@ -279,6 +295,7 @@ def _create_pod_and_containers(
         name=resources.container_postgres_name,
         command=["-c", "listen_addresses=localhost"],
         volumes=shared_volumes,  # This is only here so we can load up the certs BEFORE starting other containers
+        log_driver=log_driver,
     )
     timings.append(("db", time.monotonic() - t0))
 
@@ -322,6 +339,7 @@ def _create_pod_and_containers(
             "NOTIFICATION_MTLS_SERCA": "/shared/notif-certs/serca.pem",
         },
         volumes=shared_volumes,
+        log_driver=log_driver,
     )
     timings.append(("envoy", time.monotonic() - t0))
 
@@ -345,6 +363,7 @@ def _create_pod_and_containers(
             "LOG_CONFIG": "logconf.admin.json",
         },
         volumes=shared_volumes,
+        log_driver=log_driver,
     )
     timings.append(("envoy-admin", time.monotonic() - t0))
 
@@ -385,6 +404,7 @@ def _create_pod_and_containers(
         health_startup_interval_ns=1 * SEC,
         health_startup_timeout_ns=5 * SEC,
         health_startup_retries=180,
+        log_driver=log_driver,
     )
     timings.append(("runner", time.monotonic() - t0))
 
@@ -396,24 +416,49 @@ def _create_pod_and_containers(
 
 
 async def _wait_for_runner_healthy(client: podman.PodmanClient, resources: PodResources) -> None:
+    last_status: str | None = None
+    last_error: Exception | None = None
     for attempt in range(POD_READY_MAX_ATTEMPTS):
         try:
-            status = await asyncio.to_thread(_get_container_health, client, resources.container_runner_name)
+            status = await asyncio.to_thread(_run_container_healthcheck, client, resources.container_runner_name)
+            last_status, last_error = status, None
             if status.casefold() == "healthy".casefold():
                 logger.debug(f"Runner container {resources.container_runner_name} healthy after {attempt + 1} attempts")
                 return
             logger.debug(f"Attempt {attempt + 1}: runner health={status!r}")
         except Exception as exc:
+            last_error = exc
             logger.debug(f"Attempt {attempt + 1}: error checking health: {exc}")
         await asyncio.sleep(POD_READY_INTERVAL_SECONDS)
+
+    # A timed-out spawn is destroyed immediately after this raises, taking the container (and its logs) with
+    # it - so surface everything we have here first. Useful for both CI failures and real prod spawn timeouts.
+    logger.warning(f"Runner health timeout - last_status={last_status!r} last_error={last_error!r}")
+    try:
+        container = client.containers.get(resources.container_runner_name)
+        container.reload()
+        logger.warning(f"Runner container raw State on timeout: {container.attrs.get('State')}")
+        raw_logs = b"".join(cast(Iterator[bytes], container.logs(tail=200))).decode(errors="replace")
+        logger.warning(f"Runner container last 200 log lines on timeout:\n{raw_logs}")
+    except Exception as exc:
+        logger.warning(f"Failed to dump runner diagnostics on timeout: {exc}")
+
     raise CactusOrchestratorError(f"Runner container {resources.container_runner_name} did not become healthy in time.")
 
 
-def _get_container_health(client: podman.PodmanClient, container_name: str) -> str:
-    container = client.containers.get(container_name)
-    container.reload()
-    health = container.attrs.get("State", {}).get("Health", {})
-    return health.get("Status", "unknown")
+def _run_container_healthcheck(client: podman.PodmanClient, container_name: str) -> str:
+    """Actively runs the container's healthcheck (GET .../healthcheck) and returns the resulting status.
+
+    Podman's own internal healthcheck scheduler does not reliably fire for the startup healthcheck under a
+    rootful podman.service started via systemd socket activation (observed: Health.Status stuck at "starting"
+    indefinitely, FailingStreak 0, Log null - i.e. the check is simply never invoked). Driving it explicitly via
+    this endpoint runs the same runtime.HealthCheck() codepath the scheduler would use, sidestepping that.
+
+    Registered as GET, not POST, despite triggering an action server-side - see
+    pkg/api/server/register_healthcheck.go in containers/podman."""
+    resp = client.api.get(f"/containers/{container_name}/healthcheck")
+    resp.raise_for_status()
+    return cast(str, resp.json().get("Status", "unknown"))
 
 
 async def destroy_pod_resources(podman_socket: str, resources: PodResources) -> bool:
