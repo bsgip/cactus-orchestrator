@@ -5,13 +5,16 @@ from pathlib import Path
 from time import sleep
 
 import pytest
+from assertical.asserts.type import assert_list_type
 
 from cactus_orchestrator.filestore import (
     ERROR_FILE_NAME,
     REPORT_FILE_NAME,
     compliance_finalisation_report_exists,
     fetch_compliance_finalisation_report,
+    fetch_run_finalise_file,
     fetch_run_zip,
+    list_run_finalised_files,
     run_zip_exists,
     save_compliance_finalisation_report,
     save_run_finalisation,
@@ -266,6 +269,107 @@ def test_segmented_run_dirs(tmp_path: Path):
         assert zf.read(REPORT_FILE_NAME) == b"pdfdata2"
         assert zf.read("file.txt") == b"file2"
         assert len(zf.filelist) == 2
+
+
+@pytest.mark.parametrize("bad_path", ["..", "../", "./../", "./foo/../../", "/tmp/foo.txt"])
+def test_fetch_finalisation_file_not_relative(tmp_path, bad_path: str):
+    """Try and escape the confinement - not exhaustive but should prevent simple mistakes"""
+    _apply_actions(tmp_path, 123, [ActionSaveZip([("foo.txt", b"abc123")])])
+
+    for run_id in [123, 99]:
+        with pytest.raises(ValueError):
+            fetch_run_finalise_file(tmp_path, run_id, bad_path)
+        with pytest.raises(ValueError):
+            fetch_run_finalise_file(tmp_path, run_id, Path(bad_path))
+
+
+def test_list_fetch_finalisation_files(tmp_path):
+    """Tests that listing/fetching finalisation files behaves correctly for both empty and created dirs"""
+
+    run_id_1 = 11
+    run_id_2 = 22
+
+    # Empty store
+    assert_list_type(Path, list_run_finalised_files(tmp_path, run_id_1), count=0)
+    assert_list_type(Path, list_run_finalised_files(tmp_path, run_id_1, filter="foo.txt"), count=0)
+    assert fetch_run_finalise_file(tmp_path, run_id_1, "foo.txt") is None
+    assert fetch_run_finalise_file(tmp_path, run_id_1, Path("foo.txt")) is None
+
+    # Load some data
+    _apply_actions(
+        tmp_path,
+        run_id_1,
+        [
+            ActionSaveZip(
+                [
+                    ("foo.txt", b"file1"),
+                    ("data_123.json", b"file2"),
+                    ("data_456.json", b"file3"),
+                    ("requests/1.req", b"file4"),
+                    ("requests/1.resp", b"file5"),
+                    ("requests/2.req", b"file6"),
+                    ("requests/2.resp", b"file7"),
+                ]
+            )
+        ],
+    )
+    _apply_actions(
+        tmp_path,
+        run_id_2,
+        [
+            ActionSaveZip(
+                [
+                    ("foo.txt", b"file8"),
+                    ("requests/1.req", b"file9"),
+                    ("requests/1.resp", b"file10"),
+                ]
+            )
+        ],
+    )
+
+    # Query the populated store
+    assert fetch_run_finalise_file(tmp_path, run_id_1, "foo.txt") == b"file1"
+    assert fetch_run_finalise_file(tmp_path, run_id_1, Path("foo.txt")) == b"file1"
+    assert fetch_run_finalise_file(tmp_path, run_id_1, "requests/1.req") == b"file4"
+    assert fetch_run_finalise_file(tmp_path, run_id_1, Path("requests/1.req")) == b"file4"
+    assert fetch_run_finalise_file(tmp_path, run_id_1, "1.req") is None
+    assert fetch_run_finalise_file(tmp_path, run_id_1, Path("1.req")) is None
+    assert fetch_run_finalise_file(tmp_path, run_id_2, "foo.txt") == b"file8"
+
+    # Query file lists
+    all_files_1 = list_run_finalised_files(tmp_path, run_id_1)
+    assert_list_type(Path, all_files_1, count=7)
+    assert Path("foo.txt") in all_files_1
+    assert Path("data_123.json") in all_files_1
+    assert Path("data_456.json") in all_files_1
+    assert Path("requests/1.req") in all_files_1
+    assert Path("requests/1.resp") in all_files_1
+    assert Path("requests/2.req") in all_files_1
+    assert Path("requests/2.resp") in all_files_1
+
+    all_files_2 = list_run_finalised_files(tmp_path, run_id_2)
+    assert_list_type(Path, all_files_2, count=3)
+    assert Path("foo.txt") in all_files_2
+    assert Path("requests/1.req") in all_files_2
+    assert Path("requests/1.resp") in all_files_2
+
+    # Query file lists with a glob expression
+    data_files_1 = list_run_finalised_files(tmp_path, run_id_1, filter="data*.json")
+    assert_list_type(Path, data_files_1, count=2)
+    assert Path("data_123.json") in all_files_1
+    assert Path("data_456.json") in all_files_1
+
+    # Query file lists with a glob expression (without subdir)
+    no_subdir_files_1 = list_run_finalised_files(tmp_path, run_id_1, filter="*.req")
+    assert_list_type(Path, no_subdir_files_1, count=2)
+    assert Path("requests/1.req") in no_subdir_files_1
+    assert Path("requests/2.req") in no_subdir_files_1
+
+    # Query file lists with a glob expression (with subdir)
+    subdir_files_1 = list_run_finalised_files(tmp_path, run_id_1, filter="requests/*.req")
+    assert_list_type(Path, subdir_files_1, count=2)
+    assert Path("requests/1.req") in subdir_files_1
+    assert Path("requests/2.req") in subdir_files_1
 
 
 @pytest.mark.parametrize(

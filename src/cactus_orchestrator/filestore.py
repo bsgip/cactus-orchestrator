@@ -88,6 +88,40 @@ def _fetch_latest_file(dir: Path) -> Path | None:
         return all_files[0]
 
 
+def list_run_finalised_files(file_store_path: Path, run_id: int, filter: str | None = None) -> list[Path]:
+    """Lists all finalisation files for a specific run id, optionally matching filter
+
+    filter: The glob expression to filter files by."""
+
+    run_dir = run_directory(file_store_path, run_id)
+    finalise_dir = run_finalise_directory(run_dir).resolve()
+    if not finalise_dir.exists() or not finalise_dir.is_dir():
+        return []
+
+    return [
+        file_path.relative_to(finalise_dir)
+        for file_path in finalise_dir.rglob(pattern=filter if filter else "*")
+        if file_path.is_file()
+    ]
+
+
+def fetch_run_finalise_file(file_store_path: Path, run_id: int, file_name: Path | str) -> bytes | None:
+    """Reads a specific file from the finalised files for a run_id - returns None if the file DNE / cannot be opened"""
+    run_dir = run_directory(file_store_path, run_id)
+    finalise_dir = run_finalise_directory(run_dir).resolve()
+
+    target_path = (finalise_dir / file_name).resolve()
+    if not target_path.is_relative_to(finalise_dir):
+        raise ValueError(f"Supplied {file_name=} does NOT end up relative to {finalise_dir=}")
+
+    try:
+        with open(target_path, "rb") as fp:
+            return fp.read()
+    except Exception as exc:
+        logger.error(f"Error reading {target_path=} for {run_id=}", exc_info=exc)
+        return None
+
+
 def fetch_run_zip(file_store_path: Path, run_id: int, error_info: list[str] | None = None) -> bytes:
     """Recreates a ZIP file containing runner finalisation data AND the latest report PDF. Can also include error data
     which will create a top level"""
