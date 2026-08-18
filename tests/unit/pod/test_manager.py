@@ -265,13 +265,13 @@ async def test_destroy_pod_resources(
 @pytest.mark.parametrize(
     "health_values",
     [
-        [{"State": {"Health": {"Status": "HeAlThY"}}}],
-        [{}, {"State": {"Health": {"Status": "not healthy"}}}, {"State": {"Health": {"Status": "hEALTHY"}}}],
+        ["HeAlThY"],
+        ["unknown", "not healthy", "hEALTHY"],
     ],
 )
 @pytest.mark.parametrize("dev_host_port", [None, 12345])
 async def test_create_pod_run_success(
-    mock_client: MockedPodmanClient, health_values: list[dict], dev_host_port: int | None
+    mock_client: MockedPodmanClient, health_values: list[str], dev_host_port: int | None
 ):
     """Does a successful startup behave as expected - and can handle health checks taking a bit to stabilise"""
     # Arrange
@@ -282,22 +282,22 @@ async def test_create_pod_run_success(
     pki = PodPKI(server_ca_bytes=b"ca", server_cert_bytes=b"cert", server_key_bytes=b"key")
 
     mock_client.containers_render_payload.side_effect = lambda kwargs: kwargs
+    mock_client.containers_get.return_value = mock.Mock()
 
-    # The container reload() will assign each value from health_values into the attrs element
-    expected_health_check_count = len(health_values)
-    mock_runner_container = mock.Mock()
-
-    def reload_side_effect():
-        mock_runner_container.attrs = health_values.pop(0)
-
-    mock_runner_container.reload = mock.Mock(side_effect=reload_side_effect)
-    mock_client.containers_get.return_value = mock_runner_container
-
-    # We need to mock the low level runner API call
+    # We need to mock the low level runner API calls: container creation, and the active healthcheck POST
+    # (health checks are driven via .../healthcheck, popping the next status each call - see _run_container_healthcheck)
     runner_container_id = "abc-123"
-    mock_resp = mock.Mock()
-    mock_client.api_post.return_value = mock_resp
-    mock_resp.json.return_value = {"Id": runner_container_id}
+    expected_health_check_count = len(health_values)
+
+    def api_post_side_effect(path: str, *_args, **_kwargs) -> mock.Mock:
+        resp = mock.Mock()
+        if path.endswith("/healthcheck"):
+            resp.json.return_value = {"Status": health_values.pop(0)}
+        else:
+            resp.json.return_value = {"Id": runner_container_id}
+        return resp
+
+    mock_client.api_post.side_effect = api_post_side_effect
 
     # Plumb in a pod/volume removal (to ensure they don't get called)
     mock_pod = mock.Mock()
@@ -338,7 +338,7 @@ async def test_create_pod_run_success(
     # Our containers are created - noting that we create via the low level API due to startup health checks
     assert mock_client.containers_run.call_count == 0
     assert mock_client.containers_render_payload.call_count == 4
-    assert mock_client.api_post.call_count == 4
+    assert mock_client.api_post.call_count == 4 + expected_health_check_count
     assert all(
         [c.args[0]["pod"] == resources.pod_name for c in mock_client.containers_render_payload.call_args_list]
     ), "Every container should run in pod"
@@ -356,8 +356,6 @@ async def test_create_pod_run_success(
     assert creation_by_image_name[images.envoy] == 2, "envoy, admin"
     assert creation_by_image_name[images.db] == 1
     assert creation_by_image_name[images.runner] == 1
-
-    assert mock_runner_container.reload.call_count == expected_health_check_count
 
     mock_pod.remove.assert_not_called()
     mock_volume.remove.assert_not_called()
