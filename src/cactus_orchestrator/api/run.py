@@ -53,7 +53,6 @@ from cactus_orchestrator.api.common import (
     select_user_run_group_or_raise,
     select_user_run_group_run_or_raise,
 )
-from cactus_orchestrator.artifact import PDF_GENERATION_ERRORS_FILE_NAME, regenerate_pdf_report
 from cactus_orchestrator.auth import AuthPerm, UserContext, jwt_validator
 from cactus_orchestrator.chart import generate_power_limit_chart
 from cactus_orchestrator.crud import (
@@ -75,14 +74,24 @@ from cactus_orchestrator.crud import (
     select_runs_for_group,
     select_user_run_with_artifact,
     select_user_runs_with_artifacts,
+    update_run_as_finalised,
     update_run_run_status,
-    update_run_with_runartifact_and_finalise,
     update_runartifact_with_file_data,
+)
+from cactus_orchestrator.filestore import (
+    fetch_run_finalised_file,
+    fetch_run_zip,
+    list_run_finalised_files,
+    run_report_exists,
+    run_zip_exists,
+    save_run_finalisation,
+    save_run_report,
 )
 from cactus_orchestrator.model import Run, RunArtifact, RunGroup, RunStatus, User
 from cactus_orchestrator.pod.manager import create_pod_run, destroy_pod_resources, ensure_images
 from cactus_orchestrator.pod.models import PodPKI, PodResources, PodRoutes
-from cactus_orchestrator.settings import CactusOrchestratorError, get_current_settings
+from cactus_orchestrator.reporting.generate import generate_pdf_report
+from cactus_orchestrator.settings import CactusOrchestratorError, CactusOrchestratorSettings, get_current_settings
 
 logger = logging.getLogger(__name__)
 
@@ -477,10 +486,67 @@ def get_run_warnings(runner_status: RunnerStatus | None) -> list[dict] | None:
     return [w.to_dict() for w in runner_status.warnings]
 
 
-async def finalise_run(
-    run: Run, url: str, session: AsyncSession, run_status: RunStatus, finalised_at: datetime, comms_timeout_seconds: int
-) -> RunArtifact | None:
+async def fetch_run_artifact_zip(
+    session: AsyncSession, user: User, settings: CactusOrchestratorSettings, run: Run
+) -> bytes | None:
+    """Fetches the report + finalisation data for a specific run. If there is no report on record - it will also
+    attempt to be generated. Can return None if there is nothing on record for the run"""
 
+    if not run_zip_exists(settings.file_store_path, run.run_id):
+        # There might be an un-migrated artifact
+        # This is all temporary - once fully migrated we should just return None here
+        if run.run_artifact_id is not None and not run.run_artifact_migrated:
+            return (await select_user_run_with_artifact(session, user.user_id, run.run_id)).run_artifact.file_data
+        return None
+
+    # If there is no run report data yet - it's time to generate one from the finalisation data
+    generation_errors: list[str] | None = None
+    if not run_report_exists(settings.file_store_path, run.run_id):
+        # There should be a file with reporting data returned in the runner finalisation data
+        reporting_data_files = list_run_finalised_files(
+            settings.file_store_path, run.run_id, filter="ReportingData_v*.json"
+        )
+        reporting_data = None
+        if len(reporting_data_files) > 0:
+            reporting_data = fetch_run_finalised_file(settings.file_store_path, run.run_id, reporting_data_files[0])
+
+        # Generate the pdf run report and save it.
+        # Only attempt generation if there is reporting data.
+        if reporting_data:
+            try:
+                playlist_info = await select_playlist_position_label(session, run)
+                deploy_release = await select_deploy_release_at(session, run.created_at)
+                pdf_file_data = await generate_pdf_report(
+                    raw_reporting_data=reporting_data.decode(),
+                    playlist_info=playlist_info,
+                    deploy_release_tag=deploy_release.release_tag if deploy_release else None,
+                )
+
+                save_run_report(settings.file_store_path, run.run_id, pdf_file_data)
+            except Exception as exc:
+                msg = f"Unable to generate run report for run {run.run_id}. Reason={exc}"
+                logger.error(msg, exc_info=exc)
+                generation_errors = [msg]
+
+    fetch_run_zip(settings.file_store_path, run.run_id, generation_errors)
+
+
+async def finalise_run(
+    settings: CactusOrchestratorSettings,
+    run: Run,
+    url: str,
+    session: AsyncSession,
+    run_status: RunStatus,
+    finalised_at: datetime,
+    comms_timeout_seconds: int,
+) -> None:
+    """Tells a specific run's runner to finalise the test, fetching all output data and updating the run record
+    that it is now finalised. Does NOT generate the report data.
+
+    All artifacts from the run will be persisted to the file store / run record itself (as appropriate)
+
+    Most errors will be handled gracefully by degrading the stored data in an attempt to ensure the DB record
+    is updated."""
     async with ClientSession(base_url=url, timeout=ClientTimeout(comms_timeout_seconds)) as s:
         # We need our final status to evaluate whether all criteria are passing
         # But we don't want to block the finalisation if there's an issue fetching it
@@ -497,66 +563,43 @@ async def finalise_run(
         except Exception as exc:
             logger.error(f"Error finalizing run {run.run_id}", exc_info=exc)
             file_data = None
-        compression = "zip"  # TODO: should also return compression or allow access to response header
 
     all_criteria_met = is_all_criteria_met(final_status)
     warnings = get_run_warnings(final_status)
 
     # If we were able to finalize - save the data. If not, we will still shut it down - people will be forced to redo
     if file_data:
+        save_run_finalisation(settings.file_store_path, run.run_id, file_data)
+
         # We (potentially) passed the reporting data via the zip file.
         # Extract it from the zip and store it in the database.
         reporting_data = None
-        reporting_data_version = None
 
-        zip_file = zipfile.ZipFile(io.BytesIO(file_data))
-        for name in zip_file.namelist():
-            # There should 0 or 1 file that starts with reporting data
-            if name.startswith("ReportingData_v"):
-                reporting_data = zip_file.read(name).decode()
-                break
+        # There should be 0 or 1 file that starts with reporting data returned in the runner finalisation data
+        reporting_data_files = list_run_finalised_files(
+            settings.file_store_path, run.run_id, filter="ReportingData_v*.json"
+        )
+        if len(reporting_data_files) > 0:
+            reporting_data = fetch_run_finalised_file(settings.file_store_path, run.run_id, reporting_data_files[0])
 
-        # Generate the pdf run report in the orchestrator and inject it into the zip.
+        # Generate the pdf run report in the orchestrator and save it.
         # Only attempt generation if there is reporting data.
-        # Note: all other files in the run artifact remain unaffected.
         if reporting_data:
             try:
-                reporting_data_version = json.loads(reporting_data)["version"]
                 playlist_info = await select_playlist_position_label(session, run)
                 deploy_release = await select_deploy_release_at(session, run.created_at)
-                file_data = await regenerate_pdf_report(
-                    file_data=file_data,
-                    raw_reporting_data=reporting_data,
-                    version=reporting_data_version,
+                pdf_file_data = await generate_pdf_report(
+                    raw_reporting_data=reporting_data.decode(),
                     playlist_info=playlist_info,
                     deploy_release_tag=deploy_release.release_tag if deploy_release else None,
                 )
+
+                save_run_report(settings.file_store_path, run.run_id, pdf_file_data)
             except Exception as exc:
-                msg = f"Unable to regenerate run report for run {run.run_id}. Reason={exc}"
-                logger.error(msg)
+                msg = f"Unable to generate run report for run {run.run_id}. Reason={exc}"
+                logger.error(msg, exc_info=exc)
 
-        artifact = await create_runartifact(
-            session=session,
-            compression=compression,
-            file_data=file_data,
-            reporting_data=reporting_data,
-            reporting_data_version=reporting_data_version,
-        )
-    else:
-        artifact = None
-
-    await update_run_with_runartifact_and_finalise(
-        session,
-        run,
-        None if artifact is None else artifact.run_artifact_id,
-        run_status,
-        finalised_at,
-        all_criteria_met,
-        warnings,
-    )
-    await session.commit()
-
-    return artifact
+    await update_run_as_finalised(session, run, run_status, finalised_at, all_criteria_met, warnings)
 
 
 @router.get(uri.Run, status_code=HTTPStatus.OK)
@@ -660,6 +703,7 @@ async def finalise_run_and_teardown_teststack(  # noqa: C901
 
         # finalise
         artifact = await finalise_run(
+            settings,
             run,
             pod_routes.internal_base_url,
             db.session,
@@ -743,6 +787,7 @@ async def finalise_playlist(
     # Finalize current test if it's active
     if run.run_status in ACTIVE_RUN_STATUSES:
         artifact = await finalise_run(
+            settings,
             run,
             pod_routes.internal_base_url,
             db.session,

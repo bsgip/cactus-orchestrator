@@ -12,9 +12,10 @@ from cactus_orchestrator.filestore import (
     REPORT_FILE_NAME,
     compliance_finalisation_report_exists,
     fetch_compliance_finalisation_report,
-    fetch_run_finalise_file,
+    fetch_run_finalised_file,
     fetch_run_zip,
     list_run_finalised_files,
+    run_report_exists,
     run_zip_exists,
     save_compliance_finalisation_report,
     save_run_finalisation,
@@ -206,7 +207,7 @@ def test_fetch_run_zip_inject_error(tmp_path: Path):
 
 
 @pytest.mark.parametrize(
-    "actions, expected",
+    "actions, zip_expected, report_expected",
     [
         (
             [
@@ -214,11 +215,21 @@ def test_fetch_run_zip_inject_error(tmp_path: Path):
                 ActionSaveReport(b"pdfdata1"),
             ],
             True,
+            True,
         ),
         (
             [
                 ActionSaveReport(b"pdfdata1"),
             ],
+            True,
+            True,
+        ),
+        (
+            [
+                ActionSaveReport(b"pdfdata1"),
+                ActionSaveReport(b"pdfdata2"),
+            ],
+            True,
             True,
         ),
         (
@@ -226,26 +237,36 @@ def test_fetch_run_zip_inject_error(tmp_path: Path):
                 ActionSaveZip([("file.txt", b"mydata1")]),
             ],
             True,
+            False,
         ),
         (
             [
                 ActionSaveComplianceReport(b"mydata1"),
             ],
             False,  # Compliance report data is NOT run data
+            False,
         ),
         (
             [],
             False,
+            False,
         ),
     ],
 )
-def test_run_zip_exists(tmp_path: Path, actions: list[AnyActionType], expected: bool):
+def test_run_zip_or_report_exists(
+    tmp_path: Path, actions: list[AnyActionType], zip_expected: bool, report_expected: bool
+):
     run_id = 123
     _apply_actions(tmp_path, run_id, actions)
-    assert run_zip_exists(tmp_path, run_id) is expected
+    assert run_zip_exists(tmp_path, run_id) is zip_expected
     assert run_zip_exists(tmp_path, run_id + 1) is False
     assert run_zip_exists(tmp_path, 0) is False
     assert run_zip_exists(tmp_path, -1) is False
+
+    assert run_report_exists(tmp_path, run_id) is report_expected
+    assert run_report_exists(tmp_path, run_id + 1) is False
+    assert run_report_exists(tmp_path, 0) is False
+    assert run_report_exists(tmp_path, -1) is False
 
 
 def test_segmented_run_dirs(tmp_path: Path):
@@ -278,9 +299,9 @@ def test_fetch_finalisation_file_not_relative(tmp_path, bad_path: str):
 
     for run_id in [123, 99]:
         with pytest.raises(ValueError):
-            fetch_run_finalise_file(tmp_path, run_id, bad_path)
+            fetch_run_finalised_file(tmp_path, run_id, bad_path)
         with pytest.raises(ValueError):
-            fetch_run_finalise_file(tmp_path, run_id, Path(bad_path))
+            fetch_run_finalised_file(tmp_path, run_id, Path(bad_path))
 
 
 def test_list_fetch_finalisation_files(tmp_path):
@@ -292,8 +313,8 @@ def test_list_fetch_finalisation_files(tmp_path):
     # Empty store
     assert_list_type(Path, list_run_finalised_files(tmp_path, run_id_1), count=0)
     assert_list_type(Path, list_run_finalised_files(tmp_path, run_id_1, filter="foo.txt"), count=0)
-    assert fetch_run_finalise_file(tmp_path, run_id_1, "foo.txt") is None
-    assert fetch_run_finalise_file(tmp_path, run_id_1, Path("foo.txt")) is None
+    assert fetch_run_finalised_file(tmp_path, run_id_1, "foo.txt") is None
+    assert fetch_run_finalised_file(tmp_path, run_id_1, Path("foo.txt")) is None
 
     # Load some data
     _apply_actions(
@@ -328,13 +349,13 @@ def test_list_fetch_finalisation_files(tmp_path):
     )
 
     # Query the populated store
-    assert fetch_run_finalise_file(tmp_path, run_id_1, "foo.txt") == b"file1"
-    assert fetch_run_finalise_file(tmp_path, run_id_1, Path("foo.txt")) == b"file1"
-    assert fetch_run_finalise_file(tmp_path, run_id_1, "requests/1.req") == b"file4"
-    assert fetch_run_finalise_file(tmp_path, run_id_1, Path("requests/1.req")) == b"file4"
-    assert fetch_run_finalise_file(tmp_path, run_id_1, "1.req") is None
-    assert fetch_run_finalise_file(tmp_path, run_id_1, Path("1.req")) is None
-    assert fetch_run_finalise_file(tmp_path, run_id_2, "foo.txt") == b"file8"
+    assert fetch_run_finalised_file(tmp_path, run_id_1, "foo.txt") == b"file1"
+    assert fetch_run_finalised_file(tmp_path, run_id_1, Path("foo.txt")) == b"file1"
+    assert fetch_run_finalised_file(tmp_path, run_id_1, "requests/1.req") == b"file4"
+    assert fetch_run_finalised_file(tmp_path, run_id_1, Path("requests/1.req")) == b"file4"
+    assert fetch_run_finalised_file(tmp_path, run_id_1, "1.req") is None
+    assert fetch_run_finalised_file(tmp_path, run_id_1, Path("1.req")) is None
+    assert fetch_run_finalised_file(tmp_path, run_id_2, "foo.txt") == b"file8"
 
     # Query file lists
     all_files_1 = list_run_finalised_files(tmp_path, run_id_1)

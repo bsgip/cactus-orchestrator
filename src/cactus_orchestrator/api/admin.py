@@ -1,7 +1,7 @@
 import asyncio
 import dataclasses
 import logging
-from datetime import datetime
+from datetime import UTC, datetime
 from http import HTTPStatus
 from typing import Annotated
 
@@ -54,6 +54,7 @@ from cactus_orchestrator.crud import (
     select_deploy_release_at,
     select_group_runs_aggregated_by_procedure,
     select_group_runs_for_procedure,
+    select_playlist_position_label,
     select_run_group_counts_for_user,
     select_run_groups_by_user,
     select_run_groups_for_user,
@@ -65,8 +66,12 @@ from cactus_orchestrator.crud import (
     update_compliance_generation_record_with_file_data,
     update_compliance_request,
 )
+from cactus_orchestrator.filestore import save_compliance_finalisation_report
 from cactus_orchestrator.model import ComplianceRequest, User
 from cactus_orchestrator.pod.models import PodResources, PodRoutes
+from cactus_orchestrator.reporting.compliance import determine_compliance
+from cactus_orchestrator.reporting.compliance_reporting import pdf_report_as_bytes
+from cactus_orchestrator.reporting.generate import generate_pdf_report
 from cactus_orchestrator.settings import get_current_settings
 
 logger = logging.getLogger(__name__)
@@ -341,6 +346,16 @@ async def admin_regenerate_report_and_get_run_artifact(
 
     try:
         deploy_release = await select_deploy_release_at(db.session, run.created_at)
+        playlist_info = await select_playlist_position_label(db.session, run)
+
+        updated_zip_data = await generate_pdf_report(
+            file_data=run_artifact.file_data,
+            raw_reporting_data=run_artifact.reporting_data,  # ty: ignore[invalid-argument-type]
+            version=run_artifact.version,  # ty: ignore[invalid-argument-type]
+            playlist_info=playlist_info,
+            deploy_release_tag=deploy_release_tag,
+        )
+
         await regenerate_run_artifact(
             session=db.session,
             run=run,
@@ -802,6 +817,8 @@ async def admin_finalise_compliance_request(
     requester = await select_user_or_raise(db.session, user_context)
     requester_id = requester.user_id
 
+    settings = get_current_settings()
+
     # Fetch compliance request
     try:
         compliance_request = await select_compliance_request(
@@ -814,24 +831,35 @@ async def admin_finalise_compliance_request(
         ) from err
 
     # Generate compliance report
-    try:
-        compliance_artifact = await artifact.generate_compliance_artifact(
-            requester=requester,
-            compliance_request=compliance_request,
-        )
-    except NoResultFound as err:
-        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="TODO ERROR MESSAGE") from err
+    compliance_classes, excluded_classes, class_to_test_procedures, compliance_runs = determine_compliance(
+        compliance_request=compliance_request
+    )
 
-    if compliance_artifact is None:
-        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Compliance Artifact does not exist.")
+    compliance_report_file_data = pdf_report_as_bytes(
+        requester=requester,
+        user=compliance_request.created_by_user,
+        request_id=f"{compliance_request.compliance_request_id}",
+        csip_aus_version=compliance_request.csip_aus_version,
+        finalisation_datetime=datetime.now(UTC),
+        compliance_id=compliance_request.compliance_request_id,
+        compliance_classes=compliance_classes,
+        excluded_compliance_classes=excluded_classes,
+        class_to_test_procedures=class_to_test_procedures,
+        compliance_runs=compliance_runs,
+    )
 
-    # Update the compliance record and create finalisation record which includes the pdf data
+    # Update the compliance record and create finalisation record while also saving the data to the store
     try:
-        await finalise_compliance_request(
+        finalisation_record = await finalise_compliance_request(
             db.session,
             update_by=requester_id,
             compliance_request=compliance_request,
-            file_data=compliance_artifact.file_data,
+        )
+
+        save_compliance_finalisation_report(
+            settings.file_store_path,
+            finalisation_record.compliance_request_finalisation_id,
+            compliance_report_file_data,
         )
     except Exception as err:
         raise HTTPException(
@@ -843,7 +871,7 @@ async def admin_finalise_compliance_request(
 
     return Response(
         status_code=HTTPStatus.OK,
-        content=compliance_artifact.file_data,
-        media_type=compliance_artifact.mime_type,
+        content=compliance_report_file_data,
+        media_type="application/pdf",
         headers={"Content-Disposition": f"attachment; filename=ComplianceReport-{compliance_request_id}.pdf"},
     )

@@ -55,13 +55,14 @@ from cactus_orchestrator.crud import (
     select_user_run_with_artifact,
     select_users,
     update_compliance_request,
+    update_run_as_finalised,
     update_run_run_status,
-    update_run_with_runartifact_and_finalise,
     update_user_name,
 )
 from cactus_orchestrator.model import (
     ComplianceRecord,
     ComplianceRequestClass,
+    ComplianceRequestFinalisation,
     ComplianceRequestRun,
     ComplianceRequestStatus,
     Run,
@@ -528,30 +529,20 @@ async def test_select_user_run(pg_base_config, user_id: int, run_id: int, succes
     ],
 )
 @pytest.mark.asyncio
-async def test_update_run_with_runartifact_and_finalise(
+async def test_update_run_as_finalised(
     pg_base_config, user_id, run_id, run_status, finalised_at, all_criteria_met, warnings
 ):
     """Test updating a run with a run artifact and finalisation status."""
-    # Arrange
-    async with generate_async_session(pg_base_config) as session:
-        run_artifact = RunArtifact(compression="gzip", file_data=bytes([1, 5, 6]))
-        session.add(run_artifact)
-        await session.flush()
-        run_artifact_id = run_artifact.run_artifact_id
-        await session.commit()
 
     # Act
     async with generate_async_session(pg_base_config) as session:
         run = await select_user_run(session, user_id, run_id)
-        await update_run_with_runartifact_and_finalise(
-            session, run, run_artifact_id, run_status, finalised_at, all_criteria_met, warnings
-        )
+        await update_run_as_finalised(session, run, run_status, finalised_at, all_criteria_met, warnings)
         await session.commit()
 
     # Assert
     async with generate_async_session(pg_base_config) as session:
         updated_run = (await session.execute(select(Run).where(Run.run_id == run_id))).scalar_one()
-        assert updated_run.run_artifact_id == run_artifact_id
         assert updated_run.run_status == run_status
         assert updated_run.finalised_at == finalised_at
         assert updated_run.all_criteria_met is all_criteria_met
@@ -933,7 +924,6 @@ async def test_insert_compliance_request_finalisation(pg_compliance_config):
     compliance_request_id = 1
     created_by = 4
     created_at = datetime.now(UTC)
-    file_data = b"\\x0002"
 
     # Act
     async with generate_async_session(pg_compliance_config) as session:
@@ -942,13 +932,11 @@ async def test_insert_compliance_request_finalisation(pg_compliance_config):
             compliance_request_id=compliance_request_id,
             created_by=created_by,
             created_at=created_at,
-            file_data=file_data,
         )
 
         assert record.compliance_request_id == compliance_request_id
         assert record.created_by == created_by
         assert record.created_at == created_at
-        assert file_data == file_data
 
         await session.commit()
 
@@ -986,16 +974,18 @@ async def test_select_user_compliance_request_finalisation(
 async def test_finalise_compliance_request(compliance_request_id: int, pg_compliance_config):
     # Arrange
     updated_by = 3
-    expected_file_data = b"Placeholder-PDF-Data"
 
     # Act
     async with generate_async_session(pg_compliance_config) as session:
         request = await select_compliance_request(session=session, compliance_request_id=compliance_request_id)
         assert request is not None
 
-        await finalise_compliance_request(
-            session=session, update_by=updated_by, compliance_request=request, file_data=expected_file_data
+        finalisation_result = await finalise_compliance_request(
+            session=session, update_by=updated_by, compliance_request=request
         )
+        assert isinstance(finalisation_result, ComplianceRequestFinalisation)
+        assert finalisation_result.compliance_request_finalisation_id
+        assert finalisation_result.compliance_request_id == compliance_request_id
 
         await session.commit()
 
@@ -1016,7 +1006,7 @@ async def test_finalise_compliance_request(compliance_request_id: int, pg_compli
 
         assert finalisation is not None
         assert finalisation.created_by == updated_by
-        assert finalisation.file_data == expected_file_data
+        assert_nowish(finalisation.created_at)
 
 
 @pytest.mark.asyncio

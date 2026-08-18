@@ -22,71 +22,10 @@ from cactus_orchestrator.artifact import (
     generate_compliance_artifact,
     regenerate_pdf_report,
     regenerate_run_artifact,
-    replace_pdf_in_zip_data,
 )
 from cactus_orchestrator.auth import AuthPerm, UserContext
 from cactus_orchestrator.crud import select_compliance_request, select_user_run_with_artifact
 from cactus_orchestrator.model import RunArtifact, RunReportGeneration
-
-
-@pytest.mark.asyncio
-async def test_replace_pdf_in_zip_data_no_existing_pdf():
-    """When the ZIP has no PDF (e.g. runner no longer generates one), the PDF should be injected."""
-    PDF_FILENAME_PREFIX = "CactusTestProcedureReport"
-    TXT_FILENAME = "other_file.txt"
-    TXT_DATA = b"other"
-    PDF_DATA = b"new pdf bytes"
-
-    zip_buffer = io.BytesIO()
-    with zipfile.ZipFile(zip_buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as archive:
-        with archive.open(TXT_FILENAME, "w") as file:
-            file.write(TXT_DATA)
-
-    zip_data = zip_buffer.getvalue()
-
-    updated_zip_data = await replace_pdf_in_zip_data(
-        pdf_data=PDF_DATA, zip_data=zip_data, pdf_filename_prefix=PDF_FILENAME_PREFIX
-    )
-
-    with zipfile.ZipFile(io.BytesIO(updated_zip_data)) as archive:
-        assert len(archive.namelist()) == 2
-        assert TXT_FILENAME in archive.namelist()
-        injected_pdf = next(n for n in archive.namelist() if n.startswith(PDF_FILENAME_PREFIX))
-        assert archive.read(injected_pdf) == PDF_DATA
-        assert archive.read(TXT_FILENAME) == TXT_DATA
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("original_data, replacement_data", [(b"before", b"after"), (b"before", b"before")])
-async def test_replace_pdf_in_zip_data(original_data: bytes, replacement_data: bytes):
-    PDF_FILENAME = "CactusTestProcedureReport.pdf"
-    TXT_FILENAME = "other_file.txt"
-    TXT_DATA = b"other"
-
-    # Arrange
-    zip_buffer = io.BytesIO()
-    with zipfile.ZipFile(zip_buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as archive:
-        with archive.open(PDF_FILENAME, "w") as file:
-            file.write(original_data)
-        with archive.open(TXT_FILENAME, "w") as file:
-            file.write(TXT_DATA)
-
-    zip_data = zip_buffer.getvalue()
-
-    # Act
-    updated_zip_data = await replace_pdf_in_zip_data(
-        pdf_data=replacement_data, zip_data=zip_data, pdf_filename_prefix=PDF_FILENAME
-    )
-
-    # Assert
-    if replacement_data == original_data:  # the replacement was the same as the original
-        assert updated_zip_data == zip_data
-    with zipfile.ZipFile(io.BytesIO(updated_zip_data)) as archive:
-        assert len(archive.namelist()) == 2
-        assert PDF_FILENAME in archive.namelist()
-        assert TXT_FILENAME in archive.namelist()
-        assert archive.read(PDF_FILENAME) == replacement_data
-        assert archive.read(TXT_FILENAME) == TXT_DATA
 
 
 @pytest.fixture

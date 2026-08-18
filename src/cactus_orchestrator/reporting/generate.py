@@ -1,9 +1,11 @@
 import io
+import json
 import logging
 
 import pandas as pd
-from cactus_runner.models import ReportingData_v1
+from cactus_runner.models import ReportingData, ReportingData_v1
 
+from cactus_orchestrator.reporting.error import PdfGenerationError
 from cactus_orchestrator.reporting.run_reporting import pdf_report_as_bytes
 
 logger = logging.getLogger(__name__)
@@ -11,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 async def generate_pdf_report_v1(
     reporting_data: ReportingData_v1, playlist_info: str | None = None, deploy_release_tag: str | None = None
-) -> bytes | None:
+) -> bytes:
 
     # Unpack the readings: time_period_start is serialised as epoch ms integers by to_json(), so we explicitly convert
     # it back to datetime; pd.read_json convert_dates heuristic doesn't match the column name and would leave it int64.
@@ -36,3 +38,43 @@ async def generate_pdf_report_v1(
     )
 
     return pdf_data
+
+
+async def generate_pdf_report(
+    raw_reporting_data: str,
+    playlist_info: str | None = None,
+    deploy_release_tag: str | None = None,
+) -> bytes:
+    """A pdf run report is generated from `reporting_data` which then returned as a stream of PDF data (raw bytes).
+
+    Offloads to the correct "generation algorithm" depending on how old the supplied reporting data is.
+
+    On failure raises PdfGenerationError
+
+    Args:
+        raw_reporting_data (str): ReportingData as a json encoded string
+        playlist_info (str | None): "Test N of M" label for playlist runs.
+        deploy_release_tag (str | None): the cactus-deploy release tag that was live for this run's pod
+            (Run.deploy_release_tag).
+    Returns:
+        bytes: the updated zip file data.
+    """
+    try:
+        version = json.loads(raw_reporting_data)["version"]
+        reporting_data = ReportingData.from_json(version, raw_reporting_data)
+    except Exception as exc:
+        msg = "Failed to convert json to ReportingData instance."
+        logger.error(msg, exc_info=exc)
+        raise PdfGenerationError(f"Artifact regeneration error: {msg}") from exc
+
+    try:
+        if version == 1:
+            return await generate_pdf_report_v1(
+                reporting_data=reporting_data, deploy_release_tag=deploy_release_tag, playlist_info=playlist_info
+            )
+        else:
+            raise ValueError(f"Unknown version of reporting data ({version})")
+    except Exception as exc:
+        msg = "Failed to generate pdf report from reporting data."
+        logger.error(msg, exc_info=exc)
+        raise PdfGenerationError(f"PDF generation error {msg}") from exc

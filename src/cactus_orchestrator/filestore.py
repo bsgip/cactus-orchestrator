@@ -105,7 +105,7 @@ def list_run_finalised_files(file_store_path: Path, run_id: int, filter: str | N
     ]
 
 
-def fetch_run_finalise_file(file_store_path: Path, run_id: int, file_name: Path | str) -> bytes | None:
+def fetch_run_finalised_file(file_store_path: Path, run_id: int, file_name: Path | str) -> bytes | None:
     """Reads a specific file from the finalised files for a run_id - returns None if the file DNE / cannot be opened"""
     run_dir = run_directory(file_store_path, run_id)
     finalise_dir = run_finalise_directory(run_dir).resolve()
@@ -163,6 +163,14 @@ def run_zip_exists(file_store_path: Path, run_id: int) -> bool:
     finalise_dir = run_finalise_directory(run_dir)
     reports_dir = run_reports_directory(run_dir)
     return finalise_dir.exists() or reports_dir.exists()
+
+
+def run_report_exists(file_store_path: Path, run_id: int) -> bool:
+    """True if there is a report in the store for the specified run"""
+    run_dir = run_directory(file_store_path, run_id)
+    reports_dir = run_reports_directory(run_dir)
+
+    return _fetch_latest_file(reports_dir) is not None
 
 
 def save_compliance_finalisation_report(
