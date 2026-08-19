@@ -300,6 +300,7 @@ def generate_overview_section(
     client_pen: int,
     duration: timedelta,
     stylesheet: StyleSheet,
+    client_user_name: str | None = None,
     playlist_info: str | None = None,
 ) -> list[Flowable]:
     elements: list[Flowable] = []
@@ -335,6 +336,13 @@ def generate_overview_section(
             "",
             "Playlist" if playlist_info else "",
             playlist_info or "",
+        ],
+        [
+            "Client",
+            Paragraph(client_user_name or "Not supplied", style=ParagraphStyle(name="ClientCell", fontSize=8)),
+            "",
+            "",
+            "",
         ],
     ]
     column_widths = [int(fraction * stylesheet.table_width) for fraction in [0.15, 0.4, 0.05, 0.2, 0.2]]
@@ -1783,6 +1791,7 @@ def generate_page_elements(
                 client_pen=active_test_procedure.pen,
                 duration=duration,
                 stylesheet=stylesheet,
+                client_user_name=active_test_procedure.user_name,
                 playlist_info=playlist_info,
             )
         )
