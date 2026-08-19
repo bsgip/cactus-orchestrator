@@ -48,7 +48,7 @@ def save_run_finalisation(file_store_path: Path, run_id: int, finalisation_zip_d
     will merge with the latest dump overwriting any conflicting files"""
     finalise_dir = run_finalise_directory(run_directory(file_store_path, run_id))
 
-    logger.info(f"Persisting {len(finalisation_zip_data)} zip bytes to {finalise_dir}")
+    logger.debug(f"Persisting {len(finalisation_zip_data)} zip bytes to {finalise_dir}")
     finalise_dir.mkdir(parents=True, exist_ok=True)
 
     with zipfile.ZipFile(io.BytesIO(finalisation_zip_data)) as zf:
@@ -65,7 +65,7 @@ def save_run_report(file_store_path: Path, run_id: int, pdf_data: bytes) -> None
 
     report_file = report_dir / timestamp_random_file_name("CactusTestProcedureReport", ".pdf")
 
-    logger.info(f"Persisting {len(pdf_data)} PDF bytes to {report_file}")
+    logger.debug(f"Persisting {len(pdf_data)} PDF bytes to {report_file}")
     with open(report_file, "wb") as fp:
         fp.write(pdf_data)
 
@@ -183,7 +183,7 @@ def save_compliance_finalisation_report(
 
     report_file = compliance_dir / timestamp_random_file_name("compliance", ".pdf")
 
-    logger.info(f"Persisting {len(pdf_data)} PDF bytes to {report_file}")
+    logger.debug(f"Persisting {len(pdf_data)} compliance PDF bytes to {report_file}")
     with open(report_file, "wb") as fp:
         fp.write(pdf_data)
 

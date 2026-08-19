@@ -1,5 +1,4 @@
 import io
-import json
 import logging
 
 import pandas as pd
@@ -42,6 +41,7 @@ async def generate_pdf_report_v1(
 
 async def generate_pdf_report(
     raw_reporting_data: str,
+    raw_reporting_data_version: int,
     playlist_info: str | None = None,
     deploy_release_tag: str | None = None,
 ) -> bytes:
@@ -60,20 +60,19 @@ async def generate_pdf_report(
         bytes: the updated zip file data.
     """
     try:
-        version = json.loads(raw_reporting_data)["version"]
-        reporting_data = ReportingData.from_json(version, raw_reporting_data)
+        reporting_data = ReportingData.from_json(raw_reporting_data_version, raw_reporting_data)
     except Exception as exc:
         msg = "Failed to convert json to ReportingData instance."
         logger.error(msg, exc_info=exc)
         raise PdfGenerationError(f"Artifact regeneration error: {msg}") from exc
 
     try:
-        if version == 1:
+        if raw_reporting_data_version == 1:
             return await generate_pdf_report_v1(
                 reporting_data=reporting_data, deploy_release_tag=deploy_release_tag, playlist_info=playlist_info
             )
         else:
-            raise ValueError(f"Unknown version of reporting data ({version})")
+            raise ValueError(f"Unknown version of reporting data ({raw_reporting_data_version})")
     except Exception as exc:
         msg = "Failed to generate pdf report from reporting data."
         logger.error(msg, exc_info=exc)

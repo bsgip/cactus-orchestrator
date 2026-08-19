@@ -1,10 +1,8 @@
 import asyncio
-import io
 import json
 import logging
 import subprocess  # nosec B404
 import time
-import zipfile
 from datetime import datetime
 from typing import Any
 
@@ -12,46 +10,14 @@ import testing.postgresql
 from cactus_runner.models import ReportingData
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from cactus_orchestrator.model import RunArtifact
+from cactus_orchestrator.artifact import fetch_run_envoy_db, fetch_run_reporting_data_json
 from cactus_orchestrator.power_limit_chart import generate_power_limit_chart_html
+from cactus_orchestrator.settings import CactusOrchestratorSettings
 
 logger = logging.getLogger(__name__)
 
-_ENVOY_SCHEMA_DUMP_PREFIX = "EnvoyDBSchema"
-_ENVOY_DATA_DUMP_PREFIX = "EnvoyDB"
-_DUMP_SUFFIX = ".dump"
 
-
-def extract_envoy_dumps(zip_data: bytes) -> tuple[str, str]:
-    """Extract the envoy schema-only and data-only SQL dumps from an artifact ZIP.
-
-    Returns (schema_sql, data_sql) as decoded strings.
-    Raises ValueError if either dump is absent — the artifact pre-dates this feature.
-    """
-    with zipfile.ZipFile(io.BytesIO(zip_data)) as zf:
-        names = zf.namelist()
-        schema_name = next(
-            (n for n in names if n.startswith(_ENVOY_SCHEMA_DUMP_PREFIX) and n.endswith(_DUMP_SUFFIX)),
-            None,
-        )
-        data_name = next(
-            (
-                n
-                for n in names
-                if n.startswith(_ENVOY_DATA_DUMP_PREFIX)
-                and n.endswith(_DUMP_SUFFIX)
-                and not n.startswith(_ENVOY_SCHEMA_DUMP_PREFIX)
-            ),
-            None,
-        )
-        if schema_name is None or data_name is None:
-            raise ValueError(
-                "Artifact does not contain envoy DB dumps (generated before power limit chart support was added)"
-            )
-        return zf.read(schema_name).decode(), zf.read(data_name).decode()
-
-
-def _patch_legacy_site_der_id(data: Any) -> Any:  # noqa: ANN401
+def _patch_legacy_site_der_id(data: dict | list | str) -> Any:  # noqa: ANN401
     """Renames the legacy 'siteDerId' key to 'siteId' throughout nested dicts/lists, in place.
 
     cactus-runner (Envoy v1.5.0, cactus-runner#192) renamed SiteDERRating/SiteDERSetting/
@@ -70,7 +36,9 @@ def _patch_legacy_site_der_id(data: Any) -> Any:  # noqa: ANN401
     return data
 
 
-async def generate_power_limit_chart(run_artifact: RunArtifact, video_start_seconds: float | None = None) -> str | None:
+async def generate_power_limit_chart(
+    settings: CactusOrchestratorSettings, run_id: int, video_start_seconds: float | None = None
+) -> str | None:
     """Generate a standalone power limit HTML chart from the dumps stored in a RunArtifact.
 
     Spins up an ephemeral local postgres process (via testing.postgresql), restores the
@@ -83,15 +51,22 @@ async def generate_power_limit_chart(run_artifact: RunArtifact, video_start_seco
     if the reporting data cannot be deserialized, or if the client never polled/subscribed to
     a control list despite controls existing (non-compliant client; knowledge cannot be modelled).
     """
-    schema_sql, data_sql = extract_envoy_dumps(run_artifact.file_data)
+
+    raw_reporting_data = fetch_run_reporting_data_json(settings, run_id)
+    if raw_reporting_data is None:
+        raise ValueError(f"Couldn't extract runner reporting data for run {run_id}")
+
+    envoy_dump = fetch_run_envoy_db(settings, run_id)
+    if envoy_dump is None:
+        raise ValueError(f"Couldn't extract envoy database dump for run {run_id}")
 
     try:
         # Callers (e.g. admin endpoint) guard reporting_data/version for None before calling: ignore
-        reporting_data = ReportingData.from_json(run_artifact.version, run_artifact.reporting_data)  # ty: ignore[invalid-argument-type]
+        reporting_data = ReportingData.from_json(raw_reporting_data.version, raw_reporting_data.raw_json)
     except Exception as first_exc:
         try:
-            patched = json.dumps(_patch_legacy_site_der_id(json.loads(run_artifact.reporting_data)))  # ty: ignore[invalid-argument-type]
-            reporting_data = ReportingData.from_json(run_artifact.version, patched)  # ty: ignore[invalid-argument-type]
+            patched = json.dumps(_patch_legacy_site_der_id(json.loads(raw_reporting_data.raw_json)))
+            reporting_data = ReportingData.from_json(raw_reporting_data.version, patched)
         except Exception:
             raise ValueError(f"Failed to deserialize reporting data: {first_exc}") from first_exc
 
@@ -130,7 +105,7 @@ async def generate_power_limit_chart(run_artifact: RunArtifact, video_start_seco
         pg_url: str = pg.url()
         async_pg_url = pg_url.replace("postgresql://", "postgresql+asyncpg://")
 
-        for label, sql in (("schema-restore", schema_sql), ("data-restore", data_sql)):
+        for label, sql in (("schema-restore", envoy_dump.schema_sql), ("data-restore", envoy_dump.data_sql)):
             # psql is the canonical restore tool for plain-SQL pg_dump output; nosec B603 B607
             proc = await asyncio.to_thread(
                 subprocess.run,
@@ -167,4 +142,4 @@ async def generate_power_limit_chart(run_artifact: RunArtifact, video_start_seco
         await asyncio.to_thread(pg.stop)
         timings.append(("pg-stop", time.monotonic() - t0))
         breakdown = ", ".join(f"{name} +{offset:.2f}s" for name, offset in timings)
-        logger.info(f"power_limit_chart timing for run_artifact={run_artifact.run_artifact_id}: {breakdown}")
+        logger.info(f"power_limit_chart timing for {run_id=}: {breakdown}")

@@ -28,7 +28,6 @@ from fastapi_pagination import Page, paginate
 from sqlalchemy.exc import NoResultFound
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from cactus_orchestrator import artifact
 from cactus_orchestrator.api.common import (
     map_run_to_run_response,
     map_to_compliance_request_response,
@@ -37,33 +36,28 @@ from cactus_orchestrator.api.common import (
     select_user_run_group_run_or_raise,
     test_procedures_by_id,
 )
-from cactus_orchestrator.api.run import get_run_artifact_response_for_user
+from cactus_orchestrator.api.run import generate_run_zip_response_for_user
 from cactus_orchestrator.api.run_group import map_group_to_group_response
-from cactus_orchestrator.artifact import regenerate_run_artifact
+from cactus_orchestrator.artifact import fetch_run_artifact_zip
 from cactus_orchestrator.auth import AuthPerm, UserContext, jwt_validator
 from cactus_orchestrator.chart import generate_power_limit_chart
 from cactus_orchestrator.crud import (
     ACTIVE_RUN_STATUSES,
     finalise_compliance_request,
-    insert_compliance_generation_record,
     safe_delete_compliance_request,
     select_admin_stats,
     select_compliance_request,
     select_compliance_request_finalisation,
     select_compliance_requests,
-    select_deploy_release_at,
     select_group_runs_aggregated_by_procedure,
     select_group_runs_for_procedure,
-    select_playlist_position_label,
     select_run_group_counts_for_user,
     select_run_groups_by_user,
     select_run_groups_for_user,
     select_runs_for_group,
     select_user_from_run,
     select_user_from_run_group,
-    select_user_run_with_artifact,
     select_users,
-    update_compliance_generation_record_with_file_data,
     update_compliance_request,
 )
 from cactus_orchestrator.filestore import save_compliance_finalisation_report
@@ -71,7 +65,6 @@ from cactus_orchestrator.model import ComplianceRequest, User
 from cactus_orchestrator.pod.models import PodResources, PodRoutes
 from cactus_orchestrator.reporting.compliance import determine_compliance
 from cactus_orchestrator.reporting.compliance_reporting import pdf_report_as_bytes
-from cactus_orchestrator.reporting.generate import generate_pdf_report
 from cactus_orchestrator.settings import get_current_settings
 
 logger = logging.getLogger(__name__)
@@ -310,10 +303,14 @@ async def admin_get_run_artifact(
             f"Failed to assume new user context ({run_id=},"
             f" assumed_user_context={user_context}, {original_user_context=})"
         )
-    user = await select_user_or_raise(db.session, user_context)
+    user, run_group, run = await select_user_run_group_run_or_raise(db.session, user_context, run_id)
+    settings = get_current_settings()
 
     # Get the download data
-    return await get_run_artifact_response_for_user(user, run_id)
+    zip_bytes = await fetch_run_artifact_zip(db.session, user, settings, run)
+    if zip_bytes is None:
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Run artifact data does not exist.")
+    return generate_run_zip_response_for_user(user, run, run_group, zip_bytes)
 
 
 @router.get(uri.AdminRunRegenerateReport, status_code=HTTPStatus.OK)
@@ -331,45 +328,14 @@ async def admin_regenerate_report_and_get_run_artifact(
             f"Failed to assume new user context ({run_id=},"
             f" assumed_user_context={user_context}, {original_user_context=})"
         )
-    user = await select_user_or_raise(db.session, user_context)
+    user, run_group, run = await select_user_run_group_run_or_raise(db.session, user_context, run_id)
+    settings = get_current_settings()
 
-    try:
-        run = await select_user_run_with_artifact(db.session, user.user_id, run_id)
-    except NoResultFound as err:
-        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Run does not exist.") from err
-
-    if run.run_artifact is None:
-        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="RunArtifact does not exist.")
-
-    if run.run_artifact.reporting_data is None:
-        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="RunArtifact has no reporting data.")
-
-    try:
-        deploy_release = await select_deploy_release_at(db.session, run.created_at)
-        playlist_info = await select_playlist_position_label(db.session, run)
-
-        updated_zip_data = await generate_pdf_report(
-            file_data=run_artifact.file_data,
-            raw_reporting_data=run_artifact.reporting_data,  # ty: ignore[invalid-argument-type]
-            version=run_artifact.version,  # ty: ignore[invalid-argument-type]
-            playlist_info=playlist_info,
-            deploy_release_tag=deploy_release_tag,
-        )
-
-        await regenerate_run_artifact(
-            session=db.session,
-            run=run,
-            run_artifact=run.run_artifact,
-            deploy_release_tag=deploy_release.release_tag if deploy_release else None,
-        )
-    except ValueError as err:
-        raise HTTPException(
-            status_code=HTTPStatus.INTERNAL_SERVER_ERROR, detail="Unable to regenerate pdf run report"
-        ) from err
-    await db.session.commit()
-
-    # Get the download data
-    return await get_run_artifact_response_for_user(user, run_id)
+    # Get the download data - forcing a regenerate
+    zip_bytes = await fetch_run_artifact_zip(db.session, user, settings, run, force_regenerate=True)
+    if zip_bytes is None:
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Run artifact data does not exist.")
+    return generate_run_zip_response_for_user(user, run, run_group, zip_bytes)
 
 
 @router.get(uri.AdminRunPowerLimitChart, status_code=HTTPStatus.OK)
@@ -387,18 +353,10 @@ async def admin_get_run_power_limit_chart(
             f"Failed to assume new user context ({run_id=},"
             f" assumed_user_context={user_context}, {original_user_context=})"
         )
-    user = await select_user_or_raise(db.session, user_context)
+    settings = get_current_settings()
 
     try:
-        run = await select_user_run_with_artifact(db.session, user.user_id, run_id)
-    except NoResultFound as err:
-        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Run does not exist.") from err
-
-    if run.run_artifact is None:
-        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="RunArtifact does not exist.")
-
-    try:
-        html = await generate_power_limit_chart(run.run_artifact, video_start_seconds=video_start_seconds)
+        html = await generate_power_limit_chart(settings, run_id, video_start_seconds=video_start_seconds)
     except ValueError as err:
         logger.warning(f"power_limit_chart: generation failed for {run_id=}: {err}")
         raise HTTPException(status_code=HTTPStatus.CONFLICT, detail=f"Chart generation failed: {err}") from err
@@ -584,61 +542,6 @@ async def admin_get_individual_run(
     )
 
     return map_run_to_run_response(run, pod_routes)
-
-
-@router.get(uri.AdminRunGroupCompliance, status_code=HTTPStatus.OK)
-async def admin_get_group_run_compliance_artifact(
-    run_group_id: int,
-    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.admin_all}))],
-) -> Response:
-    """Generates the compliance report for the run group 'run_group_id'."""
-
-    requester = await select_user_or_raise(db.session, user_context)
-    requester_id = requester.user_id
-
-    # Add the generation record to the database so we can pass the compliance_record_id during report generation
-    try:
-        compliance_record = await insert_compliance_generation_record(
-            session=db.session, run_group_id=run_group_id, requester_id=requester_id
-        )
-    except Exception as err:
-        raise HTTPException(
-            status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
-            detail=f"Unable to insert ComplianceRecord for {run_group_id=} and {requester_id=}",
-        ) from err
-
-    # Generate compliance report
-    try:
-        run_group_artifact = await artifact.generate_run_group_artifact(
-            session=db.session, run_group_id=run_group_id, requester=requester, compliance_record=compliance_record
-        )
-    except NoResultFound as err:
-        raise HTTPException(
-            status_code=HTTPStatus.NOT_FOUND, detail=f"Run group {run_group_id} does not exist."
-        ) from err
-
-    if run_group_artifact is None:
-        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="RunGroupArtifact does not exist.")
-
-    # Update the compliance record to include pdf data
-    try:
-        await update_compliance_generation_record_with_file_data(
-            db.session, compliance_record=compliance_record, file_data=run_group_artifact.file_data
-        )
-    except Exception as err:
-        raise HTTPException(
-            status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
-            detail=(
-                f"Unable to update ComplianceRecord with compliance file data for {run_group_id=} and {requester_id=}"
-            ),
-        ) from err
-
-    await db.session.commit()
-
-    return Response(
-        content=run_group_artifact.file_data,
-        media_type=run_group_artifact.mime_type,
-    )
 
 
 async def map_to_admin_compliance_request_response(request: ComplianceRequest) -> AdminComplianceRequestResponse:
