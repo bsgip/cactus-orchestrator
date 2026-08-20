@@ -1,161 +1,100 @@
 import io
 import zipfile
+from itertools import product
 
 import pytest
-from assertical.asserts.time import assert_nowish
-from assertical.fake.generator import generate_class_instance
-from assertical.fixtures.postgres import generate_async_session
-from cactus_runner.models import (
-    ActiveTestProcedure,
-    CheckResult,
-    RandomValues,
-    ReportingData_v1,
-    ResourceAnnotations,
-    RunnerState,
-)
-from cactus_test_definitions.client import TestProcedureId, get_test_procedure
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
 
-from cactus_orchestrator.api.common import select_user_or_raise
 from cactus_orchestrator.artifact import (
-    generate_compliance_artifact,
-    regenerate_pdf_report,
-    regenerate_run_artifact,
+    EnvoyDbDump,
+    RawReportingData,
+    fetch_run_envoy_db,
+    fetch_run_reporting_data_json,
 )
-from cactus_orchestrator.auth import AuthPerm, UserContext
-from cactus_orchestrator.crud import select_compliance_request, select_user_run_with_artifact
-from cactus_orchestrator.model import RunArtifact, RunReportGeneration
+from cactus_orchestrator.settings import get_current_settings
+from tests.utils.filestore import load_file_store_for_test
 
 
-@pytest.fixture
-def run_artifact() -> RunArtifact:
-    PDF_FILENAME = "CactusTestProcedureReport.pdf"
-    TXT_FILENAME = "other_file.txt"
-    PDF_DATA = b"before"
-    TXT_DATA = b"other"
-
-    zip_buffer = io.BytesIO()
-    with zipfile.ZipFile(zip_buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as archive:
-        with archive.open(PDF_FILENAME, "w") as file:
-            file.write(PDF_DATA)
-        with archive.open(TXT_FILENAME, "w") as file:
-            file.write(TXT_DATA)
-
-    zip_data = zip_buffer.getvalue()
-
-    runner_state = generate_class_instance(
-        RunnerState,
-        active_test_procedure=generate_class_instance(
-            ActiveTestProcedure,
-            definition=get_test_procedure(test_procedure_id=TestProcedureId.ALL_01),
-            step_status={},
-            finished_zip_path=None,
-            resource_annotations=ResourceAnnotations(der_control_ids_by_alias={"a": 1}),
-            random_values=RandomValues(),
-        ),
-    )
-    reporting_data = generate_class_instance(
-        ReportingData_v1, check_results={"key": generate_class_instance(CheckResult)}, runner_state=runner_state
-    )
-    reporting_data_json = reporting_data.to_json()
-    artifact = RunArtifact(compression="gzip", file_data=zip_data, reporting_data=reporting_data_json, version=1)
-    return artifact
+def _make_zip(entries: dict[str, bytes]) -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        for name, data in entries.items():
+            zf.writestr(name, data)
+    return buf.getvalue()
 
 
-@pytest.mark.asyncio
-async def test_regenerate_pdf_report(run_artifact: RunArtifact):
+def test_fetch_run_envoy_db_happy_path():
+
+    # Arrange
+    schema_sql = b"CREATE TABLE foo ();"
+    data_sql = b"INSERT INTO foo VALUES (1);"
+    run_id = 123
+    load_file_store_for_test(run_id, has_finalisation_data=True, envoy_db_schema=(schema_sql, data_sql))
+    settings = get_current_settings()
 
     # Act
-    updated_zip_file_data = await regenerate_pdf_report(
-        file_data=run_artifact.file_data,
-        raw_reporting_data=run_artifact.reporting_data,  # ty: ignore[invalid-argument-type]
-        version=run_artifact.version,  # ty: ignore[invalid-argument-type]
-    )
+    db_dump = fetch_run_envoy_db(settings, run_id)
 
     # Assert
-    assert isinstance(updated_zip_file_data, bytes)
+    assert isinstance(db_dump, EnvoyDbDump)
+    assert db_dump.schema_sql == schema_sql.decode()
+    assert db_dump.data_sql == data_sql.decode()
 
 
-@pytest.mark.asyncio
-async def test_regenerate_pdf_report_raises_exception(run_artifact: RunArtifact):
-    original_reporting_data = run_artifact.reporting_data
-
-    with pytest.raises(ValueError) as excinfo:
-        # Ignore the weird typing here - we are explicitly trying to break things
-        await regenerate_pdf_report(file_data=run_artifact.file_data, raw_reporting_data=None, version=None)  # ty:ignore[invalid-argument-type]
-    assert "Failed to convert json" in str(excinfo.value)
-
-    with pytest.raises(ValueError) as excinfo:
-        run_artifact.reporting_data = "{}"  # not valid reporting data json
-        await regenerate_pdf_report(
-            file_data=run_artifact.file_data,
-            raw_reporting_data=run_artifact.reporting_data,  # ty: ignore[invalid-argument-type]
-            version=run_artifact.version,  # ty: ignore[invalid-argument-type]
-        )
-    assert "Failed to convert json" in str(excinfo.value)
-
-    with pytest.raises(ValueError) as excinfo:
-        run_artifact.reporting_data = original_reporting_data
-        run_artifact.file_data = b""  # not valid zip file
-        await regenerate_pdf_report(
-            file_data=run_artifact.file_data,
-            raw_reporting_data=run_artifact.reporting_data,  # ty: ignore[invalid-argument-type]
-            version=run_artifact.version,  # ty: ignore[invalid-argument-type]
-        )
-    assert "Failed to replace pdf in archive" in str(excinfo.value)
-
-
-@pytest.mark.asyncio
-async def test_regenerate_run_artifact(pg_base_config, run_artifact: RunArtifact):
-    async def get_run_report_generation_records(
-        session: AsyncSession, run_artifact_id: int
-    ) -> list[RunReportGeneration]:
-        stmt = select(RunReportGeneration).where(RunReportGeneration.run_artifact_id == run_artifact_id)
-        resp = await session.execute(stmt)
-
-        return list(resp.scalars().all())
-
-    async with generate_async_session(pg_base_config) as s:
-        # Arrange
-        run = await select_user_run_with_artifact(session=s, user_id=1, run_id=2)
-        run.run_artifact.file_data = run_artifact.file_data  # borrow the file data from another fixture
-        run.run_artifact.reporting_data = run_artifact.reporting_data  # borrow the reporting data from another fixture
-        run.run_artifact.version = run_artifact.version
-        original_file_data = run.run_artifact.file_data
-
-        # Act
-        updated_run_artifact = await regenerate_run_artifact(session=s, run=run, run_artifact=run.run_artifact)
-
-        # Assert
-        check_run = await select_user_run_with_artifact(session=s, user_id=1, run_id=2)
-        assert check_run.run_artifact.file_data != original_file_data
-        assert check_run.run_artifact.file_data == updated_run_artifact.file_data
-
-        records = await get_run_report_generation_records(
-            session=s, run_artifact_id=check_run.run_artifact.run_artifact_id
-        )
-        assert len(records) == 1
-        assert_nowish(records[0].created_at)
-
-
-@pytest.mark.asyncio
-async def test_generate_compliance_artifact(pg_compliance_config):
+def test_fetch_run_envoy_db_missing_schema():
     # Arrange
-    compliance_request_id = 2
-    user_context = UserContext(
-        subject_id="admin1",
-        issuer_id="https://test-cactus-issuer.example.com",
-        permissions=[AuthPerm.admin_all],
+    data_sql = b"INSERT INTO foo VALUES (1);"
+    run_id = 123
+    load_file_store_for_test(run_id, has_finalisation_data=True, envoy_db_schema=(None, data_sql))
+    settings = get_current_settings()
+
+    # Act
+    db_dump = fetch_run_envoy_db(settings, run_id)
+
+    # Assert
+    assert db_dump is None
+
+
+def test_fetch_run_envoy_db_missing_data():
+    # Arrange
+    schema_sql = b"CREATE TABLE foo ();"
+    run_id = 123
+    load_file_store_for_test(run_id, has_finalisation_data=True, envoy_db_schema=(schema_sql, None))
+    settings = get_current_settings()
+
+    # Act
+    db_dump = fetch_run_envoy_db(settings, run_id)
+
+    # Assert
+    assert db_dump is None
+
+
+@pytest.mark.parametrize("has_finalisation_data, version", product([True, False], [1, 99]))
+def test_fetch_run_reporting_data_json(reporting_data_json: str, has_finalisation_data: bool, version: int):
+    # Arrange
+    run_id = 123
+    load_file_store_for_test(
+        run_id, has_finalisation_data=has_finalisation_data, reporting_data_version_json=(version, reporting_data_json)
     )
+    settings = get_current_settings()
 
-    async with generate_async_session(pg_compliance_config) as s:
-        requester = await select_user_or_raise(session=s, user_context=user_context)
-        request = await select_compliance_request(
-            session=s, compliance_request_id=compliance_request_id, include_users=True
-        )
-        artifact = await generate_compliance_artifact(requester=requester, compliance_request=request)
+    # Act
+    data = fetch_run_reporting_data_json(settings, run_id)
 
-        assert artifact.file_data is not None
-        assert len(artifact.file_data) > 0
-        assert artifact.mime_type == "application/pdf"
+    # Assert
+    assert isinstance(data, RawReportingData)
+    assert data.raw_json == reporting_data_json
+    assert data.version == version
+
+
+@pytest.mark.parametrize("has_finalisation_data", [True, False])
+def test_fetch_run_reporting_data_json_missing(has_finalisation_data):
+    # Arrange
+    run_id = 123
+    load_file_store_for_test(run_id, has_finalisation_data=has_finalisation_data, reporting_data_version_json=None)
+    settings = get_current_settings()
+
+    # Act
+    data = fetch_run_reporting_data_json(settings, run_id)
+
+    # Assert
+    assert data is None

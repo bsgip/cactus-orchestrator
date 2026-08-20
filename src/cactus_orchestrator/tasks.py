@@ -44,6 +44,7 @@ def is_maxlive_overtime(now: datetime, created_at: datetime, overtime_seconds: i
 
 
 async def finalize_teststack_runs(
+    settings: CactusOrchestratorSettings,
     session: AsyncSession,
     run: Run,
     runner_url: str,
@@ -59,12 +60,14 @@ async def finalize_teststack_runs(
                 if run_status == RunStatus.terminated:
                     await update_run_run_status(session, sibling.run_id, run_status, finalised_at)
                 else:
-                    await finalise_run(sibling, runner_url, session, run_status, finalised_at, comms_timeout_seconds)
+                    await finalise_run(
+                        settings, sibling, runner_url, session, run_status, finalised_at, comms_timeout_seconds
+                    )
     else:  # Single run
         if run_status == RunStatus.terminated:
             await update_run_run_status(session, run.run_id, run_status, finalised_at)
         else:
-            await finalise_run(run, runner_url, session, run_status, finalised_at, comms_timeout_seconds)
+            await finalise_run(settings, run, runner_url, session, run_status, finalised_at, comms_timeout_seconds)
 
 
 async def destroy_idle_pods(
@@ -112,6 +115,7 @@ async def destroy_idle_pods(
 
             try:
                 await finalize_teststack_runs(
+                    settings,
                     session,
                     run,
                     pod_routes.internal_base_url,
@@ -159,7 +163,7 @@ async def terminate_dead_pod_runs(
         now = datetime.now(UTC)
         pod_resources = PodResources.from_run(settings.podman_network, run)
         try:
-            await finalize_teststack_runs(session, run, "", RunStatus.terminated, now, comms_timeout_seconds)
+            await finalize_teststack_runs(settings, session, run, "", RunStatus.terminated, now, comms_timeout_seconds)
             await session.commit()
         except Exception as exc:
             logger.warning(

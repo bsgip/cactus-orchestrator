@@ -8,7 +8,6 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 from assertical.asserts.type import assert_list_type
 from assertical.fake.generator import generate_class_instance
-from assertical.fixtures.postgres import generate_async_session
 from cactus_schema.orchestrator import (
     HEADER_GROUP_ID,
     HEADER_GROUP_NAME,
@@ -25,12 +24,13 @@ from cactus_schema.orchestrator import (
 )
 from cactus_schema.runner import RunnerStatus
 from cactus_test_definitions.client import TestProcedureId
-from sqlalchemy import select
+from httpx import AsyncClient
 
-from cactus_orchestrator.artifact import regenerate_pdf_report
+from cactus_orchestrator.filestore import REPORT_FILE_NAME
 from cactus_orchestrator.main import generate_app
-from cactus_orchestrator.model import RunArtifact
 from cactus_orchestrator.settings import get_current_settings
+from tests.utils.filestore import load_file_store_for_test
+from tests.utils.pdf import assert_pdf_file
 
 
 @dataclass
@@ -418,36 +418,50 @@ async def test_admin_get_procedure_run_summaries_for_group(client, pg_base_confi
 
 
 @pytest.mark.parametrize(
-    "run_id,expected_status,expected_artifact_id,expected_user,expected_test_id,expected_group_name,expected_group_id",
+    "run_id, has_finalisation_data, has_reporting_data, has_existing_report, expected_status, expect_generation, expected_headers",  # noqa: E501
     [
-        (1, HTTPStatus.NOT_FOUND, None, None, None, None, None),
-        (5, HTTPStatus.OK, 3, "user1@cactus.example.com", "ALL-01", "name-2", "2"),
-        (99, HTTPStatus.NOT_FOUND, None, None, None, None, None),  # DNE
+        (1, False, False, False, HTTPStatus.NOT_FOUND, False, None),  # no run data
+        (1, True, True, False, HTTPStatus.OK, True, ("user1@cactus.example.com", "ALL-01", "name-1", "1")),
+        (1, True, True, True, HTTPStatus.OK, False, ("user1@cactus.example.com", "ALL-01", "name-1", "1")),
+        (5, True, False, False, HTTPStatus.OK, False, ("user1@cactus.example.com", "ALL-01", "name-2", "2")),
+        (6, True, True, False, HTTPStatus.OK, True, ("user2@cactus.example.com", "GEN-02", "name-3", "3")),
+        (99, True, True, True, HTTPStatus.NOT_FOUND, False, None),  # no run (but has file store data)
     ],
 )
 async def test_get_run_artifact_data(
     mocked_pod: MockedPod,
-    client,
+    client: AsyncClient,
     pg_base_config,
+    reporting_data_version: int,
+    reporting_data_json: str,
     valid_jwt_admin1,
-    run_id,
-    expected_status,
-    expected_artifact_id,
-    expected_user,
-    expected_test_id,
-    expected_group_name,
-    expected_group_id,
+    run_id: int,
+    has_finalisation_data: bool,
+    has_reporting_data: bool,
+    has_existing_report: bool,
+    expected_status: HTTPStatus,
+    expect_generation: bool,
+    expected_headers: tuple[str, str, str, str] | None,
 ):
     """Does fetching the run artifact data work under common conditions"""
 
     # Arrange
-    expected_artifact_data = None
-    async with generate_async_session(pg_base_config) as session:
-        artifact = (
-            await session.execute(select(RunArtifact).where(RunArtifact.run_artifact_id == expected_artifact_id))
-        ).scalar_one_or_none()
-        if artifact:
-            expected_artifact_data = artifact.file_data
+    expected_user: str | None = None
+    expected_test_id: str | None = None
+    expected_group_name: str | None = None
+    expected_group_id: str | None = None
+    if expected_headers is not None:
+        expected_user, expected_test_id, expected_group_name, expected_group_id = expected_headers
+
+    # Construct the file store as per test requirements
+    original_pdf_data = b"original pdf data"
+    load_file_store_for_test(
+        run_id,
+        has_finalisation_data=has_finalisation_data,
+        reporting_data_version_json=(reporting_data_version, reporting_data_json) if has_reporting_data else None,
+        existing_report_bytes=original_pdf_data if has_existing_report else None,
+    )
+    expect_any_pdf_file = has_reporting_data or expect_generation
 
     # Act
     res = await client.get(f"admin/run/{run_id}/artifact", headers={"Authorization": f"Bearer {valid_jwt_admin1}"})
@@ -455,7 +469,18 @@ async def test_get_run_artifact_data(
     # Assert
     assert res.status_code == expected_status
     if expected_status == HTTPStatus.OK:
-        assert expected_artifact_data == res.read()
+        zip_data = res.read()
+
+        with zipfile.ZipFile(io.BytesIO(zip_data)) as archive:
+            if expect_any_pdf_file:
+                pdf_data = archive.read(REPORT_FILE_NAME)
+                if expect_generation:
+                    assert pdf_data != original_pdf_data
+                    assert_pdf_file(pdf_data)
+                else:
+                    assert pdf_data == original_pdf_data
+            else:
+                assert REPORT_FILE_NAME not in archive.namelist()
 
         assert res.headers[HEADER_USER_NAME] == expected_user
         assert res.headers[HEADER_TEST_ID] == expected_test_id
@@ -465,49 +490,50 @@ async def test_get_run_artifact_data(
 
 
 @pytest.mark.parametrize(
-    "run_id,expected_status,expected_artifact_id,expected_user,expected_test_id,expected_group_name,expected_group_id",
+    "run_id,has_finalisation_data,has_reporting_data,has_existing_report,expected_status,expect_pdf,expected_headers",
     [
-        (1, HTTPStatus.NOT_FOUND, None, None, None, None, None),  # no run artifact
-        (2, HTTPStatus.NOT_FOUND, None, None, None, None, None),  # run artifact has no reporting data
-        (5, HTTPStatus.OK, 3, "user1@cactus.example.com", "ALL-01", "name-2", "2"),  # triggers regeneration
-        (99, HTTPStatus.NOT_FOUND, None, None, None, None, None),  # run does not exist
+        (1, False, False, False, HTTPStatus.NOT_FOUND, False, (None, None, None, None)),  # no run finalisation data
+        (1, True, False, False, HTTPStatus.OK, False, ("user1@cactus.example.com", "ALL-01", "name-1", "1")),
+        (1, True, True, False, HTTPStatus.OK, True, ("user1@cactus.example.com", "ALL-01", "name-1", "1")),
+        (5, True, True, True, HTTPStatus.OK, True, ("user1@cactus.example.com", "ALL-01", "name-2", "2")),
+        (99, True, True, True, HTTPStatus.NOT_FOUND, False, (None, None, None, None)),  # run does not exist
     ],
 )
 async def test_regenerate_run_report_and_get_artifact_data(
     mocked_pod: MockedPod,
-    client,
-    pg_regeneration_config,
+    pg_base_config,
+    client: AsyncClient,
     valid_jwt_admin1,
-    run_id,
-    expected_status,
-    expected_artifact_id,
-    expected_user,
-    expected_test_id,
-    expected_group_name,
-    expected_group_id,
+    reporting_data_json: str,
+    reporting_data_version: int,
+    run_id: int,
+    has_finalisation_data: bool,
+    has_reporting_data: bool,
+    has_existing_report: bool,
+    expected_status: HTTPStatus,
+    expect_pdf: bool,
+    expected_headers: tuple[str, str, str, str] | None,
 ):
-    """Does regenerating and fetching the run artifact data work under common conditions"""
+    """Does regenerating and fetching the run artifact data work under common conditions
+
+    expected_headers: expected_user, expected_test_id, expected_group_name, expected_group_id"""
 
     # Arrange
-    expected_artifact_data = None
-    original_artifact_data = None
-    check_for_regeneration = False
-    async with generate_async_session(pg_regeneration_config) as session:
-        artifact = (
-            await session.execute(select(RunArtifact).where(RunArtifact.run_artifact_id == expected_artifact_id))
-        ).scalar_one_or_none()
-        if artifact:
-            if artifact.reporting_data:
-                # We have reporting data so regeneration will update the file_data
-                await regenerate_pdf_report(
-                    file_data=artifact.file_data,
-                    raw_reporting_data=artifact.reporting_data,
-                    version=artifact.version,  # ty: ignore[invalid-argument-type]
-                )
-                original_artifact_data = artifact.file_data
-                check_for_regeneration = True
-            else:
-                expected_artifact_data = artifact.file_data
+    expected_user: str | None = None
+    expected_test_id: str | None = None
+    expected_group_name: str | None = None
+    expected_group_id: str | None = None
+    if expected_headers is not None:
+        expected_user, expected_test_id, expected_group_name, expected_group_id = expected_headers
+
+    # Construct the file store as per test requirements
+    original_pdf_data = b"original pdf data"
+    load_file_store_for_test(
+        run_id,
+        has_finalisation_data=has_finalisation_data,
+        reporting_data_version_json=(reporting_data_version, reporting_data_json) if has_reporting_data else None,
+        existing_report_bytes=original_pdf_data if has_existing_report else None,
+    )
 
     # Act
     res = await client.get(f"admin/run/{run_id}/regenerate", headers={"Authorization": f"Bearer {valid_jwt_admin1}"})
@@ -515,14 +541,14 @@ async def test_regenerate_run_report_and_get_artifact_data(
     # Assert
     assert res.status_code == expected_status
     if expected_status == HTTPStatus.OK:
-        if check_for_regeneration:
-            zip_data = res.read()
-            assert original_artifact_data != zip_data
-            with zipfile.ZipFile(io.BytesIO(zip_data)) as archive:
-                pdf_data = archive.read("CactusTestProcedureReport.pdf")
-                assert b"%PDF" == pdf_data[0:4]
-        else:
-            assert expected_artifact_data == res.read()
+        zip_data = res.read()
+        with zipfile.ZipFile(io.BytesIO(zip_data)) as archive:
+            if expect_pdf:
+                pdf_data = archive.read(REPORT_FILE_NAME)
+                assert pdf_data != original_pdf_data
+                assert_pdf_file(pdf_data)
+            else:
+                assert REPORT_FILE_NAME not in archive.namelist()
 
         assert res.headers[HEADER_USER_NAME] == expected_user
         assert res.headers[HEADER_TEST_ID] == expected_test_id
@@ -685,6 +711,6 @@ async def test_finalise_compliance_request(client, pg_compliance_config, valid_j
     # Assert
     assert res.status_code == HTTPStatus.OK
     assert isinstance(res.content, bytes)
-    assert res.content.startswith(b"%PDF")
+    assert_pdf_file(res.content)
     assert res.headers["content-type"] == "application/pdf"
     assert res.headers["content-disposition"] and "attachment; filename=" in res.headers["content-disposition"]

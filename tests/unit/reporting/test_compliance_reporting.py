@@ -5,8 +5,8 @@ from assertical.fixtures.postgres import generate_async_session
 from sqlalchemy import select
 from sqlalchemy.orm import joinedload, selectinload
 
-from cactus_orchestrator.artifact import determine_compliance
 from cactus_orchestrator.model import ComplianceRequest, User
+from cactus_orchestrator.reporting.compliance import determine_compliance
 from cactus_orchestrator.reporting.compliance_reporting import pdf_report_as_bytes
 
 

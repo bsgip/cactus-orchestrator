@@ -146,6 +146,7 @@ class Run(Base):
 
     run_artifact_id: Mapped[int | None] = mapped_column(ForeignKey("run_artifact.id"), nullable=True)
     run_artifact_migrated: Mapped[bool] = mapped_column(BOOLEAN, server_default="0", index=True)  # Temporary migration
+    run_artifact_migrated_error: Mapped[str | None] = mapped_column(String, nullable=True)  # Temporary migration
 
     run_artifact: Mapped["RunArtifact"] = relationship(lazy="raise")
 
@@ -204,6 +205,7 @@ class ComplianceRequestFinalisation(Base):
     created_by: Mapped[int] = mapped_column(ForeignKey("user_.id"))
     file_data: Mapped[bytes] = mapped_column(LargeBinary)
     file_data_migrated: Mapped[bool] = mapped_column(BOOLEAN, server_default="0", index=True)  # Temporary migration
+    file_data_migrated_error: Mapped[str | None] = mapped_column(String, nullable=True)  # Temporary migration
 
 
 class ComplianceRequestStatus(IntEnum):

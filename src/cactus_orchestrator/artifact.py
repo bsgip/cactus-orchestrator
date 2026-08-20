@@ -1,4 +1,5 @@
 import logging
+import re
 from dataclasses import dataclass
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -22,6 +23,18 @@ from cactus_orchestrator.settings import CactusOrchestratorSettings
 
 logger = logging.getLogger(__name__)
 
+ENVOY_DB_SCHEMA_PREFIX = "EnvoyDBSchema_"
+ENVOY_DB_SCHEMA_SUFFIX = ".dump"
+ENVOY_DB_SCHEMA_FILTER = ENVOY_DB_SCHEMA_PREFIX + "*" + ENVOY_DB_SCHEMA_SUFFIX
+
+ENVOY_DB_DATA_PREFIX = "EnvoyDB_"
+ENVOY_DB_DATA_SUFFIX = ".dump"
+ENVOY_DB_DATA_FILTER = ENVOY_DB_DATA_PREFIX + "*" + ENVOY_DB_DATA_SUFFIX
+
+REPORTING_DATA_PREFIX = "ReportingData_v"
+REPORTING_DATA_SUFFIX = ".json"
+REPORTING_DATA_FILTER = REPORTING_DATA_PREFIX + "*" + REPORTING_DATA_SUFFIX
+
 
 @dataclass(frozen=True)
 class RawReportingData:
@@ -37,24 +50,24 @@ class EnvoyDbDump:
 
 def fetch_run_envoy_db(settings: CactusOrchestratorSettings, run_id: int) -> EnvoyDbDump | None:
     """Fetches the envoy database dump returned by the runner during finalisation"""
-    schema_files = list_run_finalised_files(settings.file_store_path, run_id, filter="EnvoyDBSchema_*.dump")
-    data_files = list_run_finalised_files(settings.file_store_path, run_id, filter="EnvoyDB_*.dump")
+    schema_files = list_run_finalised_files(settings.file_store_path, run_id, filter=ENVOY_DB_SCHEMA_FILTER)
+    data_files = list_run_finalised_files(settings.file_store_path, run_id, filter=ENVOY_DB_DATA_FILTER)
 
     if len(schema_files) == 0 or len(data_files) == 0:
         return None
 
-    with open(schema_files[0]) as fp:
-        schema_sql = fp.read()
+    schema_sql = fetch_run_finalised_file(settings.file_store_path, run_id, schema_files[0])
+    data_sql = fetch_run_finalised_file(settings.file_store_path, run_id, data_files[0])
 
-    with open(data_files[0]) as fp:
-        data_sql = fp.read()
+    if schema_sql is None or data_sql is None:
+        return None
 
-    return EnvoyDbDump(schema_sql=schema_sql, data_sql=data_sql)
+    return EnvoyDbDump(schema_sql=schema_sql.decode(), data_sql=data_sql.decode())
 
 
 def fetch_run_reporting_data_json(settings: CactusOrchestratorSettings, run_id: int) -> RawReportingData | None:
     """Fetches the reporting data JSON (string encoded) as returned by the runner during finalisation"""
-    reporting_data_files = list_run_finalised_files(settings.file_store_path, run_id, filter="ReportingData_v*.json")
+    reporting_data_files = list_run_finalised_files(settings.file_store_path, run_id, filter=REPORTING_DATA_FILTER)
     if len(reporting_data_files) > 0:
         data_file = reporting_data_files[0]
         reporting_data = fetch_run_finalised_file(settings.file_store_path, run_id, data_file)
@@ -63,8 +76,9 @@ def fetch_run_reporting_data_json(settings: CactusOrchestratorSettings, run_id: 
 
             # There is a "version" attribute in the JSON but to save us loading the whole lot into memory
             # lets look at the naming convention on the file
-            if "_v1_" in data_file.name:
-                version = 1
+            match_v = re.search(r"_v(\d+)_", data_file.name)
+            if match_v is not None:
+                version = int(match_v.group(1))
             else:
                 raise Exception(f"Couldn't extract version from {reporting_data_files}")
             return RawReportingData(raw_json, version)

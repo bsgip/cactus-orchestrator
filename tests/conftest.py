@@ -66,6 +66,9 @@ def base_environment(preserved_environment, tmp_path: Path, request):
         repeat_every_sec = idleteardowntask_enable.args[0]
         os.environ["IDLETEARDOWNTASK_REPEAT_EVERY_SECONDS"] = str(repeat_every_sec)
 
+    # This is a sideeffect of some nasty globals that should be unpicked in the future
+    _reset_current_settings()
+
 
 @pytest.fixture
 def pg_empty_config(postgresql, preserved_environment) -> Generator[Connection, None, None]:
@@ -385,37 +388,6 @@ def reporting_data_json(reporting_data_version):
     )
     reporting_data_json = reporting_data.to_json()
     return reporting_data_json
-
-
-@pytest.fixture
-def file_data():
-    import io
-    import zipfile
-
-    PDF_FILENAME = "CactusTestProcedureReport.pdf"
-    TXT_FILENAME = "other_file.txt"
-    PDF_DATA = b"before"
-    TXT_DATA = b"other"
-
-    zip_buffer = io.BytesIO()
-    with zipfile.ZipFile(zip_buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as archive:
-        with archive.open(PDF_FILENAME, "w") as file:
-            file.write(PDF_DATA)
-        with archive.open(TXT_FILENAME, "w") as file:
-            file.write(TXT_DATA)
-
-    zip_data = zip_buffer.getvalue()
-    return zip_data
-
-
-@pytest.fixture
-def pg_regeneration_config(pg_base_config, reporting_data_json, reporting_data_version, file_data):
-    """Adds zip file data and working reporting data to run artifact id 3 (run 5)"""
-    stmt = """UPDATE run_artifact SET reporting_data = %s, version = %s, file_data = %s WHERE id = 3;"""
-    with pg_base_config.cursor() as cursor:
-        cursor.execute(stmt, (reporting_data_json, reporting_data_version, file_data))
-        pg_base_config.commit()
-    yield pg_base_config
 
 
 @pytest.fixture
