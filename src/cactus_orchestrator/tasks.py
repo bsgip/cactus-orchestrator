@@ -1,8 +1,11 @@
 import asyncio
 import logging
+import re
+import unicodedata
 from collections.abc import AsyncIterator, Callable, Coroutine
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, Never
 
 from cactus_runner.client import ClientSession, ClientTimeout, RunnerClient
@@ -10,7 +13,9 @@ from envoy.server.manager.time import utc_now
 from fastapi import FastAPI
 from fastapi_async_sqlalchemy import db
 from fastapi_utils.tasks import repeat_every
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import undefer
 
 from cactus_orchestrator.api.run import finalise_run
 from cactus_orchestrator.crud import (
@@ -20,7 +25,7 @@ from cactus_orchestrator.crud import (
     select_run_for_group,
     update_run_run_status,
 )
-from cactus_orchestrator.model import Run, RunStatus
+from cactus_orchestrator.model import ComplianceRecord, Run, RunGroup, RunStatus, User
 from cactus_orchestrator.pod.manager import destroy_pod_resources, ensure_images, fetch_running_pods
 from cactus_orchestrator.pod.models import PodResources, PodRoutes, RunningPod
 from cactus_orchestrator.settings import CactusOrchestratorSettings, get_current_settings
@@ -250,6 +255,126 @@ def generate_pulltask(pulltask_repeat_every_seconds: int) -> Callable[[], Corout
     return pulltask
 
 
+def safe_filename(name: str, max_length: int = 255, replacement: str = "_") -> str:
+    # Normalize unicode so accented chars decompose (é -> e + combining accent)
+    name = unicodedata.normalize("NFKD", name)
+    name = name.encode("ascii", "ignore").decode("ascii")  # drop non-ascii remnants
+
+    # Whitelist: only allow A-Z a-z 0-9 and hyphen; everything else -> underscore
+    name = re.sub(r"[^A-Za-z0-9\-]", replacement, name)
+
+    # Collapse repeated underscores
+    name = re.sub(r"_+", "_", name)
+
+    # Strip leading/trailing underscores and hyphens
+    name = name.strip("_-")
+
+    # Fallback if everything got stripped out
+    if not name:
+        name = "unnamed"
+
+    # Truncate to max_length
+    name = name[:max_length]
+
+    return name
+
+
+async def migrate_run_artifact() -> None:
+    settings = get_current_settings()
+
+    logger.info(f"Starting migrate_run_artifact task - records to migrate into {settings.file_store_path.absolute()}")
+
+    while True:
+        try:
+            async with db():
+                session: AsyncSession = db.session
+                db_record = (
+                    (
+                        await session.execute(
+                            select(ComplianceRecord, RunGroup.name, User.user_name)
+                            .join(RunGroup, onclause=ComplianceRecord.run_group_id == RunGroup.run_group_id)
+                            .join(User, onclause=ComplianceRecord.requester_id == User.user_id)
+                            .where(ComplianceRecord.file_data_migrated.is_(False))
+                            .options(undefer(ComplianceRecord.file_data))
+                            .limit(1)
+                        )
+                    )
+                    .tuples()
+                    .one_or_none()
+                )
+                if db_record is None:
+                    break
+                record, run_group_name, user_name = db_record
+
+                # Try and migrate to a subdirectory
+                try:
+                    file_path = base_dir / (
+                        safe_filename(f"{user_name}_{run_group_name}_{record.compliance_record_id}") + ".pdf"
+                    )
+
+                    with open(file_path, "wb") as fp:
+                        fp.write(record.file_data)
+
+                except Exception as exc:
+                    record.file_data_migrated_error = str(exc)
+                record.file_data_migrated = True
+                await session.commit()
+
+        except Exception as exc:
+            logger.error("Failure migrating - adding a delay", exc_info=exc)
+            await asyncio.sleep(60)
+        logger.info("Stopping migrate_run_compliance task")
+
+
+async def migrate_old_compliance_record() -> None:
+    """TODO: Delete this after migration completed"""
+    settings = get_current_settings()
+    base_dir = settings.file_store_path / "deprecated-compliance-records"
+    base_dir.mkdir(parents=True, exist_ok=True)
+
+    logger.info(f"Starting migrate_old_compliance_record task - records to migrate into {base_dir.absolute()}")
+    while True:
+        try:
+            async with db():
+                session: AsyncSession = db.session
+                db_record = (
+                    (
+                        await session.execute(
+                            select(ComplianceRecord, RunGroup.name, User.user_name)
+                            .join(RunGroup, onclause=ComplianceRecord.run_group_id == RunGroup.run_group_id)
+                            .join(User, onclause=ComplianceRecord.requester_id == User.user_id)
+                            .where(ComplianceRecord.file_data_migrated.is_(False))
+                            .options(undefer(ComplianceRecord.file_data))
+                            .limit(1)
+                        )
+                    )
+                    .tuples()
+                    .one_or_none()
+                )
+                if db_record is None:
+                    break
+                record, run_group_name, user_name = db_record
+
+                # Try and migrate to a subdirectory
+                try:
+                    file_path = base_dir / (
+                        safe_filename(f"{user_name}_{run_group_name}_{record.compliance_record_id}") + ".pdf"
+                    )
+
+                    with open(file_path, "wb") as fp:
+                        fp.write(record.file_data)
+
+                except Exception as exc:
+                    record.file_data_migrated_error = str(exc)
+                record.file_data_migrated = True
+                await session.commit()
+
+        except Exception as exc:
+            logger.error("Failure migrating - adding a delay", exc_info=exc)
+            await asyncio.sleep(60)
+    logger.info("Stopping migrate_old_compliance_record task")
+
+
 _task_references: set[asyncio.Task] = set()
 
 
@@ -269,6 +394,10 @@ async def lifespan(app: FastAPI, settings: CactusOrchestratorSettings) -> AsyncI
 
         pulltask = generate_pulltask(settings.pulltask_repeat_every_seconds)
         _task_references.add(asyncio.create_task(pulltask()))
+
+        # Temporary migrations
+        _task_references.add(asyncio.create_task(migrate_old_compliance_record()))
+        _task_references.add(asyncio.create_task(migrate_old_compliance_record()))
 
     yield  # type: ignore
 

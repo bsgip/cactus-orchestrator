@@ -1,7 +1,18 @@
 from datetime import datetime
 from enum import IntEnum, auto
 
-from sqlalchemy import BOOLEAN, DateTime, ForeignKey, Index, Integer, LargeBinary, String, UniqueConstraint, desc, func
+from sqlalchemy import (
+    BOOLEAN,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    LargeBinary,
+    String,
+    UniqueConstraint,
+    desc,
+    func,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -186,6 +197,8 @@ class ComplianceRecord(Base):
     )  # User who requested generation of the compliance report
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     file_data: Mapped[bytes] = mapped_column(LargeBinary, nullable=True, unique=False, deferred=True)
+    file_data_migrated: Mapped[bool] = mapped_column(BOOLEAN, server_default="0", index=True)
+    file_data_migrated_error: Mapped[str | None] = mapped_column(String, nullable=True)
 
 
 class ComplianceRequestFinalisation(Base):
