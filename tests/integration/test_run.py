@@ -45,6 +45,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.orm import selectinload
 
 from cactus_orchestrator.api.run import finalise_run, get_run_warnings, is_all_criteria_met
+from cactus_orchestrator.artifact import REPORTING_DATA_PREFIX, REPORTING_DATA_SUFFIX
 from cactus_orchestrator.filestore import (
     ERROR_FILE_NAME,
     REPORT_FILE_NAME,
@@ -136,7 +137,9 @@ def zip_file_data(reporting_data_json, reporting_data_version) -> bytes:
 
         # Create reporting data json file
         if json_reporting_data is not None:
-            file_path = archive_dir / f"ReportingData_v{reporting_data_version}.json"
+            file_path = (
+                archive_dir / f"{REPORTING_DATA_PREFIX}{reporting_data_version}_123_test_{REPORTING_DATA_SUFFIX}"
+            )
             with open(file_path, "w") as f:
                 f.write(json_reporting_data)
 
@@ -922,22 +925,21 @@ async def test_finalise_run_handles_runner_status_failure(pg_base_config, mocked
 
 
 @pytest.mark.asyncio
-@patch("cactus_orchestrator.api.run.regenerate_pdf_report")
 async def test_finalise_run_and_teardown_teststack_success(
-    regenerate_mock, client, pg_base_config, mocked_pod, zip_file_data, valid_jwt_user1
+    client: AsyncClient, pg_base_config, mocked_pod, zip_file_data, valid_jwt_user1
 ):
     # Arrange
-    finalize_data = zip_file_data
-    mocked_pod.finalize.return_value = finalize_data
+    mocked_pod.finalize.return_value = zip_file_data
     mocked_pod.status.return_value = generate_class_instance(RunnerStatus, step_status={})
-    regenerate_mock.return_value = finalize_data
+    settings = get_current_settings()
 
     # Act
     response = await client.post("/run/1/finalise", headers={"Authorization": f"Bearer {valid_jwt_user1}"})
 
     # Assert
     assert response.status_code == 200
-    assert response.content == finalize_data
+    assert_zips_equal(zip_file_data, response.content, ignore_arcnames={REPORT_FILE_NAME})
+    assert_pdf_file(get_zip_arcfile_contents(response.content, REPORT_FILE_NAME))
 
     mocked_pod.finalize.assert_called_once()
     mocked_pod.status.assert_called_once()
@@ -951,29 +953,30 @@ async def test_finalise_run_and_teardown_teststack_success(
         assert_nowish(run.finalised_at)
         assert run.run_status == RunStatus.finalised_by_client
         assert run.all_criteria_met is True
-        assert run.run_artifact.file_data == finalize_data
+
+    assert run_zip_exists(settings.file_store_path, 1), "Finalize data should be persisted"
+    assert run_report_exists(settings.file_store_path, 1), "Finalize data should be persisted"
+    assert_zips_equal(fetch_run_zip(settings.file_store_path, 1), response.content)
 
 
 @pytest.mark.asyncio
-@patch("cactus_orchestrator.api.run.regenerate_pdf_report")
 async def test_finalise_run_and_teardown_teststack_idempotent(
-    regenerate_mock, client, pg_base_config, mocked_pod: MockedPod, zip_file_data, valid_jwt_user1
+    client: AsyncClient, pg_base_config, mocked_pod: MockedPod, zip_file_data, valid_jwt_user1
 ):
     """Tests that finalising the same run multiple times will not cause any weird side effects"""
 
     # Arrange
-    finalize_data = zip_file_data
-    mocked_pod.finalize.side_effect = [finalize_data, Exception("Mock exception - shouldn't be raised")]
+    mocked_pod.finalize.side_effect = [zip_file_data, Exception("Mock exception - shouldn't be raised")]
     mocked_pod.status.side_effect = [
         generate_class_instance(RunnerStatus, step_status={}),
         Exception("Mock exception - shouldn't be raised"),
     ]
-    regenerate_mock.return_value = finalize_data
 
     # First request should perform normally and update the DB
     response1 = await client.post("/run/1/finalise", headers={"Authorization": f"Bearer {valid_jwt_user1}"})
     assert response1.status_code == 200
-    assert response1.content == finalize_data
+    assert_zips_equal(zip_file_data, response1.content, ignore_arcnames={REPORT_FILE_NAME})
+
     async with generate_async_session(pg_base_config) as session:
         run = (
             await session.execute(select(Run).where(Run.run_id == 1).options(selectinload(Run.run_artifact)))
@@ -985,7 +988,6 @@ async def test_finalise_run_and_teardown_teststack_idempotent(
         assert_nowish(run.finalised_at)
         assert run.run_status == RunStatus.finalised_by_client
         assert run.all_criteria_met is True
-        assert run.run_artifact.file_data == finalize_data
 
     # We should've only cleaned up and finalised once (for the first request)
     mocked_pod.destroy_pod_resources.assert_awaited_once()
@@ -995,7 +997,7 @@ async def test_finalise_run_and_teardown_teststack_idempotent(
     # Fire off the same request again - it should return the exact same data and the DB should still be OK
     response2 = await client.post("/run/1/finalise", headers={"Authorization": f"Bearer {valid_jwt_user1}"})
     assert response2.status_code == 200
-    assert response2.content == finalize_data
+    assert response2.content == response1.content
     async with generate_async_session(pg_base_config) as session:
         run = (
             await session.execute(select(Run).where(Run.run_id == 1).options(selectinload(Run.run_artifact)))
@@ -1004,7 +1006,6 @@ async def test_finalise_run_and_teardown_teststack_idempotent(
         assert run.finalised_at == original_finalised_at, "This shouldn't have changed"
         assert run.run_status == RunStatus.finalised_by_client
         assert run.all_criteria_met is True
-        assert run.run_artifact.file_data == finalize_data
 
     # We should've only cleaned up and finalised once (for the first request)
     mocked_pod.destroy_pod_resources.assert_awaited_once()

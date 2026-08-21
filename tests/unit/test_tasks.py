@@ -380,7 +380,7 @@ async def test_terminate_dead_pod_runs(
 
     if expect_terminate:
         mock_finalize_runs.assert_called_once()
-        assert mock_finalize_runs.call_args.args[3] == RunStatus.terminated
+        assert mock_finalize_runs.call_args.args[4] == RunStatus.terminated
         mock_destroy_pod_resources.assert_called_once()
     else:
         mock_finalize_runs.assert_not_called()

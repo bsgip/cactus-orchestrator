@@ -54,7 +54,7 @@ async def generate_power_limit_chart(
 
     raw_reporting_data = fetch_run_reporting_data_json(settings, run_id)
     if raw_reporting_data is None:
-        raise ValueError(f"Couldn't extract runner reporting data for run {run_id}")
+        return None  # No finalisation data at all
 
     envoy_dump = fetch_run_envoy_db(settings, run_id)
     if envoy_dump is None:
