@@ -1,4 +1,6 @@
 import asyncio
+import io
+import zipfile
 from collections.abc import Generator
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -10,13 +12,40 @@ from assertical.asserts.time import assert_nowish
 from assertical.fake.generator import generate_class_instance
 from assertical.fixtures.postgres import generate_async_session
 from cactus_schema.runner import ClientInteraction, ClientInteractionType
+from fastapi_async_sqlalchemy import SQLAlchemyMiddleware
 from freezegun import freeze_time
 from sqlalchemy import select
 
 from cactus_orchestrator.crud import insert_run_for_run_group, select_active_runs_for_user
-from cactus_orchestrator.model import Run, RunGroup, RunStatus
+from cactus_orchestrator.filestore import (
+    REPORT_FILE_NAME,
+    compliance_finalisation_report_exists,
+    fetch_compliance_finalisation_report,
+    fetch_run_zip,
+    run_report_exists,
+    run_zip_exists,
+)
+from cactus_orchestrator.model import (
+    ComplianceRecord,
+    ComplianceRequest,
+    ComplianceRequestFinalisation,
+    Run,
+    RunArtifact,
+    RunGroup,
+    RunStatus,
+    User,
+)
 from cactus_orchestrator.pod.models import PodResources, RunningPod
-from cactus_orchestrator.tasks import destroy_idle_pods, generate_idleteardowntask, terminate_dead_pod_runs
+from cactus_orchestrator.settings import get_current_settings
+from cactus_orchestrator.tasks import (
+    destroy_idle_pods,
+    generate_idleteardowntask,
+    migrate_compliance_finalisation,
+    migrate_old_compliance_record,
+    migrate_run_artifact,
+    terminate_dead_pod_runs,
+)
+from tests.utils.zip import assert_zips_equal, get_zip_arcfile_contents
 
 
 @dataclass
@@ -436,3 +465,386 @@ async def test_terminate_dead_pod_runs_with_playlist(mock_finalize_runs, mock_de
     # the second is skipped as its playlist has already been processed
     mock_finalize_runs.assert_called_once()
     mock_destroy_pod_resources.assert_called_once()
+
+
+def gen_zip(seed: int, extra_files: list[tuple[str, bytes]]) -> bytes:
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("foo/bar", f"data{seed * 2}")
+        archive.writestr("baz", f"data{seed * 3}")
+
+        for name, data in extra_files:
+            archive.writestr(name, data)
+    return zip_buffer.getvalue()
+
+
+async def test_migrate_run_artifact(pg_empty_config):
+    """Test that migrate_run_artifact handles a few seperate situations"""
+
+    # Arrange
+    from cactus_orchestrator.main import generate_app
+
+    settings = get_current_settings()
+    SQLAlchemyMiddleware(generate_app(settings), db_url=str(settings.orchestrator_database_url), commit_on_exit=False)
+
+    run_5_zip = gen_zip(555, [])
+    run_6_zip = gen_zip(666, [])
+    run_7_report = bytes([7, 64, 1, 4, 77, 0, 1, 5])
+    run_7_zip = gen_zip(777, [("foo.pdf", run_7_report)])
+    run_8_report = bytes([8, 69, 67])
+    run_8_zip = gen_zip(888, [("foo.pdf", run_8_report)])
+    async with generate_async_session(pg_empty_config) as session:
+        user = generate_class_instance(User, optional_is_none=True)
+        run_group = generate_class_instance(RunGroup, optional_is_none=True, user=user)
+        session.add(user)
+        session.add(run_group)
+
+        # Run 1,2 - no artifact
+        session.add(
+            generate_class_instance(
+                Run,
+                seed=101,
+                run_id=1,
+                run_artifact_migrated=False,
+                run_artifact_id=None,
+                run_artifact_migrated_error=None,
+                warnings=None,
+                run_group=run_group,
+            )
+        )
+        session.add(
+            generate_class_instance(
+                Run,
+                seed=202,
+                run_id=2,
+                run_artifact_migrated=True,
+                run_artifact_id=None,
+                run_artifact_migrated_error=None,
+                warnings=None,
+                run_group=run_group,
+            )
+        )
+
+        # Run 3,4 - Junk ZIP file that will fail to load
+        session.add(
+            generate_class_instance(
+                Run,
+                seed=303,
+                run_id=3,
+                run_artifact_migrated=False,
+                run_artifact_migrated_error=None,
+                run_artifact=generate_class_instance(RunArtifact, seed=33, file_data=bytes([0, 2, 3])),
+                warnings=None,
+                run_group=run_group,
+            )
+        )
+        session.add(
+            generate_class_instance(
+                Run,
+                seed=404,
+                run_id=4,
+                run_artifact_migrated=True,
+                run_artifact_migrated_error=None,
+                run_artifact=generate_class_instance(RunArtifact, seed=44, file_data=bytes([0, 4, 5])),
+                warnings=None,
+                run_group=run_group,
+            )
+        )
+
+        # Run 5,6 - ZIP file with no PDF
+        session.add(
+            generate_class_instance(
+                Run,
+                seed=505,
+                run_id=5,
+                run_artifact_migrated=False,
+                run_artifact_migrated_error=None,
+                run_artifact=generate_class_instance(RunArtifact, seed=55, file_data=run_5_zip),
+                warnings=None,
+                run_group=run_group,
+            )
+        )
+        session.add(
+            generate_class_instance(
+                Run,
+                seed=606,
+                run_id=6,
+                run_artifact_migrated=True,
+                run_artifact_migrated_error=None,
+                run_artifact=generate_class_instance(RunArtifact, seed=66, file_data=run_6_zip),
+                warnings=None,
+                run_group=run_group,
+            )
+        )
+
+        # Run 7,8 - ZIP file with PDFs
+        session.add(
+            generate_class_instance(
+                Run,
+                seed=707,
+                run_id=7,
+                run_artifact_migrated=False,
+                run_artifact_migrated_error=None,
+                run_artifact=generate_class_instance(RunArtifact, seed=77, file_data=run_7_zip),
+                warnings=None,
+                run_group=run_group,
+            )
+        )
+        session.add(
+            generate_class_instance(
+                Run,
+                seed=808,
+                run_id=8,
+                run_artifact_migrated=True,
+                run_artifact_migrated_error=None,
+                run_artifact=generate_class_instance(RunArtifact, seed=88, file_data=run_8_zip),
+                warnings=None,
+                run_group=run_group,
+            )
+        )
+        await session.commit()
+
+    # Act
+    await migrate_run_artifact()
+
+    # Assert
+    async with generate_async_session(pg_empty_config) as session:
+        runs = (await session.execute(select(Run).order_by(Run.run_id))).scalars().all()
+        assert len(runs) == 8
+        assert all(r.run_artifact_migrated for r in runs)
+        assert [bool(r.run_artifact_migrated_error) for r in runs] == [
+            False,
+            False,
+            True,
+            False,
+            False,
+            False,
+            False,
+            False,
+        ], "Matching whether there was a migration error"
+        assert [run_zip_exists(settings.file_store_path, r.run_id) for r in runs] == [
+            False,
+            False,
+            False,
+            False,
+            True,
+            False,  # was marked as migrated
+            True,
+            False,  # was marked as migrated
+        ], "Matching whether ANY data was put in the file store"
+        assert [run_report_exists(settings.file_store_path, r.run_id) for r in runs] == [
+            False,
+            False,
+            False,
+            False,
+            False,
+            False,
+            True,
+            False,  # was marked as migrated
+        ], "Matching whether ANY report data was put in the file store"
+
+        actual_run_7_zip = fetch_run_zip(settings.file_store_path, 7)
+        assert_zips_equal(run_7_zip, actual_run_7_zip, {"foo.pdf", REPORT_FILE_NAME})
+        assert get_zip_arcfile_contents(actual_run_7_zip, REPORT_FILE_NAME) == run_7_report
+
+
+async def test_migrate_compliance_finalisation(pg_empty_config):
+    """Test that migrate_compliance_finalisation handles a few seperate situations"""
+
+    # Arrange
+    from cactus_orchestrator.main import generate_app
+
+    settings = get_current_settings()
+    SQLAlchemyMiddleware(generate_app(settings), db_url=str(settings.orchestrator_database_url), commit_on_exit=False)
+
+    req_3_data = bytes([3, 3, 3])
+    req_4_data = bytes([4, 4, 4])
+    async with generate_async_session(pg_empty_config) as session:
+        user = generate_class_instance(User, optional_is_none=True)
+        cr = generate_class_instance(
+            ComplianceRequest, optional_is_none=True, created_by_user=user, updated_by_user=user
+        )
+        session.add(user)
+        session.add(cr)
+        await session.flush()
+
+        # finalisation 1,2 - no artifact
+        session.add(
+            generate_class_instance(
+                ComplianceRequestFinalisation,
+                seed=101,
+                compliance_request_finalisation_id=1,
+                compliance_request_id=cr.compliance_request_id,
+                created_by=user.user_id,
+                file_data=bytes([]),
+                file_data_migrated=False,
+                file_data_migrated_error=None,
+            )
+        )
+        session.add(
+            generate_class_instance(
+                ComplianceRequestFinalisation,
+                seed=202,
+                compliance_request_finalisation_id=2,
+                compliance_request_id=cr.compliance_request_id,
+                created_by=user.user_id,
+                file_data=bytes([]),
+                file_data_migrated=True,
+                file_data_migrated_error=None,
+            )
+        )
+
+        # finalisation 3,4 - has artifact
+        session.add(
+            generate_class_instance(
+                ComplianceRequestFinalisation,
+                seed=303,
+                compliance_request_finalisation_id=3,
+                compliance_request_id=cr.compliance_request_id,
+                created_by=user.user_id,
+                file_data=req_3_data,
+                file_data_migrated=False,
+                file_data_migrated_error=None,
+            )
+        )
+        session.add(
+            generate_class_instance(
+                ComplianceRequestFinalisation,
+                seed=404,
+                compliance_request_finalisation_id=4,
+                compliance_request_id=cr.compliance_request_id,
+                created_by=user.user_id,
+                file_data=req_4_data,
+                file_data_migrated=True,
+                file_data_migrated_error=None,
+            )
+        )
+        await session.commit()
+
+    # Act
+    await migrate_compliance_finalisation()
+
+    # Assert
+    async with generate_async_session(pg_empty_config) as session:
+        crs = (
+            (
+                await session.execute(
+                    select(ComplianceRequestFinalisation).order_by(
+                        ComplianceRequestFinalisation.compliance_request_finalisation_id
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert len(crs) == 4
+        assert all(cr.file_data_migrated for cr in crs)
+        assert [bool(r.file_data_migrated_error) for r in crs] == [
+            False,
+            False,
+            False,
+            False,
+        ], "Matching whether there was a migration error"
+        assert [
+            compliance_finalisation_report_exists(settings.file_store_path, cr.compliance_request_finalisation_id)
+            for cr in crs
+        ] == [
+            False,
+            False,
+            True,
+            False,  # Marked as migrated
+        ], "Matching whether ANY data was put in the file store"
+
+        assert fetch_compliance_finalisation_report(settings.file_store_path, 3) == req_3_data
+
+
+async def test_migrate_old_compliance_record(pg_empty_config):
+    """Test that migrate_old_compliance_record handles a few seperate situations"""
+
+    # Arrange
+    from cactus_orchestrator.main import generate_app
+
+    settings = get_current_settings()
+    SQLAlchemyMiddleware(generate_app(settings), db_url=str(settings.orchestrator_database_url), commit_on_exit=False)
+
+    req_3_data = bytes([3, 3, 3])
+    req_4_data = bytes([4, 4, 4])
+    async with generate_async_session(pg_empty_config) as session:
+        user = generate_class_instance(User, optional_is_none=True)
+        run_group = generate_class_instance(RunGroup, optional_is_none=True, user=user)
+        session.add(user)
+        session.add(run_group)
+
+        await session.flush()
+
+        # record 1,2 - no artifact
+        session.add(
+            generate_class_instance(
+                ComplianceRecord,
+                seed=101,
+                compliance_record_id=1,
+                requester_id=user.user_id,
+                run_group_id=run_group.run_group_id,
+                file_data=bytes([]),
+                file_data_migrated=False,
+                file_data_migrated_error=None,
+            )
+        )
+        session.add(
+            generate_class_instance(
+                ComplianceRecord,
+                seed=202,
+                compliance_record_id=2,
+                requester_id=user.user_id,
+                run_group_id=run_group.run_group_id,
+                file_data=bytes([]),
+                file_data_migrated=True,
+                file_data_migrated_error=None,
+            )
+        )
+
+        # record 3,4 - has artifact
+        session.add(
+            generate_class_instance(
+                ComplianceRecord,
+                seed=303,
+                compliance_record_id=3,
+                requester_id=user.user_id,
+                run_group_id=run_group.run_group_id,
+                file_data=req_3_data,
+                file_data_migrated=False,
+                file_data_migrated_error=None,
+            )
+        )
+        session.add(
+            generate_class_instance(
+                ComplianceRecord,
+                seed=404,
+                compliance_record_id=4,
+                requester_id=user.user_id,
+                run_group_id=run_group.run_group_id,
+                file_data=req_4_data,
+                file_data_migrated=True,
+                file_data_migrated_error=None,
+            )
+        )
+        await session.commit()
+
+    # Act
+    await migrate_old_compliance_record()
+
+    # Assert
+    async with generate_async_session(pg_empty_config) as session:
+        crs = (
+            (await session.execute(select(ComplianceRecord).order_by(ComplianceRecord.compliance_record_id)))
+            .scalars()
+            .all()
+        )
+        assert len(crs) == 4
+        assert all(cr.file_data_migrated for cr in crs)
+        assert [bool(r.file_data_migrated_error) for r in crs] == [
+            False,
+            False,
+            False,
+            False,
+        ], "Matching whether there was a migration error"
