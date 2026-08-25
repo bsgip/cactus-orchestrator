@@ -1,6 +1,7 @@
 import logging
 import os
 from collections import defaultdict
+from pathlib import Path
 
 from pydantic import PostgresDsn
 from pydantic.fields import FieldInfo
@@ -52,6 +53,9 @@ class ImagesEnvSource(PydanticBaseSettingsSource):
 class CactusOrchestratorSettings(BaseSettings):
     # database
     orchestrator_database_url: PostgresDsn
+
+    # file store
+    file_store_path: Path  # The base directory that the orchestrator file store will read/write to
 
     # domain
     cactus_fqdn: str  # The Fully Qualified Domain Name under which this service is hosted. eg 'cactus.example.com'

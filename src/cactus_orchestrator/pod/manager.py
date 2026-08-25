@@ -276,7 +276,6 @@ def _create_pod_and_containers(
     pod_create_kwargs: dict[str, Any] = {
         "name": resources.pod_name,
         "Networks": {resources.shared_network_name: {}},
-        "userns": {"nsmode": "auto"},
         "labels": resources.pod_labels,
     }
     if routes.dev_host_port is not None:

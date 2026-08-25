@@ -23,7 +23,6 @@ from cactus_orchestrator.model import (
     Run,
     RunArtifact,
     RunGroup,
-    RunReportGeneration,
     RunStatus,
     User,
 )
@@ -306,28 +305,21 @@ async def update_runartifact_with_file_data(session: AsyncSession, run_artifact:
     await session.flush()
 
 
-async def update_run_with_runartifact_and_finalise(
+async def update_run_as_finalised(
     session: AsyncSession,
     run: Run,
-    run_artifact_id: int | None,
     run_status: RunStatus,
     finalised_at: datetime,
     all_criteria_met: bool | None,
     warnings: list[dict] | None,
 ) -> None:
-    run.run_artifact_id = run_artifact_id
+    run.run_artifact_id = None  # This is temporary while we migrate to file store - remove after migration
+    run.run_artifact_migrated = True  # This is temporary while we migrate to file store - remove after migration
     run.finalised_at = finalised_at
     run.run_status = run_status
     run.all_criteria_met = all_criteria_met
     run.warnings = warnings
     await session.flush()
-
-
-async def create_run_report_generation_record(session: AsyncSession, run_artifact_id: int) -> RunReportGeneration:
-    run_report_generation_record = RunReportGeneration(run_artifact_id=run_artifact_id)
-    session.add(run_report_generation_record)
-    await session.flush()
-    return run_report_generation_record
 
 
 async def select_user_run(session: AsyncSession, user_id: int, run_id: int) -> Run:
@@ -473,23 +465,24 @@ async def update_compliance_generation_record_with_file_data(
 
 
 async def finalise_compliance_request(
-    session: AsyncSession, update_by: int, compliance_request: ComplianceRequest, file_data: bytes
-) -> None:
+    session: AsyncSession, update_by: int, compliance_request: ComplianceRequest
+) -> ComplianceRequestFinalisation:
     finalisation_timestamp = datetime.now(UTC)
 
     compliance_request.updated_by = update_by
     compliance_request.updated_at = finalisation_timestamp
     compliance_request.status = ComplianceRequestStatus.FINALISED
 
-    await insert_compliance_request_finalisation(
+    new_finalisation = await insert_compliance_request_finalisation(
         session=session,
         compliance_request_id=compliance_request.compliance_request_id,
         created_at=finalisation_timestamp,
         created_by=update_by,
-        file_data=file_data,
     )
 
     await session.flush()
+
+    return new_finalisation
 
 
 async def select_compliance_request(
@@ -684,13 +677,14 @@ async def select_compliance_request_finalisation(
 
 
 async def insert_compliance_request_finalisation(
-    session: AsyncSession, compliance_request_id: int, created_at: datetime, created_by: int, file_data: bytes
+    session: AsyncSession, compliance_request_id: int, created_at: datetime, created_by: int
 ) -> ComplianceRequestFinalisation:
     compliance_request_finalisation = ComplianceRequestFinalisation(
         compliance_request_id=compliance_request_id,
         created_at=created_at,
         created_by=created_by,
-        file_data=file_data,
+        file_data=bytes([]),  # This is historical - file data is now stored on disk
+        file_data_migrated=True,  # This is temporary - file data is now stored on disk
     )
 
     session.add(compliance_request_finalisation)

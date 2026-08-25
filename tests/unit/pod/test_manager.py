@@ -324,7 +324,7 @@ async def test_create_pod_run_success(
     mock_client.volumes_create.assert_called_once_with(name=resources.volume_name)
     if dev_host_port is None:
         mock_client.pods_create.assert_has_calls(
-            [mock.call(name=resources.pod_name, Networks=mock.ANY, userns=mock.ANY, labels=resources.pod_labels)]
+            [mock.call(name=resources.pod_name, Networks=mock.ANY, labels=resources.pod_labels)]
         )
     else:
         mock_client.pods_create.assert_has_calls(
@@ -332,7 +332,6 @@ async def test_create_pod_run_success(
                 mock.call(
                     name=resources.pod_name,
                     Networks=mock.ANY,
-                    userns=mock.ANY,
                     labels=resources.pod_labels,
                     portmappings=[
                         {"host_ip": "127.0.0.1", "host_port": dev_host_port, "container_port": routes.exposed_port}

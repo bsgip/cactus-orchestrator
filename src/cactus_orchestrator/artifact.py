@@ -1,263 +1,134 @@
-import io
 import logging
-import zipfile
+import re
 from dataclasses import dataclass
-from datetime import UTC, datetime
 
-from cactus_runner.models import ReportingData
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from cactus_orchestrator.crud import (
-    create_run_report_generation_record,
+    select_deploy_release_at,
     select_playlist_position_label,
-    select_run_group_for_user,
-    select_user_from_run_group,
-    update_runartifact_with_file_data,
+    select_user_run_with_artifact,
 )
-from cactus_orchestrator.model import (
-    ComplianceRecord,
-    ComplianceRequest,
-    Run,
-    RunArtifact,
-    User,
+from cactus_orchestrator.filestore import (
+    fetch_run_finalised_file,
+    fetch_run_zip,
+    list_run_finalised_files,
+    run_report_exists,
+    run_zip_exists,
+    save_run_report,
 )
-from cactus_orchestrator.reporting.compliance import (
-    determine_compliance,
-    get_compliance_for_run_group,
-    get_procedure_mapping,
-)
-from cactus_orchestrator.reporting.compliance_reporting import pdf_report_as_bytes
-from cactus_orchestrator.reporting.deprecated_compliance_reporting import (
-    pdf_report_as_bytes as deprecated_pdf_report_as_bytes,
-)
-from cactus_orchestrator.reporting.generate import generate_pdf_report_v1
+from cactus_orchestrator.model import Run, User
+from cactus_orchestrator.reporting.generate import generate_pdf_report
+from cactus_orchestrator.settings import CactusOrchestratorSettings
 
 logger = logging.getLogger(__name__)
 
-PDF_GENERATION_ERRORS_FILE_NAME = "pdf-generation-errors.txt"
+ENVOY_DB_SCHEMA_PREFIX = "EnvoyDBSchema_"
+ENVOY_DB_SCHEMA_SUFFIX = ".dump"
+ENVOY_DB_SCHEMA_FILTER = ENVOY_DB_SCHEMA_PREFIX + "*" + ENVOY_DB_SCHEMA_SUFFIX
+
+ENVOY_DB_DATA_PREFIX = "EnvoyDB_"
+ENVOY_DB_DATA_SUFFIX = ".dump"
+ENVOY_DB_DATA_FILTER = ENVOY_DB_DATA_PREFIX + "*" + ENVOY_DB_DATA_SUFFIX
+
+REPORTING_DATA_PREFIX = "ReportingData_v"
+REPORTING_DATA_SUFFIX = ".json"
+REPORTING_DATA_FILTER = REPORTING_DATA_PREFIX + "*" + REPORTING_DATA_SUFFIX
 
 
-@dataclass
-class Artifact:
-    file_data: bytes
-    mime_type: str
+@dataclass(frozen=True)
+class RawReportingData:
+    raw_json: str
+    version: int
 
 
-async def generate_compliance_artifact(
-    requester: User,
-    compliance_request: ComplianceRequest,
-) -> Artifact:
-
-    compliance_classes, excluded_classes, class_to_test_procedures, compliance_runs = determine_compliance(
-        compliance_request=compliance_request
-    )
-
-    file_data = pdf_report_as_bytes(
-        requester=requester,
-        user=compliance_request.created_by_user,
-        request_id=f"{compliance_request.compliance_request_id}",
-        csip_aus_version=compliance_request.csip_aus_version,
-        finalisation_datetime=datetime.now(UTC),
-        compliance_id=compliance_request.compliance_request_id,
-        compliance_classes=compliance_classes,
-        excluded_compliance_classes=excluded_classes,
-        class_to_test_procedures=class_to_test_procedures,
-        compliance_runs=compliance_runs,
-    )
-
-    return Artifact(file_data=file_data, mime_type="application/pdf")
+@dataclass(frozen=True)
+class EnvoyDbDump:
+    schema_sql: str
+    data_sql: str
 
 
-async def generate_run_group_artifact(
-    session: AsyncSession, run_group_id: int, requester: User, compliance_record: ComplianceRecord
-) -> Artifact | None:
+def fetch_run_envoy_db(settings: CactusOrchestratorSettings, run_id: int) -> EnvoyDbDump | None:
+    """Fetches the envoy database dump returned by the runner during finalisation"""
+    schema_files = list_run_finalised_files(settings.file_store_path, run_id, filter=ENVOY_DB_SCHEMA_FILTER)
+    data_files = list_run_finalised_files(settings.file_store_path, run_id, filter=ENVOY_DB_DATA_FILTER)
 
-    # Get all the information required for the report
-    user = await select_user_from_run_group(session=session, run_group_id=run_group_id)
-    if user is None:
-        raise Exception()
-    run_group = await select_run_group_for_user(session=session, user_id=user.user_id, run_group_id=run_group_id)
-    if run_group is None:
-        raise Exception()
-
-    compliance_by_class = await get_compliance_for_run_group(
-        procedure_map=await get_procedure_mapping(session, run_group)
-    )
-
-    # Generate the report
-    file_data = deprecated_pdf_report_as_bytes(
-        requester=requester,
-        user=user,
-        name=run_group.name,
-        name_id=f"{run_group.run_group_id}",
-        name_type="Run Group",
-        csip_aus_version=run_group.csip_aus_version,
-        finalisation_datetime=compliance_record.created_at,
-        compliance_id=compliance_record.compliance_record_id,
-        compliance_by_class=compliance_by_class,
-    )
-
-    if file_data is None:
+    if len(schema_files) == 0 or len(data_files) == 0:
         return None
-    return Artifact(file_data=file_data, mime_type="application/pdf")
+
+    schema_sql = fetch_run_finalised_file(settings.file_store_path, run_id, schema_files[0])
+    data_sql = fetch_run_finalised_file(settings.file_store_path, run_id, data_files[0])
+
+    if schema_sql is None or data_sql is None:
+        return None
+
+    return EnvoyDbDump(schema_sql=schema_sql.decode(), data_sql=data_sql.decode())
 
 
-async def replace_pdf_in_zip_data(pdf_data: bytes, zip_data: bytes, pdf_filename_prefix: str) -> bytes:
-    """Replaces existing PDFs in `zip_data` with `pdf_data`, or adds the PDF if none is present.
+def fetch_run_reporting_data_json(settings: CactusOrchestratorSettings, run_id: int) -> RawReportingData | None:
+    """Fetches the reporting data JSON (string encoded) as returned by the runner during finalisation"""
+    reporting_data_files = list_run_finalised_files(settings.file_store_path, run_id, filter=REPORTING_DATA_FILTER)
+    if len(reporting_data_files) > 0:
+        data_file = reporting_data_files[0]
+        reporting_data = fetch_run_finalised_file(settings.file_store_path, run_id, data_file)
+        if reporting_data is not None:
+            raw_json = reporting_data.decode()
 
-    Any file whose name starts with `pdf_filename_prefix` and ends with `.pdf` is replaced.
-    If no such file exists (e.g. the runner no longer generates a PDF), the PDF is added as
-    `{pdf_filename_prefix}.pdf`.
-
-    Args:
-        pdf_data (bytes): the pdf data to inject
-        zip_data (bytes): a zip file as bytes
-        pdf_filename_prefix: prefix used to identify existing pdf files to replace
-
-    Returns:
-        bytes: a zip file as bytes with the pdf injected or replaced
-    """
-
-    zip_buffer = io.BytesIO()
-    pdf_was_written = False
-    with zipfile.ZipFile(zip_buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as updated_zip:
-        with zipfile.ZipFile(io.BytesIO(zip_data)) as original_zip:
-            for member in original_zip.namelist():
-                with updated_zip.open(member, "w") as member_handle:
-                    if member.startswith(pdf_filename_prefix) and member.endswith("pdf"):
-                        member_handle.write(pdf_data)
-                        pdf_was_written = True
-                    else:
-                        member_handle.write(original_zip.read(member))
-
-        if not pdf_was_written:
-            with updated_zip.open(f"{pdf_filename_prefix}.pdf", "w") as member_handle:
-                member_handle.write(pdf_data)
-
-    updated_zip_data: bytes = zip_buffer.getvalue()
-    return updated_zip_data
+            # There is a "version" attribute in the JSON but to save us loading the whole lot into memory
+            # lets look at the naming convention on the file
+            match_v = re.search(r"_v(\d+)_", data_file.name)
+            if match_v is not None:
+                version = int(match_v.group(1))
+            else:
+                raise Exception(f"Couldn't extract version from {reporting_data_files}")
+            return RawReportingData(raw_json, version)
+    return None
 
 
-def _add_text_file_to_zip_data(zip_data: bytes, filename: str, content: str) -> bytes:
-    """Adds (or replaces) a text file entry in a zip archive."""
-    zip_buffer = io.BytesIO()
-    with zipfile.ZipFile(zip_buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as updated_zip:
-        with zipfile.ZipFile(io.BytesIO(zip_data)) as original_zip:
-            for member in original_zip.namelist():
-                if member != filename:
-                    with updated_zip.open(member, "w") as member_handle:
-                        member_handle.write(original_zip.read(member))
-        updated_zip.writestr(filename, content)
-    return zip_buffer.getvalue()
+async def fetch_run_artifact_zip(
+    session: AsyncSession, user: User, settings: CactusOrchestratorSettings, run: Run, force_regenerate: bool = False
+) -> bytes | None:
+    """Fetches the report + finalisation data for a specific run. If there is no report on record - it will also
+    attempt to be generated. Can return None if there is nothing on record for the run
 
+    force_regenerate: If True - the PDF will be generated, updating any existing one"""
 
-async def regenerate_pdf_report(
-    file_data: bytes,
-    raw_reporting_data: str,
-    version: int,
-    playlist_info: str | None = None,
-    deploy_release_tag: str | None = None,
-) -> bytes:
-    """A pdf run report is generated from `reporting_data`, and replaces the existing
-    pdf stored in the `file_data` zip.
+    if not run_zip_exists(settings.file_store_path, run.run_id):
+        # There might be an un-migrated artifact
+        # This is all temporary - once fully migrated we should just return None here
+        if run.run_artifact_id is not None and not run.run_artifact_migrated:
+            return (await select_user_run_with_artifact(session, user.user_id, run.run_id)).run_artifact.file_data
+        return None
 
-    All other files in the file_data zip archive remain unchanged.
+    # If there is no run report data yet - it's time to generate one from the finalisation data
+    generation_errors: list[str] | None = None
+    if force_regenerate or not run_report_exists(settings.file_store_path, run.run_id):
+        # There should be a file with reporting data returned in the runner finalisation data
+        reporting_data = fetch_run_reporting_data_json(settings, run.run_id)
 
-    On PDF generation failure, a pdf-generation-errors.txt file is written into the zip
-    and the updated zip is returned (rather than raising), so the error is visible on download.
-
-    Args:
-        file_data (bytes): a zip archive containing a pdf run report (to be replaced)
-        raw_reporting_data (str): ReportingData as a json encoded string
-        version (int): the version of the reporting data in `raw_reporting_data`.
-        playlist_info (str | None): "Test N of M" label for playlist runs.
-        deploy_release_tag (str | None): the cactus-deploy release tag that was live for this run's pod
-            (Run.deploy_release_tag).
-    Returns:
-        bytes: the updated zip file data.
-    Raises:
-        ValueError if the reporting data cannot be parsed or the zip cannot be written.
-    """
-    try:
-        reporting_data = ReportingData.from_json(version, raw_reporting_data)
-    except Exception as exc:
-        msg = "Failed to convert json to ReportingData instance."
-        logger.error(msg, exc_info=exc)
-        raise ValueError(f"Artifact regeneration error: {msg}") from exc
-
-    pdf_generation_error: str | None = None
-    pdf_data: bytes | None = None
-
-    try:
-        if version == 1:
-            pdf_data = await generate_pdf_report_v1(
-                reporting_data=reporting_data, deploy_release_tag=deploy_release_tag, playlist_info=playlist_info
+        # Generate the pdf run report and save it.
+        # Only attempt generation if there is reporting data.
+        if reporting_data:
+            logger.info(
+                f"PDF Report for run {run.run_id} will be generated."
+                + f" Found v{reporting_data.version} set of {len(reporting_data.raw_json)} json chars."
             )
+            try:
+                playlist_info = await select_playlist_position_label(session, run)
+                deploy_release = await select_deploy_release_at(session, run.created_at)
+                pdf_file_data = await generate_pdf_report(
+                    raw_reporting_data=reporting_data.raw_json,
+                    raw_reporting_data_version=reporting_data.version,
+                    playlist_info=playlist_info,
+                    deploy_release_tag=deploy_release.release_tag if deploy_release else None,
+                )
+
+                save_run_report(settings.file_store_path, run.run_id, pdf_file_data)
+            except Exception as exc:
+                msg = f"Unable to generate run report for run {run.run_id}. Reason={exc}"
+                logger.error(msg, exc_info=exc)
+                generation_errors = [msg]
         else:
-            raise ValueError(f"Unknown version of reporting data ({version})")
-    except Exception as exc:
-        msg = "Failed to generate pdf report from reporting data."
-        logger.error(msg, exc_info=exc)
-        pdf_generation_error = f"{msg}\n{exc}"
+            logger.info(f"PDF Report for run {run.run_id} could not be generated - no reporting data in store.")
 
-    if pdf_data is None and pdf_generation_error is None:
-        pdf_generation_error = "PDF generation returned no data."
-        logger.error(pdf_generation_error)
-
-    if pdf_generation_error is not None:
-        return _add_text_file_to_zip_data(file_data, PDF_GENERATION_ERRORS_FILE_NAME, pdf_generation_error)
-
-    if pdf_data is not None:
-        try:
-            cactus_test_procedure_report_prefix = "CactusTestProcedureReport"
-            updated_zip_data = await replace_pdf_in_zip_data(
-                pdf_data=pdf_data, zip_data=file_data, pdf_filename_prefix=cactus_test_procedure_report_prefix
-            )
-        except Exception as exc:
-            msg = "Failed to replace pdf in archive."
-            logger.error(msg, exc_info=exc)
-            raise ValueError(f"Artifact regeneration error: {msg}") from exc
-
-    return updated_zip_data
-
-
-async def regenerate_run_artifact(
-    session: AsyncSession, run: Run, run_artifact: RunArtifact, deploy_release_tag: str | None = None
-) -> RunArtifact:
-    """Regenerates the RunArtifact.
-
-    - Uses the reporting data to (re)generate the run report.
-    - Replaces the run report in the file data of `run_artifact`.
-    - Updates the run artifact in the orchestrator database (to reflect the new file data).
-    - Adds an entry to the RunReportGeneration table to record the fact the report was regenerated.
-
-    Args:
-        session: A database session.
-        run (Run): The Run the artifact belongs to.
-        run_artifact (RunArtifact): The RunArtifact to update.
-        deploy_release_tag (str | None): the cactus-deploy release tag that was live for this run's pod
-            (Run.deploy_release_tag).
-    Returns:
-        RunArtifact: the updated RunArtifact
-    Raises:
-        ValueError: if regeneration of pdf report fails
-    """
-
-    playlist_info = await select_playlist_position_label(session, run)
-
-    # Callers (e.g. admin endpoint) guard reporting_data/version for None before calling: ignore
-    updated_zip_data = await regenerate_pdf_report(
-        file_data=run_artifact.file_data,
-        raw_reporting_data=run_artifact.reporting_data,  # ty: ignore[invalid-argument-type]
-        version=run_artifact.version,  # ty: ignore[invalid-argument-type]
-        playlist_info=playlist_info,
-        deploy_release_tag=deploy_release_tag,
-    )
-
-    # Update the file data
-    await update_runartifact_with_file_data(session=session, run_artifact=run_artifact, file_data=updated_zip_data)
-
-    # Record the successful regeneration
-    await create_run_report_generation_record(session=session, run_artifact_id=run_artifact.run_artifact_id)
-
-    return run_artifact
+    return fetch_run_zip(settings.file_store_path, run.run_id, generation_errors)

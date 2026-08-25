@@ -1,5 +1,9 @@
 import asyncio
+import io
 import logging
+import re
+import unicodedata
+import zipfile
 from collections.abc import AsyncIterator, Callable, Coroutine
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -10,7 +14,9 @@ from envoy.server.manager.time import utc_now
 from fastapi import FastAPI
 from fastapi_async_sqlalchemy import db
 from fastapi_utils.tasks import repeat_every
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload, undefer
 
 from cactus_orchestrator.api.run import finalise_run
 from cactus_orchestrator.crud import (
@@ -20,7 +26,15 @@ from cactus_orchestrator.crud import (
     select_run_for_group,
     update_run_run_status,
 )
-from cactus_orchestrator.model import Run, RunStatus
+from cactus_orchestrator.filestore import save_compliance_finalisation_report, save_run_finalisation, save_run_report
+from cactus_orchestrator.model import (
+    ComplianceRecord,
+    ComplianceRequestFinalisation,
+    Run,
+    RunGroup,
+    RunStatus,
+    User,
+)
 from cactus_orchestrator.pod.manager import destroy_pod_resources, ensure_images, fetch_running_pods
 from cactus_orchestrator.pod.models import PodResources, PodRoutes, RunningPod
 from cactus_orchestrator.settings import CactusOrchestratorSettings, get_current_settings
@@ -44,6 +58,7 @@ def is_maxlive_overtime(now: datetime, created_at: datetime, overtime_seconds: i
 
 
 async def finalize_teststack_runs(
+    settings: CactusOrchestratorSettings,
     session: AsyncSession,
     run: Run,
     runner_url: str,
@@ -59,12 +74,14 @@ async def finalize_teststack_runs(
                 if run_status == RunStatus.terminated:
                     await update_run_run_status(session, sibling.run_id, run_status, finalised_at)
                 else:
-                    await finalise_run(sibling, runner_url, session, run_status, finalised_at, comms_timeout_seconds)
+                    await finalise_run(
+                        settings, sibling, runner_url, session, run_status, finalised_at, comms_timeout_seconds
+                    )
     else:  # Single run
         if run_status == RunStatus.terminated:
             await update_run_run_status(session, run.run_id, run_status, finalised_at)
         else:
-            await finalise_run(run, runner_url, session, run_status, finalised_at, comms_timeout_seconds)
+            await finalise_run(settings, run, runner_url, session, run_status, finalised_at, comms_timeout_seconds)
 
 
 async def destroy_idle_pods(
@@ -112,6 +129,7 @@ async def destroy_idle_pods(
 
             try:
                 await finalize_teststack_runs(
+                    settings,
                     session,
                     run,
                     pod_routes.internal_base_url,
@@ -159,7 +177,7 @@ async def terminate_dead_pod_runs(
         now = datetime.now(UTC)
         pod_resources = PodResources.from_run(settings.podman_network, run)
         try:
-            await finalize_teststack_runs(session, run, "", RunStatus.terminated, now, comms_timeout_seconds)
+            await finalize_teststack_runs(settings, session, run, "", RunStatus.terminated, now, comms_timeout_seconds)
             await session.commit()
         except Exception as exc:
             logger.warning(
@@ -246,6 +264,198 @@ def generate_pulltask(pulltask_repeat_every_seconds: int) -> Callable[[], Corout
     return pulltask
 
 
+def safe_filename(name: str, max_length: int = 255, replacement: str = "_") -> str:
+    # Normalize unicode so accented chars decompose (é -> e + combining accent)
+    name = unicodedata.normalize("NFKD", name)
+    name = name.encode("ascii", "ignore").decode("ascii")  # drop non-ascii remnants
+
+    # Whitelist: only allow A-Z a-z 0-9 and hyphen; everything else -> underscore
+    name = re.sub(r"[^A-Za-z0-9\-]", replacement, name)
+
+    # Collapse repeated underscores
+    name = re.sub(r"_+", "_", name)
+
+    # Strip leading/trailing underscores and hyphens
+    name = name.strip("_-")
+
+    # Fallback if everything got stripped out
+    if not name:
+        name = "unnamed"
+
+    # Truncate to max_length
+    name = name[:max_length]
+
+    return name
+
+
+def remove_first_matching_file(zip_bytes: bytes, suffix: str) -> tuple[bytes, bytes | None]:
+    """
+    Remove the first file in a ZIP archive whose filename ends with `suffix`.
+
+    Args:
+        zip_bytes: The original ZIP archive as bytes.
+        suffix: Filename suffix to match against (e.g. ".txt").
+
+    Returns:
+        A tuple of:
+            - The re-encoded ZIP archive as bytes, with the matched file removed
+              (identical to the input if no match was found).
+            - The bytes of the removed file, or None if no file matched.
+    """
+    removed_bytes: bytes | None = None
+    removed_name: str | None = None
+
+    with zipfile.ZipFile(io.BytesIO(zip_bytes), "r") as src_zip:
+        # Find the first matching entry (by name), preserving original order.
+        for info in src_zip.infolist():
+            if info.filename.endswith(suffix):
+                removed_name = info.filename
+                removed_bytes = src_zip.read(info.filename)
+                break
+
+        out_buffer = io.BytesIO()
+        with zipfile.ZipFile(out_buffer, "w", compression=zipfile.ZIP_DEFLATED) as dst_zip:
+            for info in src_zip.infolist():
+                if info.filename == removed_name:
+                    continue
+                dst_zip.writestr(info, src_zip.read(info.filename))
+
+    return out_buffer.getvalue(), removed_bytes
+
+
+async def migrate_compliance_finalisation() -> None:
+    settings = get_current_settings()
+
+    logger.info(
+        f"Starting migrate_compliance_finalisation task - records to migrate into {settings.file_store_path.absolute()}"
+    )
+
+    while True:
+        try:
+            async with db():
+                session: AsyncSession = db.session
+                record = (
+                    await session.execute(
+                        select(ComplianceRequestFinalisation)
+                        .where(ComplianceRequestFinalisation.file_data_migrated.is_(False))
+                        .limit(1)
+                    )
+                ).scalar_one_or_none()
+                if record is None:
+                    break
+
+                # If there is no file data - nothing to migrate, move on
+                if not record.file_data:
+                    record.file_data_migrated_error = None
+                else:
+                    try:
+                        save_compliance_finalisation_report(
+                            settings.file_store_path,
+                            record.compliance_request_finalisation_id,
+                            record.file_data,
+                        )
+                        record.file_data_migrated_error = None
+                    except Exception as exc:
+                        record.file_data_migrated_error = str(exc)
+                record.file_data_migrated = True
+                await session.commit()
+
+        except Exception as exc:
+            logger.error("Failure migrating compliance finalisation - adding a delay", exc_info=exc)
+            await asyncio.sleep(1)
+        logger.info("Stopping migrate_run_compliance task")
+
+
+async def migrate_run_artifact() -> None:
+    settings = get_current_settings()
+
+    logger.info(f"Starting migrate_run_artifact task - records to migrate into {settings.file_store_path.absolute()}")
+
+    while True:
+        try:
+            async with db():
+                session: AsyncSession = db.session
+                run = (
+                    await session.execute(
+                        select(Run)
+                        .where(Run.run_artifact_migrated.is_(False))
+                        .options(selectinload(Run.run_artifact))
+                        .limit(1)
+                    )
+                ).scalar_one_or_none()
+                if run is None:
+                    break
+
+                # If there is no run artifact - nothing to migrate, move on
+                if run.run_artifact_id is None:
+                    run.run_artifact_migrated_error = None
+                else:
+                    try:
+                        archive_bytes, pdf_bytes = remove_first_matching_file(run.run_artifact.file_data, ".pdf")
+                        save_run_finalisation(settings.file_store_path, run.run_id, archive_bytes)
+                        if pdf_bytes is not None:
+                            save_run_report(settings.file_store_path, run.run_id, pdf_bytes)
+                        run.run_artifact_migrated_error = None
+                    except Exception as exc:
+                        run.run_artifact_migrated_error = str(exc)
+                run.run_artifact_migrated = True
+                await session.commit()
+
+        except Exception as exc:
+            logger.error("Failure migrating run - adding a delay", exc_info=exc)
+            await asyncio.sleep(1)
+        logger.info("Stopping migrate_run_artifact task")
+
+
+async def migrate_old_compliance_record() -> None:
+    """TODO: Delete this after migration completed"""
+    settings = get_current_settings()
+    base_dir = settings.file_store_path / "deprecated-compliance-records"
+    base_dir.mkdir(parents=True, exist_ok=True)
+
+    logger.info(f"Starting migrate_old_compliance_record task - records to migrate into {base_dir.absolute()}")
+    while True:
+        try:
+            async with db():
+                session: AsyncSession = db.session
+                db_record = (
+                    (
+                        await session.execute(
+                            select(ComplianceRecord, RunGroup.name, User.user_name)
+                            .join(RunGroup, onclause=ComplianceRecord.run_group_id == RunGroup.run_group_id)
+                            .join(User, onclause=ComplianceRecord.requester_id == User.user_id)
+                            .where(ComplianceRecord.file_data_migrated.is_(False))
+                            .options(undefer(ComplianceRecord.file_data))
+                            .limit(1)
+                        )
+                    )
+                    .tuples()
+                    .one_or_none()
+                )
+                if db_record is None:
+                    break
+                record, run_group_name, user_name = db_record
+
+                # Try and migrate to a subdirectory
+                try:
+                    file_path = base_dir / (
+                        safe_filename(f"{user_name}_{run_group_name}_{record.compliance_record_id}") + ".pdf"
+                    )
+
+                    with open(file_path, "wb") as fp:
+                        fp.write(record.file_data)
+
+                except Exception as exc:
+                    record.file_data_migrated_error = str(exc)
+                record.file_data_migrated = True
+                await session.commit()
+
+        except Exception as exc:
+            logger.error("Failure migrating old compliance - adding a delay", exc_info=exc)
+            await asyncio.sleep(1)
+    logger.info("Stopping migrate_old_compliance_record task")
+
+
 _task_references: set[asyncio.Task] = set()
 
 
@@ -265,6 +475,11 @@ async def lifespan(app: FastAPI, settings: CactusOrchestratorSettings) -> AsyncI
 
         pulltask = generate_pulltask(settings.pulltask_repeat_every_seconds)
         _task_references.add(asyncio.create_task(pulltask()))
+
+        # Temporary migrations
+        _task_references.add(asyncio.create_task(migrate_old_compliance_record()))
+        _task_references.add(asyncio.create_task(migrate_compliance_finalisation()))
+        _task_references.add(asyncio.create_task(migrate_run_artifact()))
 
     yield  # type: ignore
 

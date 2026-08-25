@@ -1,5 +1,4 @@
 import io
-import json
 import logging
 import zipfile
 from datetime import UTC, datetime
@@ -42,7 +41,6 @@ from cryptography import x509
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi_async_sqlalchemy import db
 from fastapi_pagination import Page, paginate
-from sqlalchemy.exc import NoResultFound
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from cactus_orchestrator.api.common import (
@@ -53,36 +51,33 @@ from cactus_orchestrator.api.common import (
     select_user_run_group_or_raise,
     select_user_run_group_run_or_raise,
 )
-from cactus_orchestrator.artifact import PDF_GENERATION_ERRORS_FILE_NAME, regenerate_pdf_report
+from cactus_orchestrator.artifact import fetch_run_artifact_zip
 from cactus_orchestrator.auth import AuthPerm, UserContext, jwt_validator
 from cactus_orchestrator.chart import generate_power_limit_chart
 from cactus_orchestrator.crud import (
     ACTIVE_RUN_STATUSES,
-    create_runartifact,
     delete_runs,
     delete_upcoming_playlist_runs,
     insert_playlist_runs,
     insert_playlist_tail_runs,
     insert_run_for_run_group,
-    select_deploy_release_at,
     select_next_playlist_run,
     select_passed_runs_for_user,
-    select_playlist_position_label,
     select_playlist_runs,
     select_playlist_runs_for_update,
     select_playlist_runs_with_status,
-    select_run_group_for_user,
     select_runs_for_group,
-    select_user_run_with_artifact,
     select_user_runs_with_artifacts,
+    update_run_as_finalised,
     update_run_run_status,
-    update_run_with_runartifact_and_finalise,
-    update_runartifact_with_file_data,
 )
-from cactus_orchestrator.model import Run, RunArtifact, RunGroup, RunStatus, User
+from cactus_orchestrator.filestore import (
+    save_run_finalisation,
+)
+from cactus_orchestrator.model import Run, RunGroup, RunStatus, User
 from cactus_orchestrator.pod.manager import create_pod_run, destroy_pod_resources, ensure_images
 from cactus_orchestrator.pod.models import PodPKI, PodResources, PodRoutes
-from cactus_orchestrator.settings import CactusOrchestratorError, get_current_settings
+from cactus_orchestrator.settings import CactusOrchestratorError, CactusOrchestratorSettings, get_current_settings
 
 logger = logging.getLogger(__name__)
 
@@ -90,58 +85,65 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-async def get_run_artifact_response_for_user(user: User, run_id: int) -> Response:
-    # get run
-    try:
-        run = await select_user_run_with_artifact(db.session, user.user_id, run_id)
-    except NoResultFound as err:
-        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Run does not exist.") from err
+def _build_run_request(run: Run, run_group: RunGroup, user: User) -> RunRequest:
+    """Build the RunRequest for a specific run - used both at init and at each playlist advancement."""
+    if run_group.certificate_pem is None:
+        raise CactusOrchestratorError("RunGroup certificate must be set before building a RunRequest")
+    test_procedure_id = TestProcedureId(run.testprocedure_id)
+    yaml_definition = get_yaml_contents(test_procedure_id)
+    return RunRequest(
+        run_id=str(run.run_id),
+        test_definition=TestDefinition(test_procedure_id=test_procedure_id, yaml_definition=yaml_definition),
+        run_group=RunRequestRunGroup(
+            run_group_id=str(run_group.run_group_id),
+            name=run_group.name,
+            csip_aus_version=CSIPAusVersion(run_group.csip_aus_version),
+            test_certificates=TestCertificates(
+                aggregator=None if run_group.is_device_cert else run_group.certificate_pem.decode(),
+                device=run_group.certificate_pem.decode() if run_group.is_device_cert else None,
+            ),
+        ),
+        test_config=TestConfig(
+            pen=user.pen,
+            subscription_domain=user.subscription_domain,
+            is_static_url=run_group.is_static_uri,
+        ),
+        test_user=TestUser(user_id=str(user.user_id), name=user.user_name or user.subject_id),
+    )
 
-    if run.run_artifact is None:
-        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="RunArtifact does not exist.")
 
-    artifact = run.run_artifact
-    try:
-        names = zipfile.ZipFile(io.BytesIO(artifact.file_data)).namelist()
-    except zipfile.BadZipFile:
-        logger.error(f"Run {run_id} artifact is not a valid zip file")
-        names = []
-    needs_pdf = not any(n.startswith("CactusTestProcedureReport") and n.endswith(".pdf") for n in names)
-    has_error_file = PDF_GENERATION_ERRORS_FILE_NAME in names
-    if needs_pdf or has_error_file:
-        if artifact.reporting_data is None or artifact.version is None:
-            logger.warning(f"Run {run_id} artifact is missing a PDF and has no reporting data — cannot generate")
-        else:
-            try:
-                playlist_info = await select_playlist_position_label(db.session, run)
-                deploy_release = await select_deploy_release_at(db.session, run.created_at)
-                updated = await regenerate_pdf_report(
-                    file_data=artifact.file_data,
-                    raw_reporting_data=artifact.reporting_data,
-                    version=artifact.version,
-                    playlist_info=playlist_info,
-                    deploy_release_tag=deploy_release.release_tag if deploy_release else None,
-                )
-                await update_runartifact_with_file_data(db.session, artifact, updated)
-                await db.session.commit()
-            except Exception as exc:
-                logger.error(f"Failed to generate missing PDF for run {run_id}", exc_info=exc)
+def is_all_criteria_met(runner_status: RunnerStatus | None) -> bool | None:
 
-    run_group_name = ""
-    run_group = await select_run_group_for_user(db.session, user.user_id, run.run_group_id)
-    if run_group is not None:
-        run_group_name = run_group.name
+    if runner_status is None:
+        return None
 
+    criteria = runner_status.criteria if runner_status.criteria is not None else []
+    request_history = runner_status.request_history if runner_status.request_history is not None else []
+
+    return all(c.success for c in criteria) and all(not bool(r.body_xml_errors) for r in request_history)
+
+
+def get_run_warnings(runner_status: RunnerStatus | None) -> list[dict] | None:
+
+    if runner_status is None:
+        return None
+
+    return [w.to_dict() for w in runner_status.warnings]
+
+
+def generate_run_zip_response_for_user(user: User, run: Run, run_group: RunGroup, zip_data: bytes) -> Response:
+    """Generates a Response containing the ZIP data but also annotated with various known headers containing extra
+    metadata about the run itself"""
     return Response(
-        content=artifact.file_data,
+        content=zip_data,
         headers={
             HEADER_USER_NAME: user.user_name or user.subject_id,
             HEADER_TEST_ID: str(run.testprocedure_id),
             HEADER_RUN_ID: str(run.run_id),
             HEADER_GROUP_ID: str(run.run_group_id),
-            HEADER_GROUP_NAME: run_group_name,
+            HEADER_GROUP_NAME: run_group.name,
         },
-        media_type=f"application/{artifact.compression}",
+        media_type="application/zip",
     )
 
 
@@ -431,56 +433,22 @@ async def start_run(
     return StartRunResponse(test_url=envoy_dcap_uri(pod_routes))
 
 
-def _build_run_request(run: Run, run_group: RunGroup, user: User) -> RunRequest:
-    """Build the RunRequest for a specific run - used both at init and at each playlist advancement."""
-    if run_group.certificate_pem is None:
-        raise CactusOrchestratorError("RunGroup certificate must be set before building a RunRequest")
-    test_procedure_id = TestProcedureId(run.testprocedure_id)
-    yaml_definition = get_yaml_contents(test_procedure_id)
-    return RunRequest(
-        run_id=str(run.run_id),
-        test_definition=TestDefinition(test_procedure_id=test_procedure_id, yaml_definition=yaml_definition),
-        run_group=RunRequestRunGroup(
-            run_group_id=str(run_group.run_group_id),
-            name=run_group.name,
-            csip_aus_version=CSIPAusVersion(run_group.csip_aus_version),
-            test_certificates=TestCertificates(
-                aggregator=None if run_group.is_device_cert else run_group.certificate_pem.decode(),
-                device=run_group.certificate_pem.decode() if run_group.is_device_cert else None,
-            ),
-        ),
-        test_config=TestConfig(
-            pen=user.pen,
-            subscription_domain=user.subscription_domain,
-            is_static_url=run_group.is_static_uri,
-        ),
-        test_user=TestUser(user_id=str(user.user_id), name=user.user_name or user.subject_id),
-    )
-
-
-def is_all_criteria_met(runner_status: RunnerStatus | None) -> bool | None:
-
-    if runner_status is None:
-        return None
-
-    criteria = runner_status.criteria if runner_status.criteria is not None else []
-    request_history = runner_status.request_history if runner_status.request_history is not None else []
-
-    return all(c.success for c in criteria) and all(not bool(r.body_xml_errors) for r in request_history)
-
-
-def get_run_warnings(runner_status: RunnerStatus | None) -> list[dict] | None:
-
-    if runner_status is None:
-        return None
-
-    return [w.to_dict() for w in runner_status.warnings]
-
-
 async def finalise_run(
-    run: Run, url: str, session: AsyncSession, run_status: RunStatus, finalised_at: datetime, comms_timeout_seconds: int
-) -> RunArtifact | None:
+    settings: CactusOrchestratorSettings,
+    run: Run,
+    url: str,
+    session: AsyncSession,
+    run_status: RunStatus,
+    finalised_at: datetime,
+    comms_timeout_seconds: int,
+) -> None:
+    """Tells a specific run's runner to finalise the test, fetching all output data and updating the run record
+    that it is now finalised. Does NOT generate the report data.
 
+    All artifacts from the run will be persisted to the file store / run record itself (as appropriate)
+
+    Most errors will be handled gracefully by degrading the stored data in an attempt to ensure the DB record
+    is updated."""
     async with ClientSession(base_url=url, timeout=ClientTimeout(comms_timeout_seconds)) as s:
         # We need our final status to evaluate whether all criteria are passing
         # But we don't want to block the finalisation if there's an issue fetching it
@@ -497,66 +465,17 @@ async def finalise_run(
         except Exception as exc:
             logger.error(f"Error finalizing run {run.run_id}", exc_info=exc)
             file_data = None
-        compression = "zip"  # TODO: should also return compression or allow access to response header
 
     all_criteria_met = is_all_criteria_met(final_status)
     warnings = get_run_warnings(final_status)
 
     # If we were able to finalize - save the data. If not, we will still shut it down - people will be forced to redo
+    #
+    # NOTE - There is no PDF report generated/saved at this point. If the user goes to download it, then we'll generate
     if file_data:
-        # We (potentially) passed the reporting data via the zip file.
-        # Extract it from the zip and store it in the database.
-        reporting_data = None
-        reporting_data_version = None
+        save_run_finalisation(settings.file_store_path, run.run_id, file_data)
 
-        zip_file = zipfile.ZipFile(io.BytesIO(file_data))
-        for name in zip_file.namelist():
-            # There should 0 or 1 file that starts with reporting data
-            if name.startswith("ReportingData_v"):
-                reporting_data = zip_file.read(name).decode()
-                break
-
-        # Generate the pdf run report in the orchestrator and inject it into the zip.
-        # Only attempt generation if there is reporting data.
-        # Note: all other files in the run artifact remain unaffected.
-        if reporting_data:
-            try:
-                reporting_data_version = json.loads(reporting_data)["version"]
-                playlist_info = await select_playlist_position_label(session, run)
-                deploy_release = await select_deploy_release_at(session, run.created_at)
-                file_data = await regenerate_pdf_report(
-                    file_data=file_data,
-                    raw_reporting_data=reporting_data,
-                    version=reporting_data_version,
-                    playlist_info=playlist_info,
-                    deploy_release_tag=deploy_release.release_tag if deploy_release else None,
-                )
-            except Exception as exc:
-                msg = f"Unable to regenerate run report for run {run.run_id}. Reason={exc}"
-                logger.error(msg)
-
-        artifact = await create_runartifact(
-            session=session,
-            compression=compression,
-            file_data=file_data,
-            reporting_data=reporting_data,
-            reporting_data_version=reporting_data_version,
-        )
-    else:
-        artifact = None
-
-    await update_run_with_runartifact_and_finalise(
-        session,
-        run,
-        None if artifact is None else artifact.run_artifact_id,
-        run_status,
-        finalised_at,
-        all_criteria_met,
-        warnings,
-    )
-    await session.commit()
-
-    return artifact
+    await update_run_as_finalised(session, run, run_status, finalised_at, all_criteria_met, warnings)
 
 
 @router.get(uri.Run, status_code=HTTPStatus.OK)
@@ -658,8 +577,9 @@ async def finalise_run_and_teardown_teststack(  # noqa: C901
     if run.run_status in ACTIVE_RUN_STATUSES:
         settings = get_current_settings()
 
-        # finalise
-        artifact = await finalise_run(
+        # finalise - this means telling the runner to stop and fetching all artifacts from the runner service
+        await finalise_run(
+            settings,
             run,
             pod_routes.internal_base_url,
             db.session,
@@ -696,17 +616,12 @@ async def finalise_run_and_teardown_teststack(  # noqa: C901
 
         if should_teardown:
             await destroy_pod_resources(settings.podman_socket, pod_resources)
-    else:
-        artifact = run.run_artifact
 
-    if artifact is None:
+    zip_bytes = await fetch_run_artifact_zip(db.session, user, settings, run)
+    if zip_bytes is None:
         return Response(status_code=HTTPStatus.NO_CONTENT)
     else:
-        return Response(
-            status_code=HTTPStatus.OK,
-            content=artifact.file_data,
-            media_type=f"application/{artifact.compression}",
-        )
+        return generate_run_zip_response_for_user(user, run, run_group, zip_bytes)
 
 
 @router.post(uri.RunPlaylistFinalise, status_code=HTTPStatus.OK)
@@ -723,7 +638,7 @@ async def finalise_playlist(
 
     Returns the artifact from the current test if available.
     """
-    _, run_group, run = await select_user_run_group_run_or_raise(db.session, user_context, run_id)
+    user, run_group, run = await select_user_run_group_run_or_raise(db.session, user_context, run_id)
 
     if not run.playlist_execution_id:
         raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail="Run is not part of a playlist")
@@ -742,7 +657,8 @@ async def finalise_playlist(
 
     # Finalize current test if it's active
     if run.run_status in ACTIVE_RUN_STATUSES:
-        artifact = await finalise_run(
+        await finalise_run(
+            settings,
             run,
             pod_routes.internal_base_url,
             db.session,
@@ -750,8 +666,6 @@ async def finalise_playlist(
             datetime.now(UTC),
             settings.comms_timeout_seconds,
         )
-    else:
-        artifact = run.run_artifact
 
     # Mark all remaining initialised runs as skipped (lock rows so a playlist update can't interleave)
     playlist_runs = await select_playlist_runs_for_update(db.session, run.playlist_execution_id)
@@ -764,14 +678,12 @@ async def finalise_playlist(
     await destroy_pod_resources(settings.podman_socket, pod_resources)
     logger.info(f"Playlist skipped: run {run.run_id} finalized, remaining runs marked as skipped")
 
-    if artifact is None:
+    zip_bytes = await fetch_run_artifact_zip(db.session, user, settings, run)
+
+    if zip_bytes is None:
         return Response(status_code=HTTPStatus.NO_CONTENT)
     else:
-        return Response(
-            status_code=HTTPStatus.OK,
-            content=artifact.file_data,
-            media_type=f"application/{artifact.compression}",
-        )
+        return generate_run_zip_response_for_user(user, run, run_group, zip_bytes)
 
 
 @router.post(uri.RunPlaylistUpdate, status_code=HTTPStatus.OK)
@@ -845,8 +757,14 @@ async def get_run_artifact(
 ) -> Response:
     """Downloads a raw binary stream of the run artifacts"""
 
-    user = await select_user_or_raise(db.session, user_context)
-    return await get_run_artifact_response_for_user(user, run_id)
+    user, run_group, run = await select_user_run_group_run_or_raise(db.session, user_context, run_id)
+    settings = get_current_settings()
+
+    zip_data = await fetch_run_artifact_zip(db.session, user, settings, run)
+    if zip_data is None:
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Zip data does not exist.")
+
+    return generate_run_zip_response_for_user(user, run, run_group, zip_data)
 
 
 @router.get(uri.RunPowerLimitChart, status_code=HTTPStatus.OK)
@@ -856,18 +774,10 @@ async def get_run_power_limit_chart(
     video_start_seconds: float | None = Query(None),
 ) -> Response:
     """Generates and returns a standalone HTML power limit chart for the run's envoy DB artifact."""
-    user = await select_user_or_raise(db.session, user_context)
-
+    _, _, run = await select_user_run_group_run_or_raise(db.session, user_context, run_id)
+    settings = get_current_settings()
     try:
-        run = await select_user_run_with_artifact(db.session, user.user_id, run_id)
-    except NoResultFound as err:
-        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Run does not exist.") from err
-
-    if run.run_artifact is None:
-        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="RunArtifact does not exist.")
-
-    try:
-        html = await generate_power_limit_chart(run.run_artifact, video_start_seconds=video_start_seconds)
+        html = await generate_power_limit_chart(settings, run.run_id, video_start_seconds=video_start_seconds)
     except ValueError as err:
         logger.warning(f"power_limit_chart: generation failed for {run_id=}: {err}")
         raise HTTPException(status_code=HTTPStatus.CONFLICT, detail=f"Chart generation failed: {err}") from err
@@ -891,7 +801,7 @@ async def get_run_artifacts_multiple(
     Each run's artifact (itself a zip) is extracted and placed into a folder named by run_id."""
 
     user = await select_user_or_raise(db.session, user_context)
-
+    settings = get_current_settings()
     runs = await select_user_runs_with_artifacts(db.session, user.user_id, request.run_ids)
 
     if not runs:
@@ -900,11 +810,12 @@ async def get_run_artifacts_multiple(
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as outer_zf:
         for run in runs:
-            if run.run_artifact is None:
+            run_zip_bytes = await fetch_run_artifact_zip(db.session, user, settings, run)
+            if run_zip_bytes is None:
                 continue
             folder = f"run_{run.run_id}"
             try:
-                inner_zip = zipfile.ZipFile(io.BytesIO(run.run_artifact.file_data))
+                inner_zip = zipfile.ZipFile(io.BytesIO(run_zip_bytes))
                 for entry in inner_zip.namelist():
                     outer_zf.writestr(f"{folder}/{entry}", inner_zip.read(entry))
             except zipfile.BadZipFile:

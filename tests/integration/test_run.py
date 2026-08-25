@@ -1,8 +1,6 @@
-import io
 import os
 import shutil
 import tempfile
-import zipfile
 from collections.abc import Generator
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -42,12 +40,25 @@ from cactus_schema.runner import (
     WarningEntry,
 )
 from cactus_test_definitions.client import TestProcedureId
+from httpx import AsyncClient
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import selectinload
 
 from cactus_orchestrator.api.run import finalise_run, get_run_warnings, is_all_criteria_met
+from cactus_orchestrator.artifact import REPORTING_DATA_PREFIX, REPORTING_DATA_SUFFIX
+from cactus_orchestrator.filestore import (
+    ERROR_FILE_NAME,
+    REPORT_FILE_NAME,
+    fetch_run_zip,
+    run_report_exists,
+    run_zip_exists,
+)
 from cactus_orchestrator.model import Run, RunArtifact, RunGroup, RunStatus, User
 from cactus_orchestrator.pod.models import generate_dynamic_uri_external_host, generate_static_uri_external_host
+from cactus_orchestrator.settings import get_current_settings
+from tests.utils.filestore import TEST_FINALISATION_DATA, load_file_store_for_test
+from tests.utils.pdf import assert_pdf_file
+from tests.utils.zip import assert_zips_equal, get_zip_arcfile_contents
 
 
 @dataclass
@@ -126,7 +137,9 @@ def zip_file_data(reporting_data_json, reporting_data_version) -> bytes:
 
         # Create reporting data json file
         if json_reporting_data is not None:
-            file_path = archive_dir / f"ReportingData_v{reporting_data_version}.json"
+            file_path = (
+                archive_dir / f"{REPORTING_DATA_PREFIX}{reporting_data_version}_123_test_{REPORTING_DATA_SUFFIX}"
+            )
             with open(file_path, "w") as f:
                 f.write(json_reporting_data)
 
@@ -800,11 +813,10 @@ def test_get_run_warnings(runner_status: RunnerStatus | None):
     ],
 )
 @pytest.mark.asyncio
-@patch("cactus_orchestrator.api.run.regenerate_pdf_report")
 async def test_finalise_run_creates_run_artifact_and_updates_run(
-    regenerate_mock, pg_base_config, mocked_pod: MockedPod, zip_file_data: bytes, runner_status, all_criteria_met
+    pg_base_config, mocked_pod: MockedPod, zip_file_data: bytes, runner_status, all_criteria_met
 ):
-    """Finalize correctly updates the DB with data requested from the runner"""
+    """Finalize correctly updates the file store with data requested from the runner"""
     # Arrange
     finalize_data = zip_file_data
 
@@ -812,37 +824,35 @@ async def test_finalise_run_creates_run_artifact_and_updates_run(
     mocked_pod.finalize.return_value = finalize_data
     finalise_time = datetime(2023, 4, 5, tzinfo=UTC)
     timeout_seconds = 10
-    regenerate_mock.return_value = finalize_data
+    settings = get_current_settings()
+    assert not run_zip_exists(settings.file_store_path, 1), "No data should exist initially"
 
     # Act
     async with generate_async_session(pg_base_config) as session:
         run = (await session.execute(select(Run).where(Run.run_id == 1))).scalar_one()
-        result = await finalise_run(
-            run, "http://mockurl", session, RunStatus.finalised_by_client, finalise_time, timeout_seconds
+        await finalise_run(
+            settings, run, "http://mockurl", session, RunStatus.finalised_by_client, finalise_time, timeout_seconds
         )
-        assert isinstance(result, RunArtifact)
+        await session.commit()
 
     # Assert
     mocked_pod.status.assert_called_once()
     mocked_pod.finalize.assert_called_once()
-    regenerate_mock.assert_called_once()
+
+    assert run_zip_exists(settings.file_store_path, 1), "The reporting data should be created"
+    assert not run_report_exists(settings.file_store_path, 1), "The report should be generated elsewhere"
 
     async with generate_async_session(pg_base_config) as session:
-        run = (
-            await session.execute(select(Run).where(Run.run_id == 1).options(selectinload(Run.run_artifact)))
-        ).scalar_one()
+        run = (await session.execute(select(Run).where(Run.run_id == 1))).scalar_one()
 
         assert run.finalised_at == finalise_time
         assert run.run_status == RunStatus.finalised_by_client
         assert run.all_criteria_met is all_criteria_met
         assert run.warnings == [w.to_dict() for w in runner_status.warnings]
-        assert run.run_artifact.file_data == finalize_data
 
 
 @pytest.mark.asyncio
-@patch("cactus_orchestrator.api.run.regenerate_pdf_report")
 async def test_finalise_run_handles_runner_finalize_failure(
-    regenerate_mock,
     pg_base_config,
     mocked_pod: MockedPod,
 ):
@@ -856,88 +866,80 @@ async def test_finalise_run_handles_runner_finalize_failure(
     mocked_pod.finalize.side_effect = Exception("mock exception")
     finalise_time = datetime(2023, 4, 5, tzinfo=UTC)
     timeout_seconds = 10
-    regenerate_mock.return_value = b""
+    settings = get_current_settings()
+    assert not run_zip_exists(settings.file_store_path, 1), "No data should exist initially"
 
     # Act
     async with generate_async_session(pg_base_config) as session:
         run = (await session.execute(select(Run).where(Run.run_id == 1))).scalar_one()
-        result = await finalise_run(
-            run, "http://mockurl", session, RunStatus.finalised_by_client, finalise_time, timeout_seconds
+        await finalise_run(
+            settings, run, "http://mockurl", session, RunStatus.finalised_by_client, finalise_time, timeout_seconds
         )
-        assert result is None
+        await session.commit()
 
     # Assert
     mocked_pod.status.assert_called_once()
     mocked_pod.finalize.assert_called_once()
+    assert not run_zip_exists(settings.file_store_path, 1), "No run data saved as we got nothing from finalize"
     async with generate_async_session(pg_base_config) as session:
-        run = (
-            await session.execute(select(Run).where(Run.run_id == 1).options(selectinload(Run.run_artifact)))
-        ).scalar_one()
+        run = (await session.execute(select(Run).where(Run.run_id == 1))).scalar_one()
 
         assert run.finalised_at == finalise_time
         assert run.run_status == RunStatus.finalised_by_client
         assert run.all_criteria_met is True
-        assert run.run_artifact is None
 
 
 @pytest.mark.asyncio
-@patch("cactus_orchestrator.api.run.regenerate_pdf_report")
-async def test_finalise_run_handles_runner_status_failure(
-    regenerate_mock,
-    pg_base_config,
-    mocked_pod: MockedPod,
-    zip_file_data: bytes,
-):
+async def test_finalise_run_handles_runner_status_failure(pg_base_config, mocked_pod: MockedPod, zip_file_data: bytes):
     """Finalize will still proceed even if the runner status cannot be determined"""
     # Arrange
-    finalize_data = zip_file_data
 
     mocked_pod.status.side_effect = Exception("my mock exception")
-    mocked_pod.finalize.return_value = finalize_data
+    mocked_pod.finalize.return_value = zip_file_data
     finalise_time = datetime(2023, 4, 5, tzinfo=UTC)
     timeout_seconds = 10
-    regenerate_mock.return_value = finalize_data
+    settings = get_current_settings()
+    assert not run_zip_exists(settings.file_store_path, 1), "No data should exist initially"
 
     # Act
     async with generate_async_session(pg_base_config) as session:
         run = (await session.execute(select(Run).where(Run.run_id == 1))).scalar_one()
-        result = await finalise_run(
-            run, "http://mockurl", session, RunStatus.finalised_by_client, finalise_time, timeout_seconds
+        await finalise_run(
+            settings, run, "http://mockurl", session, RunStatus.finalised_by_client, finalise_time, timeout_seconds
         )
-        assert isinstance(result, RunArtifact)
+        await session.commit()
 
     # Assert
     mocked_pod.status.assert_called_once()
     mocked_pod.finalize.assert_called_once()
     async with generate_async_session(pg_base_config) as session:
-        run = (
-            await session.execute(select(Run).where(Run.run_id == 1).options(selectinload(Run.run_artifact)))
-        ).scalar_one()
+        run = (await session.execute(select(Run).where(Run.run_id == 1))).scalar_one()
 
         assert run.finalised_at == finalise_time
         assert run.run_status == RunStatus.finalised_by_client
         assert run.all_criteria_met is None
         assert run.warnings is None
-        assert run.run_artifact.file_data == finalize_data
+
+    assert run_zip_exists(settings.file_store_path, 1), "Run ZIP should've saved"
+    assert_zips_equal(zip_file_data, fetch_run_zip(settings.file_store_path, 1), ignore_arcnames={ERROR_FILE_NAME})
 
 
 @pytest.mark.asyncio
-@patch("cactus_orchestrator.api.run.regenerate_pdf_report")
 async def test_finalise_run_and_teardown_teststack_success(
-    regenerate_mock, client, pg_base_config, mocked_pod, zip_file_data, valid_jwt_user1
+    client: AsyncClient, pg_base_config, mocked_pod, zip_file_data, valid_jwt_user1
 ):
     # Arrange
-    finalize_data = zip_file_data
-    mocked_pod.finalize.return_value = finalize_data
+    mocked_pod.finalize.return_value = zip_file_data
     mocked_pod.status.return_value = generate_class_instance(RunnerStatus, step_status={})
-    regenerate_mock.return_value = finalize_data
+    settings = get_current_settings()
 
     # Act
     response = await client.post("/run/1/finalise", headers={"Authorization": f"Bearer {valid_jwt_user1}"})
 
     # Assert
     assert response.status_code == 200
-    assert response.content == finalize_data
+    assert_zips_equal(zip_file_data, response.content, ignore_arcnames={REPORT_FILE_NAME})
+    assert_pdf_file(get_zip_arcfile_contents(response.content, REPORT_FILE_NAME))
 
     mocked_pod.finalize.assert_called_once()
     mocked_pod.status.assert_called_once()
@@ -951,29 +953,30 @@ async def test_finalise_run_and_teardown_teststack_success(
         assert_nowish(run.finalised_at)
         assert run.run_status == RunStatus.finalised_by_client
         assert run.all_criteria_met is True
-        assert run.run_artifact.file_data == finalize_data
+
+    assert run_zip_exists(settings.file_store_path, 1), "Finalize data should be persisted"
+    assert run_report_exists(settings.file_store_path, 1), "Finalize data should be persisted"
+    assert_zips_equal(fetch_run_zip(settings.file_store_path, 1), response.content)
 
 
 @pytest.mark.asyncio
-@patch("cactus_orchestrator.api.run.regenerate_pdf_report")
 async def test_finalise_run_and_teardown_teststack_idempotent(
-    regenerate_mock, client, pg_base_config, mocked_pod: MockedPod, zip_file_data, valid_jwt_user1
+    client: AsyncClient, pg_base_config, mocked_pod: MockedPod, zip_file_data, valid_jwt_user1
 ):
     """Tests that finalising the same run multiple times will not cause any weird side effects"""
 
     # Arrange
-    finalize_data = zip_file_data
-    mocked_pod.finalize.side_effect = [finalize_data, Exception("Mock exception - shouldn't be raised")]
+    mocked_pod.finalize.side_effect = [zip_file_data, Exception("Mock exception - shouldn't be raised")]
     mocked_pod.status.side_effect = [
         generate_class_instance(RunnerStatus, step_status={}),
         Exception("Mock exception - shouldn't be raised"),
     ]
-    regenerate_mock.return_value = finalize_data
 
     # First request should perform normally and update the DB
     response1 = await client.post("/run/1/finalise", headers={"Authorization": f"Bearer {valid_jwt_user1}"})
     assert response1.status_code == 200
-    assert response1.content == finalize_data
+    assert_zips_equal(zip_file_data, response1.content, ignore_arcnames={REPORT_FILE_NAME})
+
     async with generate_async_session(pg_base_config) as session:
         run = (
             await session.execute(select(Run).where(Run.run_id == 1).options(selectinload(Run.run_artifact)))
@@ -985,7 +988,6 @@ async def test_finalise_run_and_teardown_teststack_idempotent(
         assert_nowish(run.finalised_at)
         assert run.run_status == RunStatus.finalised_by_client
         assert run.all_criteria_met is True
-        assert run.run_artifact.file_data == finalize_data
 
     # We should've only cleaned up and finalised once (for the first request)
     mocked_pod.destroy_pod_resources.assert_awaited_once()
@@ -995,7 +997,7 @@ async def test_finalise_run_and_teardown_teststack_idempotent(
     # Fire off the same request again - it should return the exact same data and the DB should still be OK
     response2 = await client.post("/run/1/finalise", headers={"Authorization": f"Bearer {valid_jwt_user1}"})
     assert response2.status_code == 200
-    assert response2.content == finalize_data
+    assert response2.content == response1.content
     async with generate_async_session(pg_base_config) as session:
         run = (
             await session.execute(select(Run).where(Run.run_id == 1).options(selectinload(Run.run_artifact)))
@@ -1004,7 +1006,6 @@ async def test_finalise_run_and_teardown_teststack_idempotent(
         assert run.finalised_at == original_finalised_at, "This shouldn't have changed"
         assert run.run_status == RunStatus.finalised_by_client
         assert run.all_criteria_met is True
-        assert run.run_artifact.file_data == finalize_data
 
     # We should've only cleaned up and finalised once (for the first request)
     mocked_pod.destroy_pod_resources.assert_awaited_once()
@@ -1164,64 +1165,55 @@ async def test_get_run_artifact_access_control(
         assert res.headers[HEADER_GROUP_NAME] == expected_group_name
 
 
-def _make_zip(include_pdf: bool = False, include_error_file: bool = False) -> bytes:
-    """Helper to build a minimal valid zip for artifact tests."""
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr("CactusTestProcedureSummary.json", '{"result": "pass"}')
-        if include_pdf:
-            zf.writestr("CactusTestProcedureReport.pdf", b"%PDF-1.4 placeholder")
-        if include_error_file:
-            zf.writestr("pdf-generation-errors.txt", "Previous generation failed")
-    return buf.getvalue()
-
-
 @pytest.mark.asyncio
 async def test_get_run_artifact_pdf_already_present__no_regeneration(
-    mocked_pod: MockedPod, client, pg_base_config, valid_jwt_user1
+    mocked_pod: MockedPod, client: AsyncClient, pg_base_config, valid_jwt_user1
 ):
     """When the artifact zip already contains a PDF, no regeneration is attempted."""
-    run_id = 2  # artifact_id=1, fixture already has a PDF
-    async with generate_async_session(pg_base_config) as session:
-        artifact = (await session.execute(select(RunArtifact).where(RunArtifact.run_artifact_id == 1))).scalar_one()
-        artifact.file_data = _make_zip(include_pdf=True)
-        artifact.reporting_data = '{"version": 1}'
-        artifact.version = 1
-        await session.commit()
 
-    with patch("cactus_orchestrator.api.run.regenerate_pdf_report") as mock_regen:
-        res = await client.get(f"run/{run_id}/artifact", headers={"Authorization": f"Bearer {valid_jwt_user1}"})
+    # Arrange
+    run_id = 2
+    existing_bytes = b"my pdf"
+    load_file_store_for_test(run_id, existing_report_bytes=existing_bytes)
 
+    # Act
+    res = await client.get(f"run/{run_id}/artifact", headers={"Authorization": f"Bearer {valid_jwt_user1}"})
+
+    # Assert
     assert res.status_code == HTTPStatus.OK
-    mock_regen.assert_not_called()
+    assert get_zip_arcfile_contents(res.read(), REPORT_FILE_NAME) == existing_bytes
 
 
 @pytest.mark.asyncio
 async def test_get_run_artifact_pdf_missing_with_reporting_data__regenerates(
-    mocked_pod: MockedPod, client, pg_base_config, valid_jwt_user1
+    mocked_pod: MockedPod,
+    client: AsyncClient,
+    pg_base_config,
+    valid_jwt_user1,
+    reporting_data_json: str,
+    reporting_data_version: int,
 ):
     """When the PDF is absent and reporting data is present, the PDF is generated and saved."""
-    run_id = 2  # artifact_id=1
-    zip_without_pdf = _make_zip(include_pdf=False)
-    zip_with_pdf = _make_zip(include_pdf=True)
 
-    async with generate_async_session(pg_base_config) as session:
-        artifact = (await session.execute(select(RunArtifact).where(RunArtifact.run_artifact_id == 1))).scalar_one()
-        artifact.file_data = zip_without_pdf
-        artifact.reporting_data = '{"version": 1}'
-        artifact.version = 1
-        await session.commit()
+    # Arrange
+    run_id = 2
+    load_file_store_for_test(
+        run_id,
+        has_finalisation_data=True,
+        reporting_data_version_json=(reporting_data_version, reporting_data_json),
+        existing_report_bytes=None,
+    )
+    settings = get_current_settings()
+    assert not run_report_exists(settings.file_store_path, run_id), "Should NOT exist"
 
-    with patch("cactus_orchestrator.api.run.regenerate_pdf_report", return_value=zip_with_pdf) as mock_regen:
-        res = await client.get(f"run/{run_id}/artifact", headers={"Authorization": f"Bearer {valid_jwt_user1}"})
+    # Act
+    res = await client.get(f"run/{run_id}/artifact", headers={"Authorization": f"Bearer {valid_jwt_user1}"})
 
+    # Assert
     assert res.status_code == HTTPStatus.OK
-    mock_regen.assert_called_once()
-    # Verify the regenerated zip (with PDF) was saved back and served
-    assert res.read() == zip_with_pdf
-    async with generate_async_session(pg_base_config) as session:
-        artifact = (await session.execute(select(RunArtifact).where(RunArtifact.run_artifact_id == 1))).scalar_one()
-        assert artifact.file_data == zip_with_pdf
+    actual_pdf_data = get_zip_arcfile_contents(res.read(), REPORT_FILE_NAME)
+    assert_pdf_file(actual_pdf_data)
+    assert run_report_exists(settings.file_store_path, run_id), "Should now exist"
 
 
 @pytest.mark.asyncio
@@ -1230,67 +1222,52 @@ async def test_get_run_artifact_pdf_missing_no_reporting_data__warns_and_serves_
 ):
     """When the PDF is absent and there is no reporting data, a warning is logged and the original artifact provided."""
     run_id = 2  # artifact_id=1
-    zip_without_pdf = _make_zip(include_pdf=False)
+    load_file_store_for_test(
+        run_id,
+        has_finalisation_data=True,
+        existing_report_bytes=None,
+    )
 
-    async with generate_async_session(pg_base_config) as session:
-        artifact = (await session.execute(select(RunArtifact).where(RunArtifact.run_artifact_id == 1))).scalar_one()
-        artifact.file_data = zip_without_pdf
-        artifact.reporting_data = None
-        artifact.version = None
-        await session.commit()
-
-    with patch("cactus_orchestrator.api.run.regenerate_pdf_report") as mock_regen:
-        res = await client.get(f"run/{run_id}/artifact", headers={"Authorization": f"Bearer {valid_jwt_user1}"})
+    res = await client.get(f"run/{run_id}/artifact", headers={"Authorization": f"Bearer {valid_jwt_user1}"})
 
     assert res.status_code == HTTPStatus.OK
-    mock_regen.assert_not_called()
-    assert res.read() == zip_without_pdf
+    returned_zip_data = res.read()
+    assert get_zip_arcfile_contents(returned_zip_data, REPORT_FILE_NAME) is None, "No data for PDF"
+    assert get_zip_arcfile_contents(returned_zip_data, ERROR_FILE_NAME) is not None
+    for arcname, arcdata in TEST_FINALISATION_DATA:
+        assert get_zip_arcfile_contents(returned_zip_data, arcname) == arcdata
 
 
 @pytest.mark.asyncio
 async def test_get_run_artifact_pdf_missing_regeneration_fails__serves_original(
-    mocked_pod: MockedPod, client, pg_base_config, valid_jwt_user1
+    mocked_pod: MockedPod,
+    client: AsyncClient,
+    pg_base_config,
+    valid_jwt_user1,
+    reporting_data_json: str,
+    reporting_data_version: int,
 ):
     """When PDF regeneration raises, the original artifact is still served."""
-    run_id = 2  # artifact_id=1
-    zip_without_pdf = _make_zip(include_pdf=False)
 
-    async with generate_async_session(pg_base_config) as session:
-        artifact = (await session.execute(select(RunArtifact).where(RunArtifact.run_artifact_id == 1))).scalar_one()
-        artifact.file_data = zip_without_pdf
-        artifact.reporting_data = '{"version": 1}'
-        artifact.version = 1
-        await session.commit()
+    # Arrange
+    run_id = 2
+    load_file_store_for_test(
+        run_id,
+        has_finalisation_data=True,
+        reporting_data_version_json=(reporting_data_version, reporting_data_json),
+        existing_report_bytes=None,
+    )
 
-    with patch("cactus_orchestrator.api.run.regenerate_pdf_report", side_effect=ValueError("generation failed")):
+    # Act
+    with patch("cactus_orchestrator.artifact.generate_pdf_report", side_effect=Exception("generation failed")):
         res = await client.get(f"run/{run_id}/artifact", headers={"Authorization": f"Bearer {valid_jwt_user1}"})
 
     assert res.status_code == HTTPStatus.OK
-    assert res.read() == zip_without_pdf
-
-
-@pytest.mark.asyncio
-async def test_get_run_artifact_error_file_present__regenerates(
-    mocked_pod: MockedPod, client, pg_base_config, valid_jwt_user1
-):
-    """When the artifact has a pdf-generation-errors.txt, regeneration is attempted even if no PDF is missing."""
-    run_id = 2  # artifact_id=1
-    zip_with_error = _make_zip(include_pdf=False, include_error_file=True)
-    zip_with_pdf = _make_zip(include_pdf=True)
-
-    async with generate_async_session(pg_base_config) as session:
-        artifact = (await session.execute(select(RunArtifact).where(RunArtifact.run_artifact_id == 1))).scalar_one()
-        artifact.file_data = zip_with_error
-        artifact.reporting_data = '{"version": 1}'
-        artifact.version = 1
-        await session.commit()
-
-    with patch("cactus_orchestrator.api.run.regenerate_pdf_report", return_value=zip_with_pdf) as mock_regen:
-        res = await client.get(f"run/{run_id}/artifact", headers={"Authorization": f"Bearer {valid_jwt_user1}"})
-
-    assert res.status_code == HTTPStatus.OK
-    mock_regen.assert_called_once()
-    assert res.read() == zip_with_pdf
+    returned_zip_data = res.read()
+    assert get_zip_arcfile_contents(returned_zip_data, REPORT_FILE_NAME) is None, "No data for PDF"
+    assert get_zip_arcfile_contents(returned_zip_data, ERROR_FILE_NAME) is not None
+    for arcname, arcdata in TEST_FINALISATION_DATA:
+        assert get_zip_arcfile_contents(returned_zip_data, arcname) == arcdata
 
 
 @pytest.mark.asyncio

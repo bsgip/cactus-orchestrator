@@ -1,7 +1,18 @@
 from datetime import datetime
 from enum import IntEnum, auto
 
-from sqlalchemy import BOOLEAN, DateTime, ForeignKey, Index, Integer, LargeBinary, String, UniqueConstraint, desc, func
+from sqlalchemy import (
+    BOOLEAN,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    LargeBinary,
+    String,
+    UniqueConstraint,
+    desc,
+    func,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -38,22 +49,6 @@ class User(Base):
     )  # 0 is the only reserved PEN so can be used as the NULL value.
 
     run_groups: Mapped[list["RunGroup"]] = relationship(lazy="raise", back_populates="user")
-
-
-class RunReportGeneration(Base):
-    """A RunReportGeneration records each time the RunArtifact is updated with a newly
-    generated pdf report (generated from the reporting_data held in the RunArtifact table.
-    """
-
-    __tablename__ = "run_report_generation"
-
-    run_report_generation_id: Mapped[int] = mapped_column(
-        name="id", primary_key=True, autoincrement=True
-    )  # primary key
-    run_artifact_id: Mapped[int] = mapped_column(
-        ForeignKey("run_artifact.id")
-    )  # The run artifact that was (re)generated
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class RunGroup(Base):
@@ -161,6 +156,9 @@ class Run(Base):
     playlist_order: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 0-based order within the playlist
 
     run_artifact_id: Mapped[int | None] = mapped_column(ForeignKey("run_artifact.id"), nullable=True)
+    run_artifact_migrated: Mapped[bool] = mapped_column(BOOLEAN, server_default="0", index=True)  # Temporary migration
+    run_artifact_migrated_error: Mapped[str | None] = mapped_column(String, nullable=True)  # Temporary migration
+
     run_artifact: Mapped["RunArtifact"] = relationship(lazy="raise")
 
     run_group: Mapped["RunGroup"] = relationship(lazy="raise")
@@ -199,6 +197,8 @@ class ComplianceRecord(Base):
     )  # User who requested generation of the compliance report
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     file_data: Mapped[bytes] = mapped_column(LargeBinary, nullable=True, unique=False, deferred=True)
+    file_data_migrated: Mapped[bool] = mapped_column(BOOLEAN, server_default="0", index=True)
+    file_data_migrated_error: Mapped[str | None] = mapped_column(String, nullable=True)
 
 
 class ComplianceRequestFinalisation(Base):
@@ -217,6 +217,8 @@ class ComplianceRequestFinalisation(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     created_by: Mapped[int] = mapped_column(ForeignKey("user_.id"))
     file_data: Mapped[bytes] = mapped_column(LargeBinary)
+    file_data_migrated: Mapped[bool] = mapped_column(BOOLEAN, server_default="0", index=True)  # Temporary migration
+    file_data_migrated_error: Mapped[str | None] = mapped_column(String, nullable=True)  # Temporary migration
 
 
 class ComplianceRequestStatus(IntEnum):

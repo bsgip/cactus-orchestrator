@@ -21,7 +21,9 @@ from cactus_schema.runner import ClientInteraction, ClientInteractionType
 from cactus_test_definitions.client import TestProcedureId, get_test_procedure
 from envoy.server.model.site_reading import SiteReading, SiteReadingType
 
-from cactus_orchestrator.reporting.generate import generate_pdf_report_v1
+from cactus_orchestrator.reporting.error import PdfGenerationError
+from cactus_orchestrator.reporting.generate import generate_pdf_report, generate_pdf_report_v1
+from tests.utils.pdf import assert_pdf_file
 
 # Datetime columns present in the SiteReading model that end up in the readings DataFrame
 _SITE_READING_DATETIME_COLUMNS = ["time_period_start", "created_time", "changed_time"]
@@ -169,4 +171,35 @@ async def test_generate_pdf_report_v1_regenerates_pre_warnings_artifact():
     pdf_data = await generate_pdf_report_v1(reporting_data=parsed)
 
     assert isinstance(pdf_data, bytes)
-    assert len(pdf_data) > 0
+    assert_pdf_file(pdf_data)
+
+
+@pytest.mark.asyncio
+async def test_generate_pdf_report_raises_exception(reporting_data_json: str):
+
+    with pytest.raises(PdfGenerationError) as excinfo:
+        # Ignore the weird typing here - we are explicitly trying to break things
+        await generate_pdf_report(raw_reporting_data=None, raw_reporting_data_version=None)  # ty:ignore[invalid-argument-type]
+    assert "Failed to convert json" in str(excinfo.value)
+
+    with pytest.raises(PdfGenerationError) as excinfo:
+        await generate_pdf_report(
+            raw_reporting_data="{}",  # not valid reporting data json
+            raw_reporting_data_version=1,
+        )
+    assert "Failed to convert json" in str(excinfo.value)
+
+    with pytest.raises(PdfGenerationError):
+        await generate_pdf_report(
+            raw_reporting_data=reporting_data_json,
+            raw_reporting_data_version=9999,
+        )
+
+
+@pytest.mark.asyncio
+async def test_generate_pdf_report(reporting_data_json: str, reporting_data_version: int):
+    pdf_data = await generate_pdf_report(
+        raw_reporting_data=reporting_data_json,
+        raw_reporting_data_version=reporting_data_version,
+    )
+    assert_pdf_file(pdf_data)
