@@ -14,7 +14,7 @@ from envoy.server.manager.time import utc_now
 from fastapi import FastAPI
 from fastapi_async_sqlalchemy import db
 from fastapi_utils.tasks import repeat_every
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload, undefer
 
@@ -363,14 +363,26 @@ async def migrate_compliance_finalisation() -> None:
         except Exception as exc:
             logger.error("Failure migrating compliance finalisation - adding a delay", exc_info=exc)
             await asyncio.sleep(1)
-        logger.info("Stopping migrate_run_compliance task")
+    logger.info("Stopping migrate_run_compliance task")
 
 
 async def migrate_run_artifact() -> None:
     settings = get_current_settings()
 
-    logger.info(f"Starting migrate_run_artifact task - records to migrate into {settings.file_store_path.absolute()}")
+    # Get a count so we can estimate progress
+    async with db():
+        session: AsyncSession = db.session
+        expected_count = (
+            await session.execute(
+                select(func.count()).select_from(Run).where(Run.run_artifact_migrated.is_(False)).limit(1)
+            )
+        ).scalar_one()
+    logger.info(
+        f"Starting migrate_run_artifact task - {expected_count} records"
+        + f"to migrate into {settings.file_store_path.absolute()}"
+    )
 
+    migrated_count = 0
     while True:
         try:
             async with db():
@@ -398,13 +410,21 @@ async def migrate_run_artifact() -> None:
                         run.run_artifact_migrated_error = None
                     except Exception as exc:
                         run.run_artifact_migrated_error = str(exc)
+
+                migrated_count = migrated_count + 1
                 run.run_artifact_migrated = True
                 await session.commit()
+
+                if expected_count and (migrated_count % 500) == 0:
+                    logger.info(
+                        f"migrate_run_artifact: migrated {migrated_count} / {expected_count}"
+                        + f" ({100 * migrated_count / expected_count:.02}%) "
+                    )
 
         except Exception as exc:
             logger.error("Failure migrating run - adding a delay", exc_info=exc)
             await asyncio.sleep(1)
-        logger.info("Stopping migrate_run_artifact task")
+    logger.info("Stopping migrate_run_artifact task")
 
 
 async def migrate_old_compliance_record() -> None:
@@ -456,12 +476,11 @@ async def migrate_old_compliance_record() -> None:
     logger.info("Stopping migrate_old_compliance_record task")
 
 
-_task_references: set[asyncio.Task] = set()
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI, settings: CactusOrchestratorSettings) -> AsyncIterator[Never]:
     """Lifespan event to start background tasks with fastapi app."""
+
+    task_references: set[asyncio.Task] = set()
 
     if settings.idleteardowntask_enable:
         logger.info("Starting teardown_teststack_task")
@@ -471,23 +490,26 @@ async def lifespan(app: FastAPI, settings: CactusOrchestratorSettings) -> AsyncI
             settings.idleteardowntask_idle_timeout_seconds,
             settings.comms_timeout_seconds,
         )
-        _task_references.add(asyncio.create_task(idleteardowntask()))
+        task_references.add(asyncio.create_task(idleteardowntask()))
 
         pulltask = generate_pulltask(settings.pulltask_repeat_every_seconds)
-        _task_references.add(asyncio.create_task(pulltask()))
+        task_references.add(asyncio.create_task(pulltask()))
 
         # Temporary migrations
-        _task_references.add(asyncio.create_task(migrate_old_compliance_record()))
-        _task_references.add(asyncio.create_task(migrate_compliance_finalisation()))
-        _task_references.add(asyncio.create_task(migrate_run_artifact()))
+        task_references.add(asyncio.create_task(migrate_old_compliance_record()))
+        task_references.add(asyncio.create_task(migrate_compliance_finalisation()))
+        task_references.add(asyncio.create_task(migrate_run_artifact()))
 
     yield  # type: ignore
 
     # NOTE: Might be unnecessary, but we gracefully shutdown tasks here.
-    for task in _task_references:
+    for task in task_references:
         task.cancel()
 
         try:
             await task  # block until it cancels
         except asyncio.CancelledError:
             pass
+        except Exception:
+            # If one task raises an exception - don't block the shutdown of other tasks
+            logger.exception(f"Unhandled exception shutting down background task {task.get_name()}")
