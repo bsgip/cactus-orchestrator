@@ -329,9 +329,9 @@ requires-dist = [
     { name = "assertical", marker = "extra == 'test'", specifier = ">=0.4.0" },
     { name = "asyncpg" },
     { name = "bandit", marker = "extra == 'dev'" },
+    { name = "cactus-runner", git = "https://github.com/bsgip/cactus-runner.git?rev=v2.7.3" },
     { name = "cactus-schema", specifier = "==1.3.5" },
-    { name = "cactus-runner", git = "https://github.com/bsgip/cactus-runner.git?rev=v2.7.2" },
-    { name = "cactus-test-definitions", specifier = "==1.16.4" },
+    { name = "cactus-test-definitions", specifier = "==1.16.5" },
     { name = "coverage", marker = "extra == 'dev'" },
     { name = "cryptography" },
     { name = "fastapi", specifier = "==0.131.0" },
@@ -370,8 +370,8 @@ provides-extras = ["dev", "test"]
 
 [[package]]
 name = "cactus-runner"
-version = "2.7.2"
-source = { git = "https://github.com/bsgip/cactus-runner.git?rev=v2.7.2#d55b927a518ee3ba9c7e83e6bce0faf534b1202d" }
+version = "2.7.3"
+source = { git = "https://github.com/bsgip/cactus-runner.git?rev=v2.7.3#9e6f09b3bd6cae6329d4da40298d5d4f80327e4f" }
 dependencies = [
     { name = "aiohttp" },
     { name = "asyncpg" },
@@ -399,16 +399,16 @@ wheels = [
 
 [[package]]
 name = "cactus-test-definitions"
-version = "1.16.4"
+version = "1.16.5"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "dataclass-wizard" },
     { name = "pyyaml" },
     { name = "pyyaml-include" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/e5/4c/3784bb519ea08575ec2da2309797dc18de6465f50e6e11f7ec57f2d06012/cactus_test_definitions-1.16.4.tar.gz", hash = "sha256:41c2cf661f85ad57d12a5566626064c046d3d47dada22d3cc237e570174bf4a8", size = 168378, upload-time = "2026-08-13T05:11:34.817Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/6e/e7/480d7bf099332422627a52880ec46026118e5043c244e04c003c564c1adb/cactus_test_definitions-1.16.5.tar.gz", hash = "sha256:20da5befd847822c2b07b793281a7407e25139596e18d722888bb2b998d51d63", size = 186741, upload-time = "2026-08-25T00:03:24.801Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ae/7f/bfb0f1cee51d8a568406e5abf800866f1cfdc4c3e878a998af823726c146/cactus_test_definitions-1.16.4-py3-none-any.whl", hash = "sha256:6b4acef6dd2b22e01df5edc890fef7e16d3f0de0d206e7d7eae0e5a793aa2cd0", size = 333151, upload-time = "2026-08-13T05:11:32.363Z" },
+    { url = "https://files.pythonhosted.org/packages/4c/95/ce7283551bb2b8805f16bbdedb63af3853e1e58695bd10b6724754c1887f/cactus_test_definitions-1.16.5-py3-none-any.whl", hash = "sha256:32500e459e2049d6e69819e50949d44e1a1ba3c5a6991f0a4907e979d19b73e7", size = 365211, upload-time = "2026-08-25T00:03:23.167Z" },
 ]
 
 [[package]]
