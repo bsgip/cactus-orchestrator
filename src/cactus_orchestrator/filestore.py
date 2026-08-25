@@ -20,7 +20,7 @@ ERROR_FILE_NAME = "error.txt"
 logger = logging.getLogger(__name__)
 
 
-def intermediate_dir(id: int, divisor: int = 1000) -> str:
+def intermediate_dir(id: int, digits: int = 3) -> str:
     """Used for segmenting a LOT of sub dirs into smaller "chunks" to avoid having a single dir with a bajillion
     subdirs. This can cause problems under certain file formats
 
@@ -34,7 +34,8 @@ def intermediate_dir(id: int, divisor: int = 1000) -> str:
     /root/235/run-1235
     /root/234/run-9234
     """
-    return str(id % divisor)
+    remainder = id % pow(10, digits)
+    return f"{remainder:0{digits}}"
 
 
 def run_directory(file_store_path: Path, run_id: int) -> RunPath:
