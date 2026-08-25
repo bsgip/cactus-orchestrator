@@ -14,6 +14,7 @@ from cactus_orchestrator.filestore import (
     fetch_compliance_finalisation_report,
     fetch_run_finalised_file,
     fetch_run_zip,
+    intermediate_dir,
     list_run_finalised_files,
     run_report_exists,
     run_zip_exists,
@@ -57,6 +58,24 @@ def _apply_actions(path: Path, tenant_id: int, actions: list[AnyActionType]):
         else:
             save_run_report(path, tenant_id, action.pdf_bytes)
             sleep(0.05)  # If we are writing multiple timestamps - we have microsecond resolution but add a short wait
+
+
+@pytest.mark.parametrize(
+    "id_val, digits, expected",
+    [
+        (0, 3, "000"),
+        (0, 1, "0"),
+        (0, 4, "0000"),
+        (1, 3, "001"),
+        (14, 3, "014"),
+        (987, 3, "987"),
+        (1234567, 3, "567"),
+        (1234567, 2, "67"),
+        (1234567, 1, "7"),
+    ],
+)
+def test_intermediate_dir(id_val: int, digits: int, expected: str):
+    assert intermediate_dir(id_val, digits) == expected
 
 
 @pytest.mark.parametrize(
