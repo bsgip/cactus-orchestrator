@@ -17,9 +17,11 @@ from cactus_orchestrator.crud import (
     select_run_with_run_group_for_user,
     select_user,
 )
+from cactus_orchestrator.filestore import run_zip_exists
 from cactus_orchestrator.model import ComplianceRequest, Run, RunGroup, RunStatus, User
 from cactus_orchestrator.pod.models import PodRoutes
 from cactus_orchestrator.procedures import get_filtered_test_procedures
+from cactus_orchestrator.settings import CactusOrchestratorSettings
 
 logger = logging.getLogger(__name__)
 
@@ -49,13 +51,18 @@ def map_run_status_to_run_status_response(run_status: RunStatus) -> RunStatusRes
 
 
 def map_run_to_run_response(
-    run: Run, pod_routes: PodRoutes, playlist_runs: list[PlaylistRunInfo] | None = None
+    settings: CactusOrchestratorSettings,
+    run: Run,
+    pod_routes: PodRoutes,
+    playlist_runs: list[PlaylistRunInfo] | None = None,
 ) -> RunResponse:
     status = map_run_status_to_run_status_response(run.run_status)
     try:
         definition = test_procedures_by_id.get(TestProcedureId(run.testprocedure_id), None)
     except ValueError:
         definition = None
+
+    has_artifacts = run_zip_exists(settings.file_store_path, run.run_id) or run.run_artifact_id is not None
 
     return RunResponse(
         run_id=run.run_id,
@@ -66,7 +73,7 @@ def map_run_to_run_response(
         created_at=run.created_at,
         finalised_at=run.finalised_at,
         is_device_cert=run.is_device_cert,
-        has_artifacts=run.run_artifact_id is not None,
+        has_artifacts=has_artifacts,
         playlist_execution_id=run.playlist_execution_id,
         playlist_order=run.playlist_order,
         playlist_runs=playlist_runs,

@@ -164,6 +164,7 @@ async def get_group_runs_paginated(
     if runs:
         resp = [
             map_run_to_run_response(
+                settings,
                 run,
                 PodRoutes.from_run(
                     settings.cactus_fqdn,
@@ -507,7 +508,7 @@ async def get_individual_run(
             status = map_run_status_to_run_status_response(r.run_status)
             playlist_runs.append(PlaylistRunInfo(run_id=r.run_id, test_procedure_id=r.testprocedure_id, status=status))
 
-    return map_run_to_run_response(run, pod_routes, playlist_runs)
+    return map_run_to_run_response(settings, run, pod_routes, playlist_runs)
 
 
 @router.delete(uri.Run, status_code=HTTPStatus.NO_CONTENT)
@@ -1041,6 +1042,6 @@ async def get_run_list(
             run,
             dev_localhost_port_base=settings.dev_runner_localhost_port_base,
         )
-        run_responses.append(map_run_to_run_response(run, pod_routes))
+        run_responses.append(map_run_to_run_response(settings, run, pod_routes))
 
     return run_responses
