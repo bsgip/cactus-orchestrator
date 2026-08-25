@@ -129,10 +129,7 @@ def fetch_run_zip(file_store_path: Path, run_id: int, error_info: list[str] | No
     finalise_dir = run_finalise_directory(run_dir)
     reports_dir = run_reports_directory(run_dir)
     internal_zip_errors: list[str] = []
-
     report_pdf_path: Path | None = _fetch_latest_file(reports_dir)
-    if report_pdf_path is None:
-        internal_zip_errors.append(f"No report PDF on record for run {run_id}.")
 
     zip_buffer = io.BytesIO()
     with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -146,7 +143,9 @@ def fetch_run_zip(file_store_path: Path, run_id: int, error_info: list[str] | No
             internal_zip_errors.append(f"No finalisation data for run {run_id}")
 
         # Add the latest report file
-        if report_pdf_path is not None:
+        if report_pdf_path is None:
+            internal_zip_errors.append(f"No report PDF on record for run {run_id}.")
+        else:
             zf.write(report_pdf_path, REPORT_FILE_NAME)
 
         # Add any errors that may have occurred around this generation
