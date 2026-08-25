@@ -8,6 +8,7 @@ Web API for management of the podman platform and orchestration of test executio
 | Environment Variable | Default Value | Description |
 |----------------------|----------------|-------------|
 | `ORCHESTRATOR_DATABASE_URL` | – | SQLAlchemy-style database connection string using `postgresql+asyncpg` scheme. |
+| `FILE_STORE_PATH` | - | The path to the root of the artifact file store that orchestrator will store run artifacts under. eg `/var/lib/cactus/filestore` |
 | `CACTUS_FQDN` | – | Fully qualified domain name that the service is hosted under. Test pods will run as a subdomain of this. |
 | `ENVOY_PREFIX` | `/envoy` | href prefix that envoy will be hosted under (allows for upstream routing to be filtered to just this prefix). |
 | `COMMS_TIMEOUT_SECONDS` | 120 | Backend timeout when proxying requests to test pods |
