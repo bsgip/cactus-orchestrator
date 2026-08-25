@@ -14,7 +14,7 @@ from envoy.server.manager.time import utc_now
 from fastapi import FastAPI
 from fastapi_async_sqlalchemy import db
 from fastapi_utils.tasks import repeat_every
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload, undefer
 
@@ -363,14 +363,26 @@ async def migrate_compliance_finalisation() -> None:
         except Exception as exc:
             logger.error("Failure migrating compliance finalisation - adding a delay", exc_info=exc)
             await asyncio.sleep(1)
-        logger.info("Stopping migrate_run_compliance task")
+    logger.info("Stopping migrate_run_compliance task")
 
 
 async def migrate_run_artifact() -> None:
     settings = get_current_settings()
 
-    logger.info(f"Starting migrate_run_artifact task - records to migrate into {settings.file_store_path.absolute()}")
+    # Get a count so we can estimate progress
+    async with db():
+        session: AsyncSession = db.session
+        expected_count = (
+            await session.execute(
+                select(func.count()).select_from(Run).where(Run.run_artifact_migrated.is_(False)).limit(1)
+            )
+        ).scalar_one()
+    logger.info(
+        f"Starting migrate_run_artifact task - {expected_count} records"
+        + f"to migrate into {settings.file_store_path.absolute()}"
+    )
 
+    migrated_count = 0
     while True:
         try:
             async with db():
@@ -398,13 +410,21 @@ async def migrate_run_artifact() -> None:
                         run.run_artifact_migrated_error = None
                     except Exception as exc:
                         run.run_artifact_migrated_error = str(exc)
+
+                migrated_count = migrated_count + 1
                 run.run_artifact_migrated = True
                 await session.commit()
+
+                if expected_count and (migrated_count % 500) == 0:
+                    logger.info(
+                        f"migrate_run_artifact: migrated {migrated_count} / {expected_count}"
+                        + f" ({100 * migrated_count / expected_count:.02}%) "
+                    )
 
         except Exception as exc:
             logger.error("Failure migrating run - adding a delay", exc_info=exc)
             await asyncio.sleep(1)
-        logger.info("Stopping migrate_run_artifact task")
+    logger.info("Stopping migrate_run_artifact task")
 
 
 async def migrate_old_compliance_record() -> None:

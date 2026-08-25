@@ -20,12 +20,34 @@ ERROR_FILE_NAME = "error.txt"
 logger = logging.getLogger(__name__)
 
 
+def intermediate_dir(id: int, divisor: int = 1000) -> str:
+    """Used for segmenting a LOT of sub dirs into smaller "chunks" to avoid having a single dir with a bajillion
+    subdirs. This can cause problems under certain file formats
+
+    eg: instead of
+    /root/run-1234
+    /root/run-1235
+    /root/run-9999
+
+    have:
+    /root/234/run-1234
+    /root/235/run-1235
+    /root/234/run-9234
+    """
+    return str(id % divisor)
+
+
 def run_directory(file_store_path: Path, run_id: int) -> RunPath:
-    return RunPath(file_store_path / "runs" / f"run-{run_id}")
+    return RunPath(file_store_path / "runs" / intermediate_dir(run_id) / f"run-{run_id}")
 
 
 def compliance_directory(file_store_path: Path, compliance_request_finalisation_id: int) -> CompliancePath:
-    return CompliancePath(file_store_path / "compliance" / f"finalisation-{compliance_request_finalisation_id}")
+    return CompliancePath(
+        file_store_path
+        / "compliance"
+        / intermediate_dir(compliance_request_finalisation_id)
+        / f"finalisation-{compliance_request_finalisation_id}"
+    )
 
 
 def run_finalise_directory(run_path: RunPath) -> Path:
@@ -38,7 +60,7 @@ def run_reports_directory(run_path: RunPath) -> Path:
 
 def timestamp_random_file_name(prefix: str, suffix: str) -> str:
     timestamp_us = int(datetime.now(UTC).timestamp() * 1000)
-    rand_slug = RANDOM.choices(RANDOM_CHARS, k=6)  # add a random slug in case of timestamp collision
+    rand_slug = "".join(RANDOM.choices(RANDOM_CHARS, k=6))  # add a random slug in case of timestamp collision
 
     return f"{prefix}_{timestamp_us}_{rand_slug}{suffix}"
 
