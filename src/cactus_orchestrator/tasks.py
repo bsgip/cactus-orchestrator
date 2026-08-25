@@ -476,12 +476,11 @@ async def migrate_old_compliance_record() -> None:
     logger.info("Stopping migrate_old_compliance_record task")
 
 
-_task_references: set[asyncio.Task] = set()
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI, settings: CactusOrchestratorSettings) -> AsyncIterator[Never]:
     """Lifespan event to start background tasks with fastapi app."""
+
+    task_references: set[asyncio.Task] = set()
 
     if settings.idleteardowntask_enable:
         logger.info("Starting teardown_teststack_task")
@@ -491,23 +490,26 @@ async def lifespan(app: FastAPI, settings: CactusOrchestratorSettings) -> AsyncI
             settings.idleteardowntask_idle_timeout_seconds,
             settings.comms_timeout_seconds,
         )
-        _task_references.add(asyncio.create_task(idleteardowntask()))
+        task_references.add(asyncio.create_task(idleteardowntask()))
 
         pulltask = generate_pulltask(settings.pulltask_repeat_every_seconds)
-        _task_references.add(asyncio.create_task(pulltask()))
+        task_references.add(asyncio.create_task(pulltask()))
 
         # Temporary migrations
-        _task_references.add(asyncio.create_task(migrate_old_compliance_record()))
-        _task_references.add(asyncio.create_task(migrate_compliance_finalisation()))
-        _task_references.add(asyncio.create_task(migrate_run_artifact()))
+        task_references.add(asyncio.create_task(migrate_old_compliance_record()))
+        task_references.add(asyncio.create_task(migrate_compliance_finalisation()))
+        task_references.add(asyncio.create_task(migrate_run_artifact()))
 
     yield  # type: ignore
 
     # NOTE: Might be unnecessary, but we gracefully shutdown tasks here.
-    for task in _task_references:
+    for task in task_references:
         task.cancel()
 
         try:
             await task  # block until it cancels
         except asyncio.CancelledError:
             pass
+        except Exception:
+            # If one task raises an exception - don't block the shutdown of other tasks
+            logger.exception(f"Unhandled exception shutting down background task {task.get_name()}")

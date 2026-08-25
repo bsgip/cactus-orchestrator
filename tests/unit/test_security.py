@@ -1,13 +1,16 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from cactus_orchestrator.main import app
+from cactus_orchestrator.main import generate_app
+from cactus_orchestrator.settings import get_current_settings
 
 
 @pytest.mark.asyncio
 async def test_endpoints_fail_without_auth():
     """Loop through all app routes and check security.
     NOTE: Documentation routes are left unsecured."""
+
+    app = generate_app(get_current_settings())
     with TestClient(app) as client:
         for route in app.routes:
             if route.name not in ("openapi", "swagger_ui_html", "swagger_ui_redirect", "redoc_html"):  # ty:ignore[unresolved-attribute]
