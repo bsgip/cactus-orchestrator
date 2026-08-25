@@ -1024,7 +1024,7 @@ def generate_timeline_chart(timeline: Timeline, sites: list[Site]) -> Image:
     lower_max_label = "setMaxW"
     for site in sites:
         try:
-            der_setting = site.site_ders[0].site_der_setting
+            der_setting = site.site_ders[0].site_der_setting if site.site_ders else None
             if der_setting:
                 set_max_w = int(der_setting.max_w_value * pow(10, der_setting.max_w_multiplier))
                 upper_max_w = set_max_w
