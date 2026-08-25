@@ -396,7 +396,7 @@ async def admin_get_runs_for_procedure_in_group(
             run_group,
             run,
         )
-        run_responses.append(map_run_to_run_response(run, pod_routes))
+        run_responses.append(map_run_to_run_response(settings, run, pod_routes))
 
     return paginate(run_responses)
 
@@ -428,7 +428,7 @@ async def admin_get_group_runs_paginated(
             run_group,
             run,
         )
-        run_responses.append(map_run_to_run_response(run, pod_routes))
+        run_responses.append(map_run_to_run_response(settings, run, pod_routes))
     return paginate(run_responses)
 
 
@@ -541,7 +541,7 @@ async def admin_get_individual_run(
         settings.cactus_fqdn, settings.envoy_prefix, settings.podman_runner_port, pod_resources, run_group, run
     )
 
-    return map_run_to_run_response(run, pod_routes)
+    return map_run_to_run_response(settings, run, pod_routes)
 
 
 async def map_to_admin_compliance_request_response(request: ComplianceRequest) -> AdminComplianceRequestResponse:

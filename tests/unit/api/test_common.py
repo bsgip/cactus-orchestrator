@@ -12,6 +12,7 @@ from cactus_orchestrator.api.common import (
 from cactus_orchestrator.auth import AuthPerm, UserContext
 from cactus_orchestrator.model import Run, RunGroup, User
 from cactus_orchestrator.pod.models import PodRoutes
+from cactus_orchestrator.settings import get_current_settings
 
 admin_user_context = UserContext(subject_id="", issuer_id="", permissions=[AuthPerm.admin_all, AuthPerm.user_all])
 user_1_context = UserContext(
@@ -161,8 +162,9 @@ async def test_select_user_run_group_run_or_raise_raises_exception(
 def test_map_run_to_run_response_warnings(run_warnings: list[dict] | None):
     run = generate_class_instance(Run, warnings=run_warnings)
     pod_routes = generate_class_instance(PodRoutes)
+    settings = get_current_settings()
 
-    response = map_run_to_run_response(run, pod_routes)
+    response = map_run_to_run_response(settings, run, pod_routes)
 
     if run_warnings is None:
         assert response.warnings is None

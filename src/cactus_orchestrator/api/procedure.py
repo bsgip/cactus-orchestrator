@@ -162,6 +162,6 @@ async def get_runs_for_procedure_in_group(
             run_group,
             run,
         )
-        run_responses.append(map_run_to_run_response(run, pod_routes))
+        run_responses.append(map_run_to_run_response(settings, run, pod_routes))
 
     return paginate(run_responses)
