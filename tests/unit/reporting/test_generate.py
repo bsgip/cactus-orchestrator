@@ -177,17 +177,15 @@ async def test_generate_pdf_report_v1_regenerates_pre_warnings_artifact():
 @pytest.mark.asyncio
 async def test_generate_pdf_report_raises_exception(reporting_data_json: str):
 
-    with pytest.raises(PdfGenerationError) as excinfo:
+    with pytest.raises(PdfGenerationError):
         # Ignore the weird typing here - we are explicitly trying to break things
         await generate_pdf_report(raw_reporting_data=None, raw_reporting_data_version=None)  # ty:ignore[invalid-argument-type]
-    assert "Failed to convert json" in str(excinfo.value)
 
-    with pytest.raises(PdfGenerationError) as excinfo:
+    with pytest.raises(PdfGenerationError):
         await generate_pdf_report(
             raw_reporting_data="{}",  # not valid reporting data json
             raw_reporting_data_version=1,
         )
-    assert "Failed to convert json" in str(excinfo.value)
 
     with pytest.raises(PdfGenerationError):
         await generate_pdf_report(

@@ -39,6 +39,16 @@ async def generate_pdf_report_v1(
     return pdf_data
 
 
+def parse_reporting_data(raw_reporting_data_version: int, raw_reporting_data: str) -> ReportingData_v1 | None:
+    """Parses the finalisation/reporting data from runner into a versioned instance - or None if it cannot be parsed"""
+    try:
+        return ReportingData.from_json(raw_reporting_data_version, raw_reporting_data)
+    except Exception as exc:
+        msg = "Failed to convert json to ReportingData instance."
+        logger.error(msg, exc_info=exc)
+        return None
+
+
 async def generate_pdf_report(
     raw_reporting_data: str,
     raw_reporting_data_version: int,
@@ -59,6 +69,11 @@ async def generate_pdf_report(
     Returns:
         bytes: the updated zip file data.
     """
+
+    reporting_data = parse_reporting_data(raw_reporting_data_version, raw_reporting_data)
+    if reporting_data is None:
+        raise PdfGenerationError(f"Cannot create v{raw_reporting_data_version} reporting data from JSON")
+
     try:
         reporting_data = ReportingData.from_json(raw_reporting_data_version, raw_reporting_data)
     except Exception as exc:
