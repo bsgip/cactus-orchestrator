@@ -7,7 +7,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from cactus_orchestrator.crud import (
     select_deploy_release_at,
     select_playlist_position_label,
-    select_user_run_with_artifact,
 )
 from cactus_orchestrator.filestore import (
     fetch_run_finalised_file,
@@ -17,7 +16,7 @@ from cactus_orchestrator.filestore import (
     run_zip_exists,
     save_run_report,
 )
-from cactus_orchestrator.model import Run, User
+from cactus_orchestrator.model import Run
 from cactus_orchestrator.reporting.generate import generate_pdf_report
 from cactus_orchestrator.settings import CactusOrchestratorSettings
 
@@ -86,7 +85,7 @@ def fetch_run_reporting_data_json(settings: CactusOrchestratorSettings, run_id: 
 
 
 async def fetch_run_artifact_zip(
-    session: AsyncSession, user: User, settings: CactusOrchestratorSettings, run: Run, force_regenerate: bool = False
+    session: AsyncSession, settings: CactusOrchestratorSettings, run: Run, force_regenerate: bool = False
 ) -> bytes | None:
     """Fetches the report + finalisation data for a specific run. If there is no report on record - it will also
     attempt to be generated. Can return None if there is nothing on record for the run
@@ -94,10 +93,6 @@ async def fetch_run_artifact_zip(
     force_regenerate: If True - the PDF will be generated, updating any existing one"""
 
     if not run_zip_exists(settings.file_store_path, run.run_id):
-        # There might be an un-migrated artifact
-        # This is all temporary - once fully migrated we should just return None here
-        if run.run_artifact_id is not None and not run.run_artifact_migrated:
-            return (await select_user_run_with_artifact(session, user.user_id, run.run_id)).run_artifact.file_data
         return None
 
     # If there is no run report data yet - it's time to generate one from the finalisation data

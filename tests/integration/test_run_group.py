@@ -10,7 +10,10 @@ from cactus_schema.orchestrator import RunGroupRequest, RunGroupResponse, RunGro
 from cactus_test_definitions import CSIPAusVersion
 from sqlalchemy import func, select
 
-from cactus_orchestrator.model import Run, RunArtifact, RunGroup
+from cactus_orchestrator.filestore import run_report_exists, run_zip_exists
+from cactus_orchestrator.model import Run, RunGroup
+from cactus_orchestrator.settings import get_current_settings
+from tests.utils.filestore import load_file_store_for_test
 
 
 @pytest.mark.asyncio
@@ -142,12 +145,13 @@ async def test_create_group(client, pg_base_config, valid_jwt_user1, version, is
 
 
 @pytest.mark.parametrize(
-    "run_group_id, expected_status, expected_run_ids, expected_teardown_run_ids, expected_run_artifact_ids",
+    "run_group_id, run_ids_with_storage, expected_status, expected_run_ids, expected_teardown_run_ids",
     [
-        (1, HTTPStatus.NO_CONTENT, [1, 2, 3, 4, 7, 8], [1, 8], [1, 2]),
-        (2, HTTPStatus.NO_CONTENT, [5], [5], [3]),
-        (3, HTTPStatus.FORBIDDEN, [], [], []),
-        (99, HTTPStatus.FORBIDDEN, [], [], []),
+        (1, [], HTTPStatus.NO_CONTENT, [1, 2, 3, 4, 7, 8], [1, 8]),
+        (1, [1, 2, 7, 99], HTTPStatus.NO_CONTENT, [1, 2, 3, 4, 7, 8], [1, 8]),
+        (2, [5], HTTPStatus.NO_CONTENT, [5], [5]),
+        (3, [3], HTTPStatus.FORBIDDEN, [], []),
+        (99, [99], HTTPStatus.FORBIDDEN, [], []),
     ],
 )
 @patch("cactus_orchestrator.api.run_group.destroy_pod_resources", new_callable=AsyncMock)
@@ -158,18 +162,22 @@ async def test_delete_group(
     pg_base_config,
     valid_jwt_user1,
     run_group_id: int,
+    run_ids_with_storage: list[int],
     expected_status: HTTPStatus,
     expected_run_ids: list[int],
     expected_teardown_run_ids: list[int],
-    expected_run_artifact_ids: list[int],
 ):
     """Can run groups be deleted for a specific user"""
+
+    # Arrange
+    settings = get_current_settings()
+    for run_id in run_ids_with_storage:
+        load_file_store_for_test(run_id, True, existing_report_bytes=bytes([1, 2, 3]))
 
     # Act
     async with generate_async_session(pg_base_config) as session:
         before_run_group_count = (await session.execute(select(func.count()).select_from(RunGroup))).scalar_one()
         before_run_count = (await session.execute(select(func.count()).select_from(Run))).scalar_one()
-        before_artifact_count = (await session.execute(select(func.count()).select_from(RunArtifact))).scalar_one()
 
     response = await client.delete(f"/run_group/{run_group_id}", headers={"Authorization": f"Bearer {valid_jwt_user1}"})
 
@@ -178,28 +186,14 @@ async def test_delete_group(
     async with generate_async_session(pg_base_config) as session:
         after_run_group_count = (await session.execute(select(func.count()).select_from(RunGroup))).scalar_one()
         after_run_count = (await session.execute(select(func.count()).select_from(Run))).scalar_one()
-        after_artifact_count = (await session.execute(select(func.count()).select_from(RunArtifact))).scalar_one()
         remaining_run_ids = (
             (await session.execute(select(Run.run_id).where(Run.run_id.in_(expected_run_ids)))).scalars().all()
-        )
-        remaining_artifact_ids = (
-            (
-                await session.execute(
-                    select(RunArtifact.run_artifact_id).where(
-                        RunArtifact.run_artifact_id.in_(expected_run_artifact_ids)
-                    )
-                )
-            )
-            .scalars()
-            .all()
         )
 
     if expected_status >= 200 and expected_status < 300:
         assert after_run_count == before_run_count - len(expected_run_ids)
         assert after_run_group_count == before_run_group_count - 1
-        assert after_artifact_count == before_artifact_count - len(expected_run_artifact_ids)
         assert remaining_run_ids == []
-        assert remaining_artifact_ids == []
 
         # Ensure any active runs are properly deallocated
         assert mock_destroy_pod_resources.await_count == len(expected_teardown_run_ids)
@@ -208,6 +202,10 @@ async def test_delete_group(
         assert after_run_count == before_run_count
         assert after_run_group_count == after_run_group_count
         assert remaining_run_ids == expected_run_ids
-        assert remaining_artifact_ids == expected_run_artifact_ids
 
         mock_destroy_pod_resources.assert_not_awaited()
+
+    # No changes to the file store
+    for run_id in run_ids_with_storage:
+        assert run_zip_exists(settings.file_store_path, run_id)
+        assert run_report_exists(settings.file_store_path, run_id)

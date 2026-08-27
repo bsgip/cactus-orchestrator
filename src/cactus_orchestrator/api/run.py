@@ -67,7 +67,7 @@ from cactus_orchestrator.crud import (
     select_playlist_runs_for_update,
     select_playlist_runs_with_status,
     select_runs_for_group,
-    select_user_runs_with_artifacts,
+    select_runs_for_user,
     update_run_as_finalised,
     update_run_run_status,
 )
@@ -557,9 +557,7 @@ async def finalise_run_and_teardown_teststack(  # noqa: C901
     The teststack is only torn down after the last test in the playlist completes.
     """
     # get user (with cert - needed to build the next RunRequest on playlist advancement)
-    user, run_group, run = await select_user_run_group_run_or_raise(
-        db.session, user_context, run_id, with_cert=True, with_artifact=True
-    )
+    user, run_group, run = await select_user_run_group_run_or_raise(db.session, user_context, run_id, with_cert=True)
     logger.info(f"Finalise requested for run {run_id} by user {user.subject_id}")
 
     settings = get_current_settings()
@@ -618,7 +616,7 @@ async def finalise_run_and_teardown_teststack(  # noqa: C901
         if should_teardown:
             await destroy_pod_resources(settings.podman_socket, pod_resources)
 
-    zip_bytes = await fetch_run_artifact_zip(db.session, user, settings, run)
+    zip_bytes = await fetch_run_artifact_zip(db.session, settings, run)
     if zip_bytes is None:
         return Response(status_code=HTTPStatus.NO_CONTENT)
     else:
@@ -679,7 +677,7 @@ async def finalise_playlist(
     await destroy_pod_resources(settings.podman_socket, pod_resources)
     logger.info(f"Playlist skipped: run {run.run_id} finalized, remaining runs marked as skipped")
 
-    zip_bytes = await fetch_run_artifact_zip(db.session, user, settings, run)
+    zip_bytes = await fetch_run_artifact_zip(db.session, settings, run)
 
     if zip_bytes is None:
         return Response(status_code=HTTPStatus.NO_CONTENT)
@@ -761,7 +759,7 @@ async def get_run_artifact(
     user, run_group, run = await select_user_run_group_run_or_raise(db.session, user_context, run_id)
     settings = get_current_settings()
 
-    zip_data = await fetch_run_artifact_zip(db.session, user, settings, run)
+    zip_data = await fetch_run_artifact_zip(db.session, settings, run)
     if zip_data is None:
         raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Zip data does not exist.")
 
@@ -803,7 +801,7 @@ async def get_run_artifacts_multiple(
 
     user = await select_user_or_raise(db.session, user_context)
     settings = get_current_settings()
-    runs = await select_user_runs_with_artifacts(db.session, user.user_id, request.run_ids)
+    runs = await select_runs_for_user(db.session, user.user_id, request.run_ids)
 
     if not runs:
         raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="No runs found for the provided run_ids.")
@@ -811,7 +809,7 @@ async def get_run_artifacts_multiple(
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as outer_zf:
         for run in runs:
-            run_zip_bytes = await fetch_run_artifact_zip(db.session, user, settings, run)
+            run_zip_bytes = await fetch_run_artifact_zip(db.session, settings, run)
             if run_zip_bytes is None:
                 continue
             folder = f"run_{run.run_id}"
@@ -821,7 +819,7 @@ async def get_run_artifacts_multiple(
                     outer_zf.writestr(f"{folder}/{entry}", inner_zip.read(entry))
             except zipfile.BadZipFile:
                 # If the artifact isn't a valid zip, store it as a raw file
-                outer_zf.writestr(f"{folder}/artifact.bin", run.run_artifact.file_data)
+                outer_zf.writestr(f"{folder}/artifact.bin", run_zip_bytes)
 
     return Response(
         status_code=HTTPStatus.OK,

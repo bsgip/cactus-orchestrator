@@ -62,8 +62,6 @@ def map_run_to_run_response(
     except ValueError:
         definition = None
 
-    has_artifacts = run_zip_exists(settings.file_store_path, run.run_id) or run.run_artifact_id is not None
-
     return RunResponse(
         run_id=run.run_id,
         test_procedure_id=run.testprocedure_id,
@@ -73,7 +71,7 @@ def map_run_to_run_response(
         created_at=run.created_at,
         finalised_at=run.finalised_at,
         is_device_cert=run.is_device_cert,
-        has_artifacts=has_artifacts,
+        has_artifacts=run_zip_exists(settings.file_store_path, run.run_id),
         playlist_execution_id=run.playlist_execution_id,
         playlist_order=run.playlist_order,
         playlist_runs=playlist_runs,
@@ -164,7 +162,7 @@ async def select_user_run_group_or_raise(
 
 
 async def select_user_run_group_run_or_raise(
-    session: AsyncSession, user_context: UserContext, run_id: int, with_cert: bool = False, with_artifact: bool = False
+    session: AsyncSession, user_context: UserContext, run_id: int, with_cert: bool = False
 ) -> tuple[User, RunGroup, Run]:
     """Selects a user for the specific user context AND their associated run + parent RunGroup or raises a HTTPException
     if none can be found.
@@ -175,7 +173,7 @@ async def select_user_run_group_run_or_raise(
         user_context,
     )
 
-    run = await select_run_with_run_group_for_user(session, user.user_id, run_id, with_cert, with_artifact)
+    run = await select_run_with_run_group_for_user(session, user.user_id, run_id, with_cert)
     if run is None:
         logger.error(f"Cannot find run {run_id} for user {user.user_id}")
         raise HTTPException(

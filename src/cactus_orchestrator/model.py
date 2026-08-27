@@ -155,50 +155,7 @@ class Run(Base):
     )  # UUID linking runs in the same playlist execution
     playlist_order: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 0-based order within the playlist
 
-    run_artifact_id: Mapped[int | None] = mapped_column(ForeignKey("run_artifact.id"), nullable=True)
-    run_artifact_migrated: Mapped[bool] = mapped_column(BOOLEAN, server_default="0", index=True)  # Temporary migration
-    run_artifact_migrated_error: Mapped[str | None] = mapped_column(String, nullable=True)  # Temporary migration
-
-    run_artifact: Mapped["RunArtifact"] = relationship(lazy="raise")
-
     run_group: Mapped["RunGroup"] = relationship(lazy="raise")
-
-
-class RunArtifact(Base):
-    """Single compressed file composed of all run files"""
-
-    __tablename__ = "run_artifact"
-
-    run_artifact_id: Mapped[int] = mapped_column(name="id", primary_key=True, autoincrement=True)
-    compression: Mapped[str] = mapped_column(String, nullable=False)
-    file_data: Mapped[bytes] = mapped_column(LargeBinary, nullable=False, unique=False)
-    reporting_data: Mapped[str | None] = mapped_column(String, nullable=True, unique=False)
-    version: Mapped[int | None] = mapped_column(Integer, nullable=True, unique=False)
-
-
-class ComplianceRecord(Base):
-    """Records each instance a compliance report is generated for a run group.
-
-    Deprecated.
-    This table recorded compliance on a per-run group basis and considered all
-    runs in the run group to determine compliance.
-
-    It was superceded by the ComplianceRequest table which holds
-    - finalisation status in the 'status' column
-    - compliance report in the 'file_data' column
-    """
-
-    __tablename__ = "compliance_record"
-
-    compliance_record_id: Mapped[int] = mapped_column(name="id", primary_key=True, autoincrement=True)
-    run_group_id: Mapped[int] = mapped_column(ForeignKey("run_group.id"))
-    requester_id: Mapped[int] = mapped_column(
-        ForeignKey("user_.id")
-    )  # User who requested generation of the compliance report
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    file_data: Mapped[bytes] = mapped_column(LargeBinary, nullable=True, unique=False, deferred=True)
-    file_data_migrated: Mapped[bool] = mapped_column(BOOLEAN, server_default="0", index=True)
-    file_data_migrated_error: Mapped[str | None] = mapped_column(String, nullable=True)
 
 
 class ComplianceRequestFinalisation(Base):
@@ -216,9 +173,6 @@ class ComplianceRequestFinalisation(Base):
     compliance_request_id: Mapped[int] = mapped_column(ForeignKey("compliance_request.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     created_by: Mapped[int] = mapped_column(ForeignKey("user_.id"))
-    file_data: Mapped[bytes] = mapped_column(LargeBinary)
-    file_data_migrated: Mapped[bool] = mapped_column(BOOLEAN, server_default="0", index=True)  # Temporary migration
-    file_data_migrated_error: Mapped[str | None] = mapped_column(String, nullable=True)  # Temporary migration
 
 
 class ComplianceRequestStatus(IntEnum):

@@ -17,7 +17,6 @@ from cactus_orchestrator.crud import (
     delete_compliance_request,
     delete_upcoming_playlist_runs,
     finalise_compliance_request,
-    insert_compliance_generation_record,
     insert_compliance_request,
     insert_compliance_request_finalisation,
     insert_playlist_runs,
@@ -46,13 +45,13 @@ from cactus_orchestrator.crud import (
     select_run_groups_for_user,
     select_run_with_run_group_for_user,
     select_runs_for_group,
+    select_runs_for_user,
     select_user,
     select_user_compliance_request,
     select_user_compliance_request_finalisation,
     select_user_compliance_requests,
     select_user_from_run_group,
     select_user_run,
-    select_user_run_with_artifact,
     select_users,
     update_compliance_request,
     update_run_as_finalised,
@@ -60,13 +59,11 @@ from cactus_orchestrator.crud import (
     update_user_name,
 )
 from cactus_orchestrator.model import (
-    ComplianceRecord,
     ComplianceRequestClass,
     ComplianceRequestFinalisation,
     ComplianceRequestRun,
     ComplianceRequestStatus,
     Run,
-    RunArtifact,
     RunGroup,
     RunStatus,
     User,
@@ -311,34 +308,24 @@ async def test_select_run_with_run_group_for_user(
     expected_cert_bytes: bytes | None,
 ):
     for with_cert in [True, False]:
-        for with_artifact in [True, False]:
-            async with generate_async_session(pg_base_config) as session:
-                run = await select_run_with_run_group_for_user(session, user_id, run_id, with_cert, with_artifact)
+        async with generate_async_session(pg_base_config) as session:
+            run = await select_run_with_run_group_for_user(session, user_id, run_id, with_cert)
 
-                if expected_run_id is None or expected_run_group_id is None:
-                    assert run is None
+            if expected_run_id is None or expected_run_group_id is None:
+                assert run is None
+            else:
+                assert run is not None and isinstance(run, Run)
+                assert run.run_id == expected_run_id
+
+                assert run.run_group is not None and isinstance(run.run_group, RunGroup)
+                assert run.run_group_id == expected_run_group_id
+                assert run.run_group.run_group_id == expected_run_group_id
+
+                if with_cert:
+                    assert run.run_group.certificate_pem == expected_cert_bytes
                 else:
-                    assert run is not None and isinstance(run, Run)
-                    assert run.run_id == expected_run_id
-
-                    assert run.run_group is not None and isinstance(run.run_group, RunGroup)
-                    assert run.run_group_id == expected_run_group_id
-                    assert run.run_group.run_group_id == expected_run_group_id
-
-                    if with_artifact:
-                        if run.run_artifact_id is not None:
-                            assert isinstance(run.run_artifact, RunArtifact)
-                        else:
-                            assert run.run_artifact is None
-                    else:
-                        with pytest.raises(Exception):  # noqa: B017
-                            _ = run.run_artifact
-
-                    if with_cert:
-                        assert run.run_group.certificate_pem == expected_cert_bytes
-                    else:
-                        with pytest.raises(Exception):  # noqa: B017
-                            _ = run.run_group.certificate_pem
+                    with pytest.raises(Exception):  # noqa: B017
+                        _ = run.run_group.certificate_pem
 
 
 @pytest.mark.parametrize("with_cert", [True, False])
@@ -549,30 +536,24 @@ async def test_update_run_as_finalised(
         assert updated_run.warnings == warnings
 
 
+@pytest.mark.parametrize(
+    "user_id, run_ids, expected_run_ids",
+    [
+        (1, [], []),
+        (1, [1, 5], [1, 5]),
+        (1, [1, 2, 3, 4, 5, 6, 7, 8, 999, -1], [1, 2, 3, 4, 5, 7, 8]),
+        (2, [1, 2, 3, 4, 5, 6, 7, 8, 999, -1], [6]),
+        (99, [1, 2, 3, 4, 5, 6, 7, 8, 999, -1], []),
+    ],
+)
 @pytest.mark.asyncio
-async def test_select_user_run_with_artifact(pg_base_config):
-    """Test selecting run with run artifact joined in load."""
-
-    # Arrange
-    run_artifact_bytes = bytes([1, 5, 6, 0, 127])
-    run_id = 4
-    user_id = 1
-    async with generate_async_session(pg_base_config) as session:
-        run_artifact = RunArtifact(compression="gzip", file_data=run_artifact_bytes)
-        session.add(run_artifact)
-        await session.flush()
-        run_artifact_id = run_artifact.run_artifact_id
-
-        updated_run = (await session.execute(select(Run).where(Run.run_id == run_id))).scalar_one()
-        updated_run.run_artifact_id = run_artifact_id
-
-        await session.commit()
+async def test_select_runs_for_user(pg_base_config, user_id: int, run_ids: list[int], expected_run_ids: list[int]):
+    """Test selecting runs under a specific user"""
 
     async with generate_async_session(pg_base_config) as session:
-        run = await select_user_run_with_artifact(session, user_id, run_id)
-        assert run.run_artifact_id == run_artifact_id
-        assert run.run_artifact.compression == "gzip"
-        assert run.run_artifact.file_data == run_artifact_bytes
+        runs = await select_runs_for_user(session, user_id, run_ids)
+        assert sorted([r.run_id for r in runs]) == sorted(expected_run_ids)
+        assert_list_type(Run, runs, count=len(expected_run_ids))
 
 
 @pytest.mark.asyncio
@@ -663,40 +644,6 @@ async def test_select_group_runs_for_procedure(
         result = await select_group_runs_for_procedure(session, run_group_id, test_procedure_id)
         assert [run.run_id for run in result] == expected_run_ids
         assert_list_type(Run, result, len(expected_run_ids))
-
-
-@pytest.mark.asyncio
-async def test_insert_compliance_generation_record(pg_base_config):
-    """Tests that a new compliance generation record can be inserted"""
-
-    run_group_id = 1
-    requester_id = 1  # user1
-
-    # Act
-    async with generate_async_session(pg_base_config) as s:
-        record1 = await insert_compliance_generation_record(s, run_group_id=run_group_id, requester_id=requester_id)
-
-        assert record1.compliance_record_id == 1
-        assert record1.run_group_id == run_group_id
-        assert record1.requester_id == requester_id
-        assert_nowish(record1.created_at)
-
-        await s.commit()
-
-    async with generate_async_session(pg_base_config) as s:
-        record2 = await insert_compliance_generation_record(s, run_group_id=run_group_id, requester_id=requester_id)
-
-        assert record2.compliance_record_id == 2
-        assert record2.run_group_id == run_group_id
-        assert record2.requester_id == requester_id
-        assert_nowish(record2.created_at)
-
-        await s.rollback()
-
-    # Quick check of the database
-    async with generate_async_session(pg_base_config) as s:
-        compliance_record_count = (await s.execute(select(func.count()).select_from(ComplianceRecord))).scalar_one()
-        assert compliance_record_count == 1
 
 
 @pytest.mark.asyncio
@@ -942,31 +889,32 @@ async def test_insert_compliance_request_finalisation(pg_compliance_config):
 
 
 @pytest.mark.parametrize(
-    "compliance_request_id, user_id, expected_file_data, record_exists",
+    "compliance_request_id, user_id, request_exists, finalisation_exist",
     [
-        (1, 1, b"\\x0001", True),
-        (4, 3, b"\\x0004", True),
-        (1, 3, None, False),  # user 3 can't access compliance request 1
-        (4, 1, None, False),  # user 1 can't access compliance request 4
-        (1, 99, None, False),  # compliance request 99 doesn't exist
+        (1, 1, True, True),
+        (4, 3, True, True),
+        (2, 1, True, False),  # No finalisation record
+        (1, 3, False, False),  # user 3 can't access compliance request 1
+        (4, 1, False, False),  # user 1 can't access compliance request 4
+        (1, 99, False, False),  # compliance request 99 doesn't exist
     ],
 )
 @pytest.mark.asyncio
 async def test_select_user_compliance_request_finalisation(
-    compliance_request_id: int, user_id: int, expected_file_data, record_exists: bool, pg_compliance_config
+    compliance_request_id: int, user_id: int, request_exists: bool, finalisation_exist: bool, pg_compliance_config
 ):
     async with generate_async_session(pg_compliance_config) as session:
         try:
             record = await select_user_compliance_request_finalisation(
                 session=session, user_id=user_id, compliance_request_id=compliance_request_id
             )
-            if expected_file_data:
-                assert record
-                assert record.file_data == expected_file_data
+            if finalisation_exist:
+                assert isinstance(record, ComplianceRequestFinalisation)
+                assert record.compliance_request_id == compliance_request_id
             else:
                 assert record is None
         except NoResultFound:
-            assert not record_exists
+            assert not request_exists
 
 
 @pytest.mark.parametrize("compliance_request_id", [1, 2])

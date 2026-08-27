@@ -16,24 +16,18 @@ VALUES
 (3, 'user-3-device-1', 'v1.2', TRUE, '\x01', '2023-01-01T00:01:00Z', 11, TRUE);
 
 -- Runs
-INSERT INTO run (run_group_id, run_artifact_id, pod_name, testprocedure_id, created_at, finalised_at, run_status, all_criteria_met)
+INSERT INTO run (run_group_id, pod_name, testprocedure_id, created_at, finalised_at, run_status, all_criteria_met)
 VALUES 
-(1, NULL, 'run-1', 'ALL-03', '2024-01-01T00:01:00Z', '2024-01-01T01:01:00Z', 4, true), -- run_id 1
-(1, NULL, 'run-2', 'OPT-1-IN-BAND', '2024-01-01T00:01:00Z', '2024-01-01T01:01:00Z', 4, true), -- run_id 2
-(1, NULL, 'run-3', 'OPT-1-OUT-OF-BAND', '2024-01-01T00:01:00Z', '2024-01-01T01:01:00Z', 4, true), -- run_id 3
-(1, NULL, 'run-4', 'ALL-26', '2024-01-01T00:01:00Z', '2024-01-01T01:01:00Z', 4, true), -- run_id 4
-(1, NULL, 'run-5', 'ALL-27', '2024-01-01T00:01:00Z', '2024-01-01T01:01:00Z', 4, true), -- run_id 5
-(1, NULL, 'run-6', 'ALL-28', '2024-01-01T00:01:00Z', '2024-01-01T01:01:00Z', 4, true), -- run_id 6
-(1, NULL, 'run-7', 'ALL-29', '2024-01-01T00:01:00Z', '2024-01-01T01:01:00Z', 4, true), -- run_id 7
-(1, NULL, 'run-8', 'ALL-30', '2024-01-01T00:01:00Z', '2024-01-01T01:01:00Z', 4, true), -- run_id 8
-(3, NULL, 'run-9', 'ALL-30', '2024-01-01T00:01:00Z', '2024-01-01T01:01:00Z', 4, true), -- run_id 9
-(4, NULL, 'run-10', 'ALL-30', '2024-01-01T00:01:00Z', '2024-01-01T01:01:00Z', 4, true); -- run_id 10
-
--- Compliance Records
-INSERT INTO compliance_record (run_group_id, requester_id, created_at)
-VALUES
-(1, 3, '2025-11-24T12:30Z');
-
+(1, 'run-1', 'ALL-03', '2024-01-01T00:01:00Z', '2024-01-01T01:01:00Z', 4, true), -- run_id 1
+(1, 'run-2', 'OPT-1-IN-BAND', '2024-01-01T00:01:00Z', '2024-01-01T01:01:00Z', 4, true), -- run_id 2
+(1, 'run-3', 'OPT-1-OUT-OF-BAND', '2024-01-01T00:01:00Z', '2024-01-01T01:01:00Z', 4, true), -- run_id 3
+(1, 'run-4', 'ALL-26', '2024-01-01T00:01:00Z', '2024-01-01T01:01:00Z', 4, true), -- run_id 4
+(1, 'run-5', 'ALL-27', '2024-01-01T00:01:00Z', '2024-01-01T01:01:00Z', 4, true), -- run_id 5
+(1, 'run-6', 'ALL-28', '2024-01-01T00:01:00Z', '2024-01-01T01:01:00Z', 4, true), -- run_id 6
+(1, 'run-7', 'ALL-29', '2024-01-01T00:01:00Z', '2024-01-01T01:01:00Z', 4, true), -- run_id 7
+(1, 'run-8', 'ALL-30', '2024-01-01T00:01:00Z', '2024-01-01T01:01:00Z', 4, true), -- run_id 8
+(3, 'run-9', 'ALL-30', '2024-01-01T00:01:00Z', '2024-01-01T01:01:00Z', 4, true), -- run_id 9
+(4, 'run-10', 'ALL-30', '2024-01-01T00:01:00Z', '2024-01-01T01:01:00Z', 4, true); -- run_id 10
 
 
 -- Compliance Requests
@@ -144,8 +138,8 @@ VALUES
 (3, 9), -- end of compliance request 3
 (4, 10); -- end of compliance request 3
 
-INSERT INTO compliance_request_finalisation (compliance_request_id, created_at, created_by, file_data)
+INSERT INTO compliance_request_finalisation (compliance_request_id, created_at, created_by)
 VALUES
-(1, '2026-05-04T13:15Z', 4, '\\x0001'),  -- compliance for user 1 (created by admin 1)
-(4, '2026-05-04T13:15Z', 4, '\\x0004');  -- compliance for user 3 (created by admin 1)
+(1, '2026-05-04T13:15Z', 4),  -- compliance for user 1 (created by admin 1)
+(4, '2026-05-04T13:15Z', 4);  -- compliance for user 3 (created by admin 1)
 

@@ -13,7 +13,6 @@ from sqlalchemy.orm import joinedload, selectinload, undefer
 
 from cactus_orchestrator.auth import UserContext
 from cactus_orchestrator.model import (
-    ComplianceRecord,
     ComplianceRequest,
     ComplianceRequestClass,
     ComplianceRequestFinalisation,
@@ -21,7 +20,6 @@ from cactus_orchestrator.model import (
     ComplianceRequestStatus,
     DeployRelease,
     Run,
-    RunArtifact,
     RunGroup,
     RunStatus,
     User,
@@ -177,14 +175,11 @@ async def select_run_group_for_user(
 
 
 async def select_run_with_run_group_for_user(
-    session: AsyncSession, user_id: int, run_id: int, with_cert: bool = False, with_artifact: bool = False
+    session: AsyncSession, user_id: int, run_id: int, with_cert: bool = False
 ) -> Run | None:
     """Selects a Run underneath a specific user_id with the parent RunGroup relationship populated."""
 
     stmt = select(Run).join(RunGroup).where((Run.run_id == run_id) & (RunGroup.user_id == user_id))
-
-    if with_artifact:
-        stmt = stmt.options(joinedload(Run.run_artifact))
 
     if with_cert:
         stmt = stmt.options(selectinload(Run.run_group).undefer(RunGroup.certificate_pem))
@@ -196,11 +191,8 @@ async def select_run_with_run_group_for_user(
 
 
 async def delete_runs(session: AsyncSession, runs: Sequence[Run]) -> None:
-    run_artifact_ids = [r.run_artifact_id for r in runs if r.run_artifact_id is not None]
     for run in runs:
         await session.delete(run)
-    if run_artifact_ids:
-        await session.execute(delete(RunArtifact).where(RunArtifact.run_artifact_id.in_(run_artifact_ids)))
 
 
 async def select_run_for_group(session: AsyncSession, run_group_id: int, run_id: int) -> Run | None:
@@ -231,6 +223,23 @@ async def select_runs_for_group(
 
     resp = await session.execute(stmt)
     return resp.scalars().all()
+
+
+async def select_runs_for_user(session: AsyncSession, user_id: int, run_ids: list[int]) -> Sequence[Run]:
+    stmt = (
+        select(Run)
+        .join(RunGroup)
+        .where(
+            and_(
+                Run.run_id.in_(run_ids),
+                RunGroup.user_id == user_id,
+            )
+        )
+    )
+
+    resp = await session.execute(stmt)
+
+    return resp.unique().scalars().all()
 
 
 async def select_active_runs_for_user(session: AsyncSession, user_id: int) -> Sequence[Run]:
@@ -285,26 +294,6 @@ async def update_run_run_status(
     await session.execute(stmt)
 
 
-async def create_runartifact(
-    session: AsyncSession,
-    compression: str,
-    file_data: bytes,
-    reporting_data: str | None,
-    reporting_data_version: int | None,
-) -> RunArtifact:
-    runartifact = RunArtifact(
-        compression=compression, file_data=file_data, reporting_data=reporting_data, version=reporting_data_version
-    )
-    session.add(runartifact)
-    await session.flush()
-    return runartifact
-
-
-async def update_runartifact_with_file_data(session: AsyncSession, run_artifact: RunArtifact, file_data: bytes) -> None:
-    run_artifact.file_data = file_data
-    await session.flush()
-
-
 async def update_run_as_finalised(
     session: AsyncSession,
     run: Run,
@@ -313,8 +302,6 @@ async def update_run_as_finalised(
     all_criteria_met: bool | None,
     warnings: list[dict] | None,
 ) -> None:
-    run.run_artifact_id = None  # This is temporary while we migrate to file store - remove after migration
-    run.run_artifact_migrated = True  # This is temporary while we migrate to file store - remove after migration
     run.finalised_at = finalised_at
     run.run_status = run_status
     run.all_criteria_met = all_criteria_met
@@ -340,44 +327,6 @@ async def select_user_run(session: AsyncSession, user_id: int, run_id: int) -> R
     resp = await session.execute(stmt)
 
     return resp.scalar_one()
-
-
-async def select_user_run_with_artifact(session: AsyncSession, user_id: int, run_id: int) -> Run:
-    stmt = (
-        select(Run)
-        .join(RunGroup)
-        .where(
-            and_(
-                Run.run_id == run_id,
-                RunGroup.user_id == user_id,
-            )
-        )
-        .options(joinedload(Run.run_artifact))
-        .options(selectinload(Run.run_group))
-    )
-
-    resp = await session.execute(stmt)
-
-    return resp.scalar_one()
-
-
-async def select_user_runs_with_artifacts(session: AsyncSession, user_id: int, run_ids: list[int]) -> Sequence[Run]:
-    stmt = (
-        select(Run)
-        .join(RunGroup)
-        .where(
-            and_(
-                Run.run_id.in_(run_ids),
-                RunGroup.user_id == user_id,
-            )
-        )
-        .options(joinedload(Run.run_artifact))
-        .options(selectinload(Run.run_group))
-    )
-
-    resp = await session.execute(stmt)
-
-    return resp.unique().scalars().all()
 
 
 @dataclass
@@ -444,24 +393,6 @@ async def select_group_runs_for_procedure(
     )
 
     return resp.scalars().all()
-
-
-async def insert_compliance_generation_record(
-    session: AsyncSession, run_group_id: int, requester_id: int
-) -> ComplianceRecord:
-    compliance_record = ComplianceRecord(run_group_id=run_group_id, requester_id=requester_id)
-
-    session.add(compliance_record)
-    await session.flush()
-
-    return compliance_record
-
-
-async def update_compliance_generation_record_with_file_data(
-    session: AsyncSession, compliance_record: ComplianceRecord, file_data: bytes
-) -> None:
-    compliance_record.file_data = file_data
-    await session.flush()
 
 
 async def finalise_compliance_request(

@@ -47,7 +47,6 @@ from cactus_orchestrator.crud import (
     safe_delete_compliance_request,
     select_admin_stats,
     select_compliance_request,
-    select_compliance_request_finalisation,
     select_compliance_requests,
     select_group_runs_aggregated_by_procedure,
     select_group_runs_for_procedure,
@@ -307,7 +306,7 @@ async def admin_get_run_artifact(
     settings = get_current_settings()
 
     # Get the download data
-    zip_bytes = await fetch_run_artifact_zip(db.session, user, settings, run)
+    zip_bytes = await fetch_run_artifact_zip(db.session, settings, run)
     if zip_bytes is None:
         raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Run artifact data does not exist.")
     return generate_run_zip_response_for_user(user, run, run_group, zip_bytes)
@@ -332,7 +331,7 @@ async def admin_regenerate_report_and_get_run_artifact(
     settings = get_current_settings()
 
     # Get the download data - forcing a regenerate
-    zip_bytes = await fetch_run_artifact_zip(db.session, user, settings, run, force_regenerate=True)
+    zip_bytes = await fetch_run_artifact_zip(db.session, settings, run, force_regenerate=True)
     if zip_bytes is None:
         raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Run artifact data does not exist.")
     return generate_run_zip_response_for_user(user, run, run_group, zip_bytes)
@@ -680,26 +679,6 @@ async def admin_delete_compliance_request_endpoint(
 
     await db.session.commit()
     return Response(status_code=HTTPStatus.OK)
-
-
-@router.get(uri.AdminComplianceRequestArtifact, status_code=HTTPStatus.OK)
-async def admin_fetch_compliance_request_artifact(
-    compliance_request_id: int,
-    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.admin_all}))],
-) -> Response:
-    compliance_request_finalisation = await select_compliance_request_finalisation(
-        session=db.session, compliance_request_id=compliance_request_id
-    )
-
-    if compliance_request_finalisation is None:
-        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Not Found")
-
-    return Response(
-        status_code=HTTPStatus.OK,
-        content=compliance_request_finalisation.file_data,
-        media_type="application/pdf",
-        headers={"Content-Disposition": f"attachment; filename=ComplianceReport-{compliance_request_id}.pdf"},
-    )
 
 
 @router.post(uri.AdminComplianceRequestArtifact, status_code=HTTPStatus.OK)

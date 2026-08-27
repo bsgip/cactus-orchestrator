@@ -25,6 +25,8 @@ from cactus_orchestrator.crud import (
     select_user_compliance_requests,
     update_compliance_request,
 )
+from cactus_orchestrator.filestore import fetch_compliance_finalisation_report
+from cactus_orchestrator.settings import get_current_settings
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -40,16 +42,26 @@ async def get_compliance_request_artifact(
         user_context,
     )
 
+    settings = get_current_settings()
     finalisation = await select_user_compliance_request_finalisation(
         session=db.session, user_id=user.user_id, compliance_request_id=compliance_request_id
     )
 
-    if finalisation is None or finalisation.file_data is None:
+    if finalisation is None:
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Not Found")
+
+    pdf_data = fetch_compliance_finalisation_report(
+        settings.file_store_path, finalisation.compliance_request_finalisation_id
+    )
+    if pdf_data is None:
+        logger.error(
+            f"No PDF data on record for {compliance_request_id=}: fin {finalisation.compliance_request_finalisation_id}"
+        )
         raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Not Found")
 
     return Response(
         status_code=HTTPStatus.OK,
-        content=finalisation.file_data,
+        content=pdf_data,
         media_type="application/pdf",
         headers={"Content-Disposition": f"attachment; filename=ComplianceReport-{compliance_request_id}.pdf"},
     )
