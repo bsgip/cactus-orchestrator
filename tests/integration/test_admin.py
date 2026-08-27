@@ -456,12 +456,15 @@ async def test_get_run_artifact_data(
 
     # Construct the file store as per test requirements
     original_pdf_data = b"original pdf data"
-    load_file_store_for_test(
-        run_id,
-        finalisation_zip_bytes=create_runner_finalisation_zip(
+    finalization_zip_bytes = None
+    if has_finalisation_data or has_reporting_data:
+        finalization_zip_bytes = create_runner_finalisation_zip(
             has_finalisation_data=has_finalisation_data,
             reporting_data_version_json=(reporting_data_version, reporting_data_json) if has_reporting_data else None,
-        ),
+        )
+    load_file_store_for_test(
+        run_id,
+        finalisation_zip_bytes=finalization_zip_bytes,
         existing_report_bytes=original_pdf_data if has_existing_report else None,
     )
     expect_any_pdf_file = has_reporting_data or expect_generation
@@ -531,12 +534,15 @@ async def test_regenerate_run_report_and_get_artifact_data(
 
     # Construct the file store as per test requirements
     original_pdf_data = b"original pdf data"
-    load_file_store_for_test(
-        run_id,
-        finalisation_zip_bytes=create_runner_finalisation_zip(
+    finalization_zip_bytes = None
+    if has_finalisation_data or has_reporting_data:
+        finalization_zip_bytes = create_runner_finalisation_zip(
             has_finalisation_data=has_finalisation_data,
             reporting_data_version_json=(reporting_data_version, reporting_data_json) if has_reporting_data else None,
-        ),
+        )
+    load_file_store_for_test(
+        run_id,
+        finalisation_zip_bytes=finalization_zip_bytes,
         existing_report_bytes=original_pdf_data if has_existing_report else None,
     )
 

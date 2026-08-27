@@ -1338,7 +1338,7 @@ async def create_playlist_for_test(
 
 @pytest.mark.asyncio
 async def test_playlist_finalize_advances_to_next_test(
-    client, mocked_pod: MockedPod, zip_file_data, pg_base_config, client_cert_pem_bytes, valid_jwt_user1
+    client, mocked_pod: MockedPod, finalisation_zip_bytes, pg_base_config, client_cert_pem_bytes, valid_jwt_user1
 ):
     response_model = await create_playlist_for_test(
         client,
@@ -1357,8 +1357,7 @@ async def test_playlist_finalize_advances_to_next_test(
         await session.execute(update(Run).where(Run.run_id == first_run_id).values(run_status=RunStatus.started))
         await session.commit()
 
-    finalize_data = zip_file_data
-    mocked_pod.finalize.return_value = finalize_data
+    mocked_pod.finalize.return_value = finalisation_zip_bytes
     mocked_pod.status.return_value = generate_class_instance(RunnerStatus, step_status={})
     mocked_pod.next_test.return_value = generate_class_instance(InitResponseBody, is_started=True)
 
@@ -1385,7 +1384,7 @@ async def test_playlist_finalize_advances_to_next_test(
 
 @pytest.mark.asyncio
 async def test_playlist_finalize_teardown_on_last_test(
-    client, mocked_pod: MockedPod, zip_file_data, pg_base_config, client_cert_pem_bytes, valid_jwt_user1
+    client, mocked_pod: MockedPod, finalisation_zip_bytes, pg_base_config, client_cert_pem_bytes, valid_jwt_user1
 ):
     response_model = await create_playlist_for_test(
         client,
@@ -1407,8 +1406,7 @@ async def test_playlist_finalize_teardown_on_last_test(
         await session.execute(update(Run).where(Run.run_id == second_run_id).values(run_status=RunStatus.started))
         await session.commit()
 
-    finalize_data = zip_file_data
-    mocked_pod.finalize.return_value = finalize_data
+    mocked_pod.finalize.return_value = finalisation_zip_bytes
     mocked_pod.status.return_value = generate_class_instance(RunnerStatus, step_status={})
 
     # Finalize last run
@@ -1512,7 +1510,7 @@ async def test_start_run_rejects_out_of_order_playlist_run(
 
 @pytest.mark.asyncio
 async def test_playlist_finalize_next_test_error_falls_back_to_teardown(
-    client, mocked_pod: MockedPod, zip_file_data, pg_base_config, client_cert_pem_bytes, valid_jwt_user1
+    client, mocked_pod: MockedPod, finalisation_zip_bytes, pg_base_config, client_cert_pem_bytes, valid_jwt_user1
 ):
     """If the runner rejects /next-test (e.g. a mismatch, or it's unreachable), the orchestrator tears down
     rather than leaving the playlist stuck."""
@@ -1531,7 +1529,7 @@ async def test_playlist_finalize_next_test_error_falls_back_to_teardown(
         await session.execute(update(Run).where(Run.run_id == first_run_id).values(run_status=RunStatus.started))
         await session.commit()
 
-    mocked_pod.finalize.return_value = zip_file_data
+    mocked_pod.finalize.return_value = finalisation_zip_bytes
     mocked_pod.status.return_value = generate_class_instance(RunnerStatus, step_status={})
     mocked_pod.next_test.side_effect = RunnerClientError("boom", http_status_code=HTTPStatus.CONFLICT)
 
