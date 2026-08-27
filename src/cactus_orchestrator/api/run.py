@@ -7,6 +7,7 @@ from typing import Annotated
 from uuid import uuid4
 
 from cactus_runner.client import ClientSession, ClientTimeout, RunnerClient, RunnerClientError
+from cactus_runner.models import ReportingData_v1
 from cactus_schema.orchestrator import (
     HEADER_GROUP_ID,
     HEADER_GROUP_NAME,
@@ -51,7 +52,7 @@ from cactus_orchestrator.api.common import (
     select_user_run_group_or_raise,
     select_user_run_group_run_or_raise,
 )
-from cactus_orchestrator.artifact import fetch_run_artifact_zip
+from cactus_orchestrator.artifact import fetch_run_artifact_zip, fetch_run_reporting_data_json
 from cactus_orchestrator.auth import AuthPerm, UserContext, jwt_validator
 from cactus_orchestrator.chart import generate_power_limit_chart
 from cactus_orchestrator.crud import (
@@ -77,6 +78,7 @@ from cactus_orchestrator.filestore import (
 from cactus_orchestrator.model import Run, RunGroup, RunStatus, User
 from cactus_orchestrator.pod.manager import create_pod_run, destroy_pod_resources, ensure_images
 from cactus_orchestrator.pod.models import PodPKI, PodResources, PodRoutes
+from cactus_orchestrator.reporting.generate import parse_reporting_data
 from cactus_orchestrator.settings import CactusOrchestratorError, CactusOrchestratorSettings, get_current_settings
 
 logger = logging.getLogger(__name__)
@@ -112,23 +114,21 @@ def _build_run_request(run: Run, run_group: RunGroup, user: User) -> RunRequest:
     )
 
 
-def is_all_criteria_met(runner_status: RunnerStatus | None) -> bool | None:
+def is_all_criteria_met(reporting_data: ReportingData_v1 | None) -> bool | None:
 
-    if runner_status is None:
+    if reporting_data is None:
         return None
 
-    criteria = runner_status.criteria if runner_status.criteria is not None else []
-    request_history = runner_status.request_history if runner_status.request_history is not None else []
-
-    return all(c.success for c in criteria) and all(not bool(r.body_xml_errors) for r in request_history)
+    # This will include XSD checks
+    return all(cr.passed for cr in (reporting_data.check_results if reporting_data.check_results else {}).values())
 
 
-def get_run_warnings(runner_status: RunnerStatus | None) -> list[dict] | None:
+def get_run_warnings(reporting_data: ReportingData_v1 | None) -> list[dict] | None:
 
-    if runner_status is None:
+    if reporting_data is None:
         return None
 
-    return [w.to_dict() for w in runner_status.warnings]
+    return [w.to_dict() for w in reporting_data.warnings]
 
 
 def generate_run_zip_response_for_user(user: User, run: Run, run_group: RunGroup, zip_data: bytes) -> Response:
@@ -451,14 +451,6 @@ async def finalise_run(
     Most errors will be handled gracefully by degrading the stored data in an attempt to ensure the DB record
     is updated."""
     async with ClientSession(base_url=url, timeout=ClientTimeout(comms_timeout_seconds)) as s:
-        # We need our final status to evaluate whether all criteria are passing
-        # But we don't want to block the finalisation if there's an issue fetching it
-        try:
-            final_status = await RunnerClient.status(s)
-        except Exception as exc:
-            logger.error("Error fetching final runner status.", exc_info=exc)
-            final_status = None
-
         # NOTE: we are assuming that files are small, consider streaming to file store
         # if sizes increase.
         try:
@@ -467,14 +459,23 @@ async def finalise_run(
             logger.error(f"Error finalizing run {run.run_id}", exc_info=exc)
             file_data = None
 
-    all_criteria_met = is_all_criteria_met(final_status)
-    warnings = get_run_warnings(final_status)
-
     # If we were able to finalize - save the data. If not, we will still shut it down - people will be forced to redo
     #
     # NOTE - There is no PDF report generated/saved at this point. If the user goes to download it, then we'll generate
+    reporting_data: ReportingData_v1 | None = None
     if file_data:
         save_run_finalisation(settings.file_store_path, run.run_id, file_data)
+
+        raw_reporting_data = fetch_run_reporting_data_json(settings, run.run_id)
+        if raw_reporting_data is not None:
+            reporting_data = parse_reporting_data(raw_reporting_data.version, raw_reporting_data.raw_json)
+
+    # We need the reporting data to calculate success/failure of the overall run
+    all_criteria_met = False
+    warnings: list[dict] | None = None
+    if reporting_data is not None:
+        all_criteria_met = is_all_criteria_met(reporting_data)
+        warnings = get_run_warnings(reporting_data)
 
     await update_run_as_finalised(session, run, run_status, finalised_at, all_criteria_met, warnings)
 

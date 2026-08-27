@@ -383,7 +383,7 @@ def reporting_data_json(reporting_data_version):
     )
     reporting_data = generate_class_instance(
         ReportingData.v(reporting_data_version),
-        check_results={"key": generate_class_instance(CheckResult)},
+        check_results={"key": generate_class_instance(CheckResult, passed=True)},
         runner_state=runner_state,
     )
     reporting_data_json = reporting_data.to_json()
