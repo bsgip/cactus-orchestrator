@@ -60,7 +60,7 @@ from cactus_orchestrator.crud import (
     select_users,
     update_compliance_request,
 )
-from cactus_orchestrator.filestore import save_compliance_finalisation_report
+from cactus_orchestrator.filestore import fetch_compliance_finalisation_report, save_compliance_finalisation_report
 from cactus_orchestrator.model import ComplianceRequest, User
 from cactus_orchestrator.pod.models import PodResources, PodRoutes
 from cactus_orchestrator.reporting.compliance import determine_compliance
@@ -307,7 +307,7 @@ async def admin_get_run_artifact(
     settings = get_current_settings()
 
     # Get the download data
-    zip_bytes = await fetch_run_artifact_zip(db.session, user, settings, run)
+    zip_bytes = await fetch_run_artifact_zip(db.session, settings, run)
     if zip_bytes is None:
         raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Run artifact data does not exist.")
     return generate_run_zip_response_for_user(user, run, run_group, zip_bytes)
@@ -332,7 +332,7 @@ async def admin_regenerate_report_and_get_run_artifact(
     settings = get_current_settings()
 
     # Get the download data - forcing a regenerate
-    zip_bytes = await fetch_run_artifact_zip(db.session, user, settings, run, force_regenerate=True)
+    zip_bytes = await fetch_run_artifact_zip(db.session, settings, run, force_regenerate=True)
     if zip_bytes is None:
         raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Run artifact data does not exist.")
     return generate_run_zip_response_for_user(user, run, run_group, zip_bytes)
@@ -687,6 +687,7 @@ async def admin_fetch_compliance_request_artifact(
     compliance_request_id: int,
     user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.admin_all}))],
 ) -> Response:
+    settings = get_current_settings()
     compliance_request_finalisation = await select_compliance_request_finalisation(
         session=db.session, compliance_request_id=compliance_request_id
     )
@@ -694,9 +695,15 @@ async def admin_fetch_compliance_request_artifact(
     if compliance_request_finalisation is None:
         raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Not Found")
 
+    finalisation_id = compliance_request_finalisation.compliance_request_finalisation_id
+    pdf_bytes = fetch_compliance_finalisation_report(settings.file_store_path, finalisation_id)
+    if pdf_bytes is None:
+        logger.error(f"Could not find PDF bytes in file store for {compliance_request_id=} {finalisation_id=}")
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Not Found")
+
     return Response(
         status_code=HTTPStatus.OK,
-        content=compliance_request_finalisation.file_data,
+        content=pdf_bytes,
         media_type="application/pdf",
         headers={"Content-Disposition": f"attachment; filename=ComplianceReport-{compliance_request_id}.pdf"},
     )

@@ -26,7 +26,7 @@ from cactus_schema.runner import RunnerStatus
 from cactus_test_definitions.client import TestProcedureId
 from httpx import AsyncClient
 
-from cactus_orchestrator.filestore import REPORT_FILE_NAME
+from cactus_orchestrator.filestore import REPORT_FILE_NAME, save_compliance_finalisation_report
 from cactus_orchestrator.main import generate_app
 from cactus_orchestrator.settings import get_current_settings
 from tests.utils.filestore import load_file_store_for_test
@@ -134,7 +134,7 @@ async def test_get_admin_endpoint_not_authorised_for_nonadmin(admin_endpoints: l
         res = await client.get(endpoint, headers={"Authorization": f"Bearer {valid_jwt_user1}"})
 
         # Assert
-        assert res.status_code == HTTPStatus.UNAUTHORIZED
+        assert res.status_code == HTTPStatus.UNAUTHORIZED, endpoint
 
 
 @pytest.mark.asyncio
@@ -690,10 +690,31 @@ async def test_delete_compliance_request(
     assert res.status_code == expected_status_code
 
 
+@pytest.mark.parametrize(
+    "compliance_request_id, stored_finalisation_id, stored_pdf_bytes, expected_status",
+    [
+        (1, 1, bytes([0, 99, 120, 4]), HTTPStatus.OK),
+        (4, 2, bytes([0, 11, 1]), HTTPStatus.OK),
+        (1, 1, None, HTTPStatus.NOT_FOUND),  # No PDF data
+        (1, 2, b"123", HTTPStatus.NOT_FOUND),  # PDF data under a different finalisation record
+        (1, 99, b"123", HTTPStatus.NOT_FOUND),  # PDF data under a different finalisation record
+        (99, 1, b"123", HTTPStatus.NOT_FOUND),  # Request ID is wrong
+    ],
+)
 @pytest.mark.asyncio
-async def test_fetch_compliance_request_artifact(client, pg_compliance_config, valid_jwt_admin1):
+async def test_fetch_compliance_request_artifact_admin(
+    client,
+    pg_compliance_config,
+    valid_jwt_admin1,
+    compliance_request_id: int,
+    stored_finalisation_id: int,
+    stored_pdf_bytes: bytes | None,
+    expected_status: HTTPStatus,
+):
     # Arrange
-    compliance_request_id = 1
+    settings = get_current_settings()
+    if stored_pdf_bytes is not None:
+        save_compliance_finalisation_report(settings.file_store_path, stored_finalisation_id, stored_pdf_bytes)
 
     # Act
     res = await client.get(
@@ -702,10 +723,14 @@ async def test_fetch_compliance_request_artifact(client, pg_compliance_config, v
     )
 
     # Assert
-    assert res.status_code == HTTPStatus.OK
-    assert res.content == b"\\x0001"
-    assert res.headers["content-type"] == "application/pdf"
-    assert res.headers["content-disposition"] and "attachment; filename=" in res.headers["content-disposition"]
+    assert res.status_code == expected_status
+    if expected_status == HTTPStatus.OK:
+        assert res.content == stored_pdf_bytes
+        assert res.headers["content-type"] == "application/pdf"
+        assert res.headers["content-disposition"] and "attachment; filename=" in res.headers["content-disposition"]
+    else:
+        assert res.headers["content-type"] == "application/json"
+        assert "Not Found" in res.content.decode()
 
 
 @pytest.mark.asyncio

@@ -38,7 +38,6 @@ from cactus_schema.runner import (
 from cactus_test_definitions.client import TestProcedureId
 from httpx import AsyncClient
 from sqlalchemy import func, select, update
-from sqlalchemy.orm import selectinload
 
 from cactus_orchestrator.api.run import finalise_run, get_run_warnings, is_all_criteria_met
 from cactus_orchestrator.filestore import (
@@ -48,7 +47,7 @@ from cactus_orchestrator.filestore import (
     run_report_exists,
     run_zip_exists,
 )
-from cactus_orchestrator.model import Run, RunArtifact, RunGroup, RunStatus, User
+from cactus_orchestrator.model import Run, RunGroup, RunStatus, User
 from cactus_orchestrator.pod.models import generate_dynamic_uri_external_host, generate_static_uri_external_host
 from cactus_orchestrator.settings import get_current_settings
 from tests.utils.filestore import load_file_store_for_test
@@ -870,9 +869,7 @@ async def test_finalise_run_and_teardown_teststack_success(
     mocked_pod.status.assert_not_called()
 
     async with generate_async_session(pg_base_config) as session:
-        run = (
-            await session.execute(select(Run).where(Run.run_id == 1).options(selectinload(Run.run_artifact)))
-        ).scalar_one()
+        run = (await session.execute(select(Run).where(Run.run_id == 1))).scalar_one()
 
         assert run.finalised_at is not None
         assert_nowish(run.finalised_at)
@@ -903,9 +900,7 @@ async def test_finalise_run_and_teardown_teststack_idempotent(
     assert_zips_equal(finalisation_zip_bytes, response1.content, ignore_arcnames={REPORT_FILE_NAME})
 
     async with generate_async_session(pg_base_config) as session:
-        run = (
-            await session.execute(select(Run).where(Run.run_id == 1).options(selectinload(Run.run_artifact)))
-        ).scalar_one()
+        run = (await session.execute(select(Run).where(Run.run_id == 1))).scalar_one()
 
         original_finalised_at = run.finalised_at
 
@@ -924,9 +919,7 @@ async def test_finalise_run_and_teardown_teststack_idempotent(
     assert response2.status_code == 200
     assert response2.content == response1.content
     async with generate_async_session(pg_base_config) as session:
-        run = (
-            await session.execute(select(Run).where(Run.run_id == 1).options(selectinload(Run.run_artifact)))
-        ).scalar_one()
+        run = (await session.execute(select(Run).where(Run.run_id == 1))).scalar_one()
 
         assert run.finalised_at == original_finalised_at, "This shouldn't have changed"
         assert run.run_status == RunStatus.finalised_by_client
@@ -936,6 +929,10 @@ async def test_finalise_run_and_teardown_teststack_idempotent(
     mocked_pod.destroy_pod_resources.assert_awaited_once()
     mocked_pod.finalize.assert_called_once()
     mocked_pod.status.assert_not_called()  # This is a legacy concern - we get everything from finalize now
+
+    settings = get_current_settings()
+    assert run_zip_exists(settings.file_store_path, 1), "Finalize data should be persisted"
+    assert run_report_exists(settings.file_store_path, 1), "Finalize data should be persisted"
 
 
 @pytest.mark.parametrize(
@@ -1037,14 +1034,16 @@ async def test_get_run_request_data(
 
 
 @pytest.mark.parametrize(
-    "run_id,expected_status,expected_artifact_id,expected_user,expected_test_id,expected_group_name,expected_group_id",
+    "run_id,has_finalisation_data,pdf_data,expected_status,expected_user,expected_test_id,expected_group_name,expected_group_id",
     [
-        (1, HTTPStatus.NOT_FOUND, None, None, None, None, None),
-        (2, HTTPStatus.OK, 1, "user1@cactus.example.com", "ALL-01", "name-1", "1"),
-        (4, HTTPStatus.OK, 2, "user1@cactus.example.com", "ALL-03", "name-1", "1"),
-        (5, HTTPStatus.OK, 3, "user1@cactus.example.com", "ALL-01", "name-2", "2"),
-        (6, HTTPStatus.NOT_FOUND, None, None, None, None, None),  # Other user
-        (99, HTTPStatus.NOT_FOUND, None, None, None, None, None),  # DNE
+        (1, False, None, HTTPStatus.NOT_FOUND, None, None, None, None),  # no file store data
+        (2, True, None, HTTPStatus.OK, "user1@cactus.example.com", "ALL-01", "name-1", "1"),
+        (2, True, bytes([1, 1, 1]), HTTPStatus.OK, "user1@cactus.example.com", "ALL-01", "name-1", "1"),
+        (2, False, bytes([1, 1, 1]), HTTPStatus.OK, "user1@cactus.example.com", "ALL-01", "name-1", "1"),
+        (4, True, bytes([2, 2, 2]), HTTPStatus.OK, "user1@cactus.example.com", "ALL-03", "name-1", "1"),
+        (5, True, bytes([3]), HTTPStatus.OK, "user1@cactus.example.com", "ALL-01", "name-2", "2"),
+        (6, True, bytes([1]), HTTPStatus.NOT_FOUND, None, None, None, None),  # Other user
+        (99, True, bytes([1]), HTTPStatus.NOT_FOUND, None, None, None, None),  # DNE
     ],
 )
 async def test_get_run_artifact_access_control(
@@ -1053,8 +1052,9 @@ async def test_get_run_artifact_access_control(
     pg_base_config,
     valid_jwt_user1,
     run_id,
+    has_finalisation_data: bool,
+    pdf_data: bytes | None,
     expected_status,
-    expected_artifact_id,
     expected_user,
     expected_test_id,
     expected_group_name,
@@ -1067,13 +1067,12 @@ async def test_get_run_artifact_access_control(
     """
 
     # Arrange
-    expected_artifact_data = None
-    async with generate_async_session(pg_base_config) as session:
-        artifact = (
-            await session.execute(select(RunArtifact).where(RunArtifact.run_artifact_id == expected_artifact_id))
-        ).scalar_one_or_none()
-        if artifact:
-            expected_artifact_data = artifact.file_data
+    if has_finalisation_data or pdf_data is not None:
+        load_file_store_for_test(
+            run_id,
+            finalisation_zip_bytes=create_runner_finalisation_zip(has_finalisation_data=True),
+            existing_report_bytes=pdf_data,
+        )
 
     # Act
     res = await client.get(f"run/{run_id}/artifact", headers={"Authorization": f"Bearer {valid_jwt_user1}"})
@@ -1081,7 +1080,7 @@ async def test_get_run_artifact_access_control(
     # Assert
     assert res.status_code == expected_status
     if expected_status == HTTPStatus.OK:
-        assert expected_artifact_data == res.read()
+        assert get_zip_arcfile_contents(res.read(), REPORT_FILE_NAME) == pdf_data
 
         assert res.headers[HEADER_USER_NAME] == expected_user
         assert res.headers[HEADER_TEST_ID] == expected_test_id

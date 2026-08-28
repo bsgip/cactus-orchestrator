@@ -11,32 +11,51 @@ from cactus_schema.orchestrator import (
     uri,
 )
 
+from cactus_orchestrator.filestore import save_compliance_finalisation_report
+from cactus_orchestrator.settings import get_current_settings
+
 
 @pytest.mark.parametrize(
-    "compliance_request_id, expected_status, expected_content",
-    [(1, HTTPStatus.OK, b"\\x0001"), (2, HTTPStatus.NOT_FOUND, None)],
+    "compliance_request_id, stored_finalisation_id, stored_pdf_bytes, expected_status",
+    [
+        (1, 1, bytes([0, 99, 120, 4]), HTTPStatus.OK),
+        (4, 2, bytes([0, 11, 1]), HTTPStatus.NOT_FOUND),  # Not visible to user 1
+        (1, 1, None, HTTPStatus.NOT_FOUND),  # No PDF data
+        (1, 2, b"123", HTTPStatus.NOT_FOUND),  # PDF data under a different finalisation record
+        (1, 99, b"123", HTTPStatus.NOT_FOUND),  # PDF data under a different finalisation record
+        (99, 1, b"123", HTTPStatus.NOT_FOUND),  # Request ID is wrong
+    ],
 )
 @pytest.mark.asyncio
 async def test_get_compliance_request_artifact(
     compliance_request_id: int,
+    stored_finalisation_id: int,
+    stored_pdf_bytes: bytes | None,
     expected_status: HTTPStatus,
-    expected_content: bytes,
     client,
     pg_compliance_config,
     valid_jwt_user1,
 ):
+    # Arrange
+    settings = get_current_settings()
+    if stored_pdf_bytes is not None:
+        save_compliance_finalisation_report(settings.file_store_path, stored_finalisation_id, stored_pdf_bytes)
+
     # Act
     res = await client.get(
-        uri.ComplianceRequestArtifact.format(compliance_request_id=compliance_request_id),
+        f"/compliance_request/{compliance_request_id}/artifact",
         headers={"Authorization": f"Bearer {valid_jwt_user1}"},
     )
 
     # Assert
     assert res.status_code == expected_status
     if expected_status == HTTPStatus.OK:
-        assert res.content == expected_content
+        assert res.content == stored_pdf_bytes
         assert res.headers["content-type"] == "application/pdf"
         assert res.headers["content-disposition"] and "attachment; filename=" in res.headers["content-disposition"]
+    else:
+        assert res.headers["content-type"] == "application/json"
+        assert "Not Found" in res.content.decode()
 
 
 @pytest.mark.asyncio
