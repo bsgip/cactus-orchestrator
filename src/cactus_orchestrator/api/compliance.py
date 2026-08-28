@@ -43,9 +43,14 @@ async def get_compliance_request_artifact(
     )
 
     settings = get_current_settings()
-    finalisation = await select_user_compliance_request_finalisation(
-        session=db.session, user_id=user.user_id, compliance_request_id=compliance_request_id
-    )
+
+    try:
+        finalisation = await select_user_compliance_request_finalisation(
+            session=db.session, user_id=user.user_id, compliance_request_id=compliance_request_id
+        )
+    except NoResultFound as exc:
+        logger.error(f"Cannot find {compliance_request_id=} for {user.user_id}", exc_info=exc)
+        finalisation = None
 
     if finalisation is None:
         raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Not Found")

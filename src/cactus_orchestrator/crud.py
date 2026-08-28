@@ -614,8 +614,6 @@ async def insert_compliance_request_finalisation(
         compliance_request_id=compliance_request_id,
         created_at=created_at,
         created_by=created_by,
-        file_data=bytes([]),  # This is historical - file data is now stored on disk
-        file_data_migrated=True,  # This is temporary - file data is now stored on disk
     )
 
     session.add(compliance_request_finalisation)

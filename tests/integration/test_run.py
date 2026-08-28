@@ -1068,7 +1068,11 @@ async def test_get_run_artifact_access_control(
 
     # Arrange
     if has_finalisation_data or pdf_data is not None:
-        load_file_store_for_test(run_id, has_finalisation_data=True, existing_report_bytes=pdf_data)
+        load_file_store_for_test(
+            run_id,
+            finalisation_zip_bytes=create_runner_finalisation_zip(has_finalisation_data=True),
+            existing_report_bytes=pdf_data,
+        )
 
     # Act
     res = await client.get(f"run/{run_id}/artifact", headers={"Authorization": f"Bearer {valid_jwt_user1}"})

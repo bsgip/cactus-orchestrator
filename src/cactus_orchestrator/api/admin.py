@@ -47,6 +47,7 @@ from cactus_orchestrator.crud import (
     safe_delete_compliance_request,
     select_admin_stats,
     select_compliance_request,
+    select_compliance_request_finalisation,
     select_compliance_requests,
     select_group_runs_aggregated_by_procedure,
     select_group_runs_for_procedure,
@@ -59,7 +60,7 @@ from cactus_orchestrator.crud import (
     select_users,
     update_compliance_request,
 )
-from cactus_orchestrator.filestore import save_compliance_finalisation_report
+from cactus_orchestrator.filestore import fetch_compliance_finalisation_report, save_compliance_finalisation_report
 from cactus_orchestrator.model import ComplianceRequest, User
 from cactus_orchestrator.pod.models import PodResources, PodRoutes
 from cactus_orchestrator.reporting.compliance import determine_compliance
@@ -679,6 +680,33 @@ async def admin_delete_compliance_request_endpoint(
 
     await db.session.commit()
     return Response(status_code=HTTPStatus.OK)
+
+
+@router.get(uri.AdminComplianceRequestArtifact, status_code=HTTPStatus.OK)
+async def admin_fetch_compliance_request_artifact(
+    compliance_request_id: int,
+    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.admin_all}))],
+) -> Response:
+    settings = get_current_settings()
+    compliance_request_finalisation = await select_compliance_request_finalisation(
+        session=db.session, compliance_request_id=compliance_request_id
+    )
+
+    if compliance_request_finalisation is None:
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Not Found")
+
+    finalisation_id = compliance_request_finalisation.compliance_request_finalisation_id
+    pdf_bytes = fetch_compliance_finalisation_report(settings.file_store_path, finalisation_id)
+    if pdf_bytes is None:
+        logger.error(f"Could not find PDF bytes in file store for {compliance_request_id=} {finalisation_id=}")
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Not Found")
+
+    return Response(
+        status_code=HTTPStatus.OK,
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename=ComplianceReport-{compliance_request_id}.pdf"},
+    )
 
 
 @router.post(uri.AdminComplianceRequestArtifact, status_code=HTTPStatus.OK)

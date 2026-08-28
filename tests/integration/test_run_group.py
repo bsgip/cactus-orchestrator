@@ -14,6 +14,7 @@ from cactus_orchestrator.filestore import run_report_exists, run_zip_exists
 from cactus_orchestrator.model import Run, RunGroup
 from cactus_orchestrator.settings import get_current_settings
 from tests.utils.filestore import load_file_store_for_test
+from tests.utils.runner import create_runner_finalisation_zip
 
 
 @pytest.mark.asyncio
@@ -172,7 +173,11 @@ async def test_delete_group(
     # Arrange
     settings = get_current_settings()
     for run_id in run_ids_with_storage:
-        load_file_store_for_test(run_id, True, existing_report_bytes=bytes([1, 2, 3]))
+        load_file_store_for_test(
+            run_id,
+            finalisation_zip_bytes=create_runner_finalisation_zip(has_finalisation_data=True),
+            existing_report_bytes=bytes([1, 2, 3]),
+        )
 
     # Act
     async with generate_async_session(pg_base_config) as session:
