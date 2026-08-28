@@ -12,6 +12,7 @@ from cactus_orchestrator.artifact import (
 )
 from cactus_orchestrator.settings import get_current_settings
 from tests.utils.filestore import load_file_store_for_test
+from tests.utils.runner import create_runner_finalisation_zip
 
 
 def _make_zip(entries: dict[str, bytes]) -> bytes:
@@ -28,7 +29,9 @@ def test_fetch_run_envoy_db_happy_path():
     schema_sql = b"CREATE TABLE foo ();"
     data_sql = b"INSERT INTO foo VALUES (1);"
     run_id = 123
-    load_file_store_for_test(run_id, has_finalisation_data=True, envoy_db_schema=(schema_sql, data_sql))
+    load_file_store_for_test(
+        run_id, create_runner_finalisation_zip(has_finalisation_data=True, envoy_db_schema=(schema_sql, data_sql))
+    )
     settings = get_current_settings()
 
     # Act
@@ -44,7 +47,9 @@ def test_fetch_run_envoy_db_missing_schema():
     # Arrange
     data_sql = b"INSERT INTO foo VALUES (1);"
     run_id = 123
-    load_file_store_for_test(run_id, has_finalisation_data=True, envoy_db_schema=(None, data_sql))
+    load_file_store_for_test(
+        run_id, create_runner_finalisation_zip(has_finalisation_data=True, envoy_db_schema=(None, data_sql))
+    )
     settings = get_current_settings()
 
     # Act
@@ -58,7 +63,9 @@ def test_fetch_run_envoy_db_missing_data():
     # Arrange
     schema_sql = b"CREATE TABLE foo ();"
     run_id = 123
-    load_file_store_for_test(run_id, has_finalisation_data=True, envoy_db_schema=(schema_sql, None))
+    load_file_store_for_test(
+        run_id, create_runner_finalisation_zip(has_finalisation_data=True, envoy_db_schema=(schema_sql, None))
+    )
     settings = get_current_settings()
 
     # Act
@@ -73,7 +80,10 @@ def test_fetch_run_reporting_data_json(reporting_data_json: str, has_finalisatio
     # Arrange
     run_id = 123
     load_file_store_for_test(
-        run_id, has_finalisation_data=has_finalisation_data, reporting_data_version_json=(version, reporting_data_json)
+        run_id,
+        create_runner_finalisation_zip(
+            has_finalisation_data=has_finalisation_data, reporting_data_version_json=(version, reporting_data_json)
+        ),
     )
     settings = get_current_settings()
 
@@ -90,7 +100,10 @@ def test_fetch_run_reporting_data_json(reporting_data_json: str, has_finalisatio
 def test_fetch_run_reporting_data_json_missing(has_finalisation_data):
     # Arrange
     run_id = 123
-    load_file_store_for_test(run_id, has_finalisation_data=has_finalisation_data, reporting_data_version_json=None)
+    load_file_store_for_test(
+        run_id,
+        create_runner_finalisation_zip(has_finalisation_data=has_finalisation_data, reporting_data_version_json=None),
+    )
     settings = get_current_settings()
 
     # Act

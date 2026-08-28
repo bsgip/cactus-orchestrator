@@ -1,19 +1,18 @@
 import os
-import shutil
-import tempfile
 from collections.abc import Generator
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from http import HTTPMethod, HTTPStatus
+from http import HTTPStatus
 from itertools import product
-from pathlib import Path
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 from assertical.asserts.time import assert_nowish
+from assertical.asserts.type import assert_list_type
 from assertical.fake.generator import generate_class_instance
 from assertical.fixtures.postgres import generate_async_session
 from cactus_runner.client import RunnerClientError
+from cactus_runner.models import CheckResult, ReportingData_v1, RunnerState
 from cactus_schema.orchestrator import (
     HEADER_GROUP_ID,
     HEADER_GROUP_NAME,
@@ -29,14 +28,11 @@ from cactus_schema.orchestrator import (
     UpdatePlaylistResponse,
 )
 from cactus_schema.runner import (
-    CriteriaEntry,
     InitResponseBody,
     RequestData,
-    RequestEntry,
     RequestList,
     RunnerStatus,
     RunRequest,
-    StepStatus,
     WarningEntry,
 )
 from cactus_test_definitions.client import TestProcedureId
@@ -44,7 +40,6 @@ from httpx import AsyncClient
 from sqlalchemy import func, select, update
 
 from cactus_orchestrator.api.run import finalise_run, get_run_warnings, is_all_criteria_met
-from cactus_orchestrator.artifact import REPORTING_DATA_PREFIX, REPORTING_DATA_SUFFIX
 from cactus_orchestrator.filestore import (
     ERROR_FILE_NAME,
     REPORT_FILE_NAME,
@@ -55,8 +50,9 @@ from cactus_orchestrator.filestore import (
 from cactus_orchestrator.model import Run, RunGroup, RunStatus, User
 from cactus_orchestrator.pod.models import generate_dynamic_uri_external_host, generate_static_uri_external_host
 from cactus_orchestrator.settings import get_current_settings
-from tests.utils.filestore import TEST_FINALISATION_DATA, load_file_store_for_test
+from tests.utils.filestore import load_file_store_for_test
 from tests.utils.pdf import assert_pdf_file
+from tests.utils.runner import TEST_FINALISATION_DATA, create_runner_finalisation_zip
 from tests.utils.zip import assert_zips_equal, get_zip_arcfile_contents
 
 
@@ -123,35 +119,8 @@ def mocked_pod() -> Generator[MockedPod, None, None]:
 
 
 @pytest.fixture
-def zip_file_data(reporting_data_json, reporting_data_version) -> bytes:
-    json_reporting_data = reporting_data_json
-
-    # Work in a temporary directory
-    with tempfile.TemporaryDirectory() as tempdirname:
-        base_path = Path(tempdirname)
-
-        # All the test procedure artifacts should be placed in `archive_dir` to be archived
-        archive_dir = base_path / "archive"
-        os.mkdir(archive_dir)
-
-        # Create reporting data json file
-        if json_reporting_data is not None:
-            file_path = (
-                archive_dir / f"{REPORTING_DATA_PREFIX}{reporting_data_version}_123_test_{REPORTING_DATA_SUFFIX}"
-            )
-            with open(file_path, "w") as f:
-                f.write(json_reporting_data)
-
-        # Create the temporary zip file
-        ARCHIVE_BASEFILENAME = "finalize"
-        ARCHIVE_KIND = "zip"
-        shutil.make_archive(str(base_path / ARCHIVE_BASEFILENAME), ARCHIVE_KIND, archive_dir)
-
-        # Read the zip file contents as binary
-        archive_path = base_path / f"{ARCHIVE_BASEFILENAME}.{ARCHIVE_KIND}"
-        with open(archive_path, mode="rb") as f:
-            zip_contents = f.read()
-    return zip_contents
+def finalisation_zip_bytes(reporting_data_json, reporting_data_version) -> bytes:
+    return create_runner_finalisation_zip(reporting_data_version_json=(reporting_data_version, reporting_data_json))
 
 
 @pytest.mark.parametrize(
@@ -691,136 +660,160 @@ async def test_delete_individual_run(
 
 
 @pytest.mark.parametrize(
-    "runner_status, expected",
+    "reporting_data, expected",
     [
         (None, None),
         (
             generate_class_instance(
-                RunnerStatus,
-                step_status={},
-                criteria=[CriteriaEntry(True, "", ""), CriteriaEntry(True, "", "")],
-                request_history=[
-                    RequestEntry("", "", HTTPMethod.GET, HTTPStatus.BAD_REQUEST, datetime.now(), "", [], 0),
-                    RequestEntry("", "", HTTPMethod.POST, HTTPStatus.OK, datetime.now(), "", [], 0),
-                ],
+                ReportingData_v1,
+                check_results={"foo": CheckResult(True, ""), "bar": CheckResult(True, "")},
+                warnings=[],
             ),
             True,
         ),
         (
             generate_class_instance(
-                RunnerStatus,
-                step_status={},
-                criteria=[],
-                request_history=[],
+                ReportingData_v1,
+                check_results={"foo": CheckResult(True, ""), "bar": CheckResult(True, "")},
+                warnings=[generate_class_instance(WarningEntry)],
             ),
             True,
         ),
         (
             generate_class_instance(
-                RunnerStatus,
-                step_status={},
-                criteria=None,
-                request_history=None,
+                ReportingData_v1,
+                check_results={},
+                warnings=[],
             ),
             True,
         ),
         (
             generate_class_instance(
-                RunnerStatus,
-                step_status={},
-                criteria=[CriteriaEntry(True, "", ""), CriteriaEntry(True, "", "")],
-                request_history=[
-                    RequestEntry("", "", HTTPMethod.GET, HTTPStatus.BAD_REQUEST, datetime.now(), "", [], 0),
-                    RequestEntry("", "", HTTPMethod.POST, HTTPStatus.OK, datetime.now(), "", ["validation error"], 0),
-                ],
+                ReportingData_v1,
+                check_results=None,
+                warnings=[],
+            ),
+            True,
+        ),
+        (
+            generate_class_instance(
+                ReportingData_v1,
+                check_results={"foo": CheckResult(True, ""), "bar": CheckResult(False, "")},
+                warnings=[],
             ),
             False,
-        ),  # validation error
+        ),  # criteria error
         (
             generate_class_instance(
-                RunnerStatus,
-                step_status={},
-                criteria=[CriteriaEntry(True, "", ""), CriteriaEntry(False, "", "")],
-                request_history=[
-                    RequestEntry("", "", HTTPMethod.GET, HTTPStatus.BAD_REQUEST, datetime.now(), "", [], 0),
-                    RequestEntry("", "", HTTPMethod.POST, HTTPStatus.OK, datetime.now(), "", [], 0),
-                ],
+                ReportingData_v1,
+                check_results={"foo": CheckResult(True, ""), "bar": CheckResult(False, "")},
+                warnings=[generate_class_instance(WarningEntry)],
             ),
             False,
         ),  # criteria error
     ],
 )
-def test_is_all_criteria_met(runner_status: RunnerStatus | None, expected: bool | None):
-    actual = is_all_criteria_met(runner_status)
+def test_is_all_criteria_met(reporting_data: RunnerStatus | None, expected: bool | None):
+    actual = is_all_criteria_met(reporting_data)
     assert actual is expected
 
 
 @pytest.mark.parametrize(
-    "runner_status",
+    "reporting_data",
     [
         None,
-        generate_class_instance(RunnerStatus, step_status={}, warnings=[]),
+        generate_class_instance(ReportingData_v1, warnings=[]),
         generate_class_instance(
-            RunnerStatus,
-            step_status={},
+            ReportingData_v1,
             warnings=[WarningEntry("der-settings.set-max-w-varied", "desc", "msg", datetime(2025, 1, 1, tzinfo=UTC))],
         ),
     ],
 )
-def test_get_run_warnings(runner_status: RunnerStatus | None):
-    actual = get_run_warnings(runner_status)
-    if runner_status is None:
+def test_get_run_warnings(reporting_data: ReportingData_v1 | None):
+    actual = get_run_warnings(reporting_data)
+    if reporting_data is None:
         assert actual is None
     else:
-        assert actual == [w.to_dict() for w in runner_status.warnings]
+        assert_list_type(dict, actual, count=len(reporting_data.warnings or []))
+        assert actual == [w.to_dict() for w in reporting_data.warnings]
 
 
 @pytest.mark.parametrize(
-    "runner_status, all_criteria_met",
+    "finalize_success, reporting_version, reporting_data, expect_finalize_data, expect_pass, expect_n_warnings",
     [
         (
+            True,
+            1,
             generate_class_instance(
-                RunnerStatus,
-                step_status={},
-                criteria=[CriteriaEntry(True, "", "")],
-                request_history=[
-                    RequestEntry("a", "b", HTTPMethod.TRACE, HTTPStatus.OK, datetime(2022, 11, 20), "", [], 0)
-                ],
+                ReportingData_v1,
+                check_results={"foo": CheckResult(True, "")},
+                warnings=[],
+                runner_state=generate_class_instance(RunnerState, optional_is_none=True),
             ),
             True,
+            True,
+            0,
         ),
         (
+            True,
+            1,
             generate_class_instance(
-                RunnerStatus,
-                step_status={},
-                criteria=[CriteriaEntry(False, "", "")],
-                request_history=[],
+                ReportingData_v1,
+                check_results={"foo": CheckResult(True, "")},
+                warnings=[generate_class_instance(WarningEntry), generate_class_instance(WarningEntry, seed=101)],
+                runner_state=generate_class_instance(RunnerState, optional_is_none=True),
             ),
-            False,
+            True,
+            True,
+            2,
         ),
+        (True, None, None, True, False, None),  # Got ZIP data but no reporting data in that ZIP
         (
+            True,
+            99,
             generate_class_instance(
-                RunnerStatus,
-                step_status={"step1": StepStatus.RESOLVED},
-                criteria=[CriteriaEntry(True, "", "")],
-                request_history=[
-                    RequestEntry("a", "b", HTTPMethod.TRACE, HTTPStatus.OK, datetime(2022, 11, 20), "", ["an error"], 0)
-                ],
+                ReportingData_v1,
+                check_results={"foo": CheckResult(True, "")},
+                warnings=[generate_class_instance(WarningEntry), generate_class_instance(WarningEntry, seed=101)],
+                runner_state=generate_class_instance(RunnerState, optional_is_none=True),
             ),
+            True,
             False,
-        ),
+            None,
+        ),  # Got an unexpected version of ReportingData
+        (False, None, None, False, False, None),  # Simulate an error in the finalize request
     ],
 )
 @pytest.mark.asyncio
 async def test_finalise_run_creates_run_artifact_and_updates_run(
-    pg_base_config, mocked_pod: MockedPod, zip_file_data: bytes, runner_status, all_criteria_met
+    pg_base_config,
+    mocked_pod: MockedPod,
+    finalize_success: bool,
+    reporting_version: int | None,
+    reporting_data: str | ReportingData_v1 | None,
+    expect_finalize_data: bool,
+    expect_pass: bool,
+    expect_n_warnings: int | None,
 ):
-    """Finalize correctly updates the file store with data requested from the runner"""
+    """Finalize correctly updates the file store with data requested from the runner (under various conditions)"""
     # Arrange
-    finalize_data = zip_file_data
 
-    mocked_pod.status.return_value = runner_status
-    mocked_pod.finalize.return_value = finalize_data
+    # finalize will either return some bytes OR raise an error
+    if finalize_success:
+        reporting_data_version: tuple[int, str] | None = None
+        if reporting_data is not None:
+            version = reporting_version if reporting_version is not None else 1
+            if isinstance(reporting_data, ReportingData_v1):
+                reporting_data_version = (version, reporting_data.to_json())
+            else:
+                reporting_data_version = (version, reporting_data)
+
+        mocked_pod.finalize.return_value = create_runner_finalisation_zip(
+            has_finalisation_data=True, reporting_data_version_json=reporting_data_version
+        )
+    else:
+        mocked_pod.finalize.side_effect = Exception("Mock error for finalize")
+
     finalise_time = datetime(2023, 4, 5, tzinfo=UTC)
     timeout_seconds = 10
     settings = get_current_settings()
@@ -835,10 +828,10 @@ async def test_finalise_run_creates_run_artifact_and_updates_run(
         await session.commit()
 
     # Assert
-    mocked_pod.status.assert_called_once()
     mocked_pod.finalize.assert_called_once()
+    mocked_pod.status.assert_not_called()  # This was a legacy concern - should all be done via finalize now
 
-    assert run_zip_exists(settings.file_store_path, 1), "The reporting data should be created"
+    assert run_zip_exists(settings.file_store_path, 1) is expect_finalize_data
     assert not run_report_exists(settings.file_store_path, 1), "The report should be generated elsewhere"
 
     async with generate_async_session(pg_base_config) as session:
@@ -846,90 +839,22 @@ async def test_finalise_run_creates_run_artifact_and_updates_run(
 
         assert run.finalised_at == finalise_time
         assert run.run_status == RunStatus.finalised_by_client
-        assert run.all_criteria_met is all_criteria_met
-        assert run.warnings == [w.to_dict() for w in runner_status.warnings]
+        assert run.all_criteria_met is expect_pass
 
-
-@pytest.mark.asyncio
-async def test_finalise_run_handles_runner_finalize_failure(
-    pg_base_config,
-    mocked_pod: MockedPod,
-):
-    """Finalize still updates the record as finalised even if runner misbehaves"""
-    # Arrange
-    runner_status = generate_class_instance(
-        RunnerStatus, step_status={"step1": StepStatus.RESOLVED}, request_history=[]
-    )  # This is a success status
-
-    mocked_pod.status.return_value = runner_status
-    mocked_pod.finalize.side_effect = Exception("mock exception")
-    finalise_time = datetime(2023, 4, 5, tzinfo=UTC)
-    timeout_seconds = 10
-    settings = get_current_settings()
-    assert not run_zip_exists(settings.file_store_path, 1), "No data should exist initially"
-
-    # Act
-    async with generate_async_session(pg_base_config) as session:
-        run = (await session.execute(select(Run).where(Run.run_id == 1))).scalar_one()
-        await finalise_run(
-            settings, run, "http://mockurl", session, RunStatus.finalised_by_client, finalise_time, timeout_seconds
-        )
-        await session.commit()
-
-    # Assert
-    mocked_pod.status.assert_called_once()
-    mocked_pod.finalize.assert_called_once()
-    assert not run_zip_exists(settings.file_store_path, 1), "No run data saved as we got nothing from finalize"
-    async with generate_async_session(pg_base_config) as session:
-        run = (await session.execute(select(Run).where(Run.run_id == 1))).scalar_one()
-
-        assert run.finalised_at == finalise_time
-        assert run.run_status == RunStatus.finalised_by_client
-        assert run.all_criteria_met is True
-
-
-@pytest.mark.asyncio
-async def test_finalise_run_handles_runner_status_failure(pg_base_config, mocked_pod: MockedPod, zip_file_data: bytes):
-    """Finalize will still proceed even if the runner status cannot be determined"""
-    # Arrange
-
-    mocked_pod.status.side_effect = Exception("my mock exception")
-    mocked_pod.finalize.return_value = zip_file_data
-    finalise_time = datetime(2023, 4, 5, tzinfo=UTC)
-    timeout_seconds = 10
-    settings = get_current_settings()
-    assert not run_zip_exists(settings.file_store_path, 1), "No data should exist initially"
-
-    # Act
-    async with generate_async_session(pg_base_config) as session:
-        run = (await session.execute(select(Run).where(Run.run_id == 1))).scalar_one()
-        await finalise_run(
-            settings, run, "http://mockurl", session, RunStatus.finalised_by_client, finalise_time, timeout_seconds
-        )
-        await session.commit()
-
-    # Assert
-    mocked_pod.status.assert_called_once()
-    mocked_pod.finalize.assert_called_once()
-    async with generate_async_session(pg_base_config) as session:
-        run = (await session.execute(select(Run).where(Run.run_id == 1))).scalar_one()
-
-        assert run.finalised_at == finalise_time
-        assert run.run_status == RunStatus.finalised_by_client
-        assert run.all_criteria_met is None
-        assert run.warnings is None
-
-    assert run_zip_exists(settings.file_store_path, 1), "Run ZIP should've saved"
-    assert_zips_equal(zip_file_data, fetch_run_zip(settings.file_store_path, 1), ignore_arcnames={ERROR_FILE_NAME})
+        if expect_n_warnings is None:
+            assert run.warnings is None
+        else:
+            assert run.warnings is not None
+            assert_list_type(dict, run.warnings, count=expect_n_warnings)
+            assert all([w for w in run.warnings]), "There should be data in the warnings"
 
 
 @pytest.mark.asyncio
 async def test_finalise_run_and_teardown_teststack_success(
-    client: AsyncClient, pg_base_config, mocked_pod, zip_file_data, valid_jwt_user1
+    client: AsyncClient, pg_base_config, mocked_pod: MockedPod, finalisation_zip_bytes, valid_jwt_user1
 ):
     # Arrange
-    mocked_pod.finalize.return_value = zip_file_data
-    mocked_pod.status.return_value = generate_class_instance(RunnerStatus, step_status={})
+    mocked_pod.finalize.return_value = finalisation_zip_bytes
     settings = get_current_settings()
 
     # Act
@@ -937,11 +862,11 @@ async def test_finalise_run_and_teardown_teststack_success(
 
     # Assert
     assert response.status_code == 200
-    assert_zips_equal(zip_file_data, response.content, ignore_arcnames={REPORT_FILE_NAME})
+    assert_zips_equal(finalisation_zip_bytes, response.content, ignore_arcnames={REPORT_FILE_NAME})
     assert_pdf_file(get_zip_arcfile_contents(response.content, REPORT_FILE_NAME))
 
     mocked_pod.finalize.assert_called_once()
-    mocked_pod.status.assert_called_once()
+    mocked_pod.status.assert_not_called()
 
     async with generate_async_session(pg_base_config) as session:
         run = (await session.execute(select(Run).where(Run.run_id == 1))).scalar_one()
@@ -958,12 +883,12 @@ async def test_finalise_run_and_teardown_teststack_success(
 
 @pytest.mark.asyncio
 async def test_finalise_run_and_teardown_teststack_idempotent(
-    client: AsyncClient, pg_base_config, mocked_pod: MockedPod, zip_file_data, valid_jwt_user1
+    client: AsyncClient, pg_base_config, mocked_pod: MockedPod, finalisation_zip_bytes, valid_jwt_user1
 ):
     """Tests that finalising the same run multiple times will not cause any weird side effects"""
 
     # Arrange
-    mocked_pod.finalize.side_effect = [zip_file_data, Exception("Mock exception - shouldn't be raised")]
+    mocked_pod.finalize.side_effect = [finalisation_zip_bytes, Exception("Mock exception - shouldn't be raised")]
     mocked_pod.status.side_effect = [
         generate_class_instance(RunnerStatus, step_status={}),
         Exception("Mock exception - shouldn't be raised"),
@@ -972,7 +897,7 @@ async def test_finalise_run_and_teardown_teststack_idempotent(
     # First request should perform normally and update the DB
     response1 = await client.post("/run/1/finalise", headers={"Authorization": f"Bearer {valid_jwt_user1}"})
     assert response1.status_code == 200
-    assert_zips_equal(zip_file_data, response1.content, ignore_arcnames={REPORT_FILE_NAME})
+    assert_zips_equal(finalisation_zip_bytes, response1.content, ignore_arcnames={REPORT_FILE_NAME})
 
     async with generate_async_session(pg_base_config) as session:
         run = (await session.execute(select(Run).where(Run.run_id == 1))).scalar_one()
@@ -987,7 +912,7 @@ async def test_finalise_run_and_teardown_teststack_idempotent(
     # We should've only cleaned up and finalised once (for the first request)
     mocked_pod.destroy_pod_resources.assert_awaited_once()
     mocked_pod.finalize.assert_called_once()
-    mocked_pod.status.assert_called_once()
+    mocked_pod.status.assert_not_called()  # This is a legacy concern - we get everything from finalize now
 
     # Fire off the same request again - it should return the exact same data and the DB should still be OK
     response2 = await client.post("/run/1/finalise", headers={"Authorization": f"Bearer {valid_jwt_user1}"})
@@ -1003,7 +928,7 @@ async def test_finalise_run_and_teardown_teststack_idempotent(
     # We should've only cleaned up and finalised once (for the first request)
     mocked_pod.destroy_pod_resources.assert_awaited_once()
     mocked_pod.finalize.assert_called_once()
-    mocked_pod.status.assert_called_once()
+    mocked_pod.status.assert_not_called()  # This is a legacy concern - we get everything from finalize now
 
     settings = get_current_settings()
     assert run_zip_exists(settings.file_store_path, 1), "Finalize data should be persisted"
@@ -1194,8 +1119,9 @@ async def test_get_run_artifact_pdf_missing_with_reporting_data__regenerates(
     run_id = 2
     load_file_store_for_test(
         run_id,
-        has_finalisation_data=True,
-        reporting_data_version_json=(reporting_data_version, reporting_data_json),
+        finalisation_zip_bytes=create_runner_finalisation_zip(
+            has_finalisation_data=True, reporting_data_version_json=(reporting_data_version, reporting_data_json)
+        ),
         existing_report_bytes=None,
     )
     settings = get_current_settings()
@@ -1219,7 +1145,7 @@ async def test_get_run_artifact_pdf_missing_no_reporting_data__warns_and_serves_
     run_id = 2  # artifact_id=1
     load_file_store_for_test(
         run_id,
-        has_finalisation_data=True,
+        finalisation_zip_bytes=create_runner_finalisation_zip(has_finalisation_data=True),
         existing_report_bytes=None,
     )
 
@@ -1248,8 +1174,9 @@ async def test_get_run_artifact_pdf_missing_regeneration_fails__serves_original(
     run_id = 2
     load_file_store_for_test(
         run_id,
-        has_finalisation_data=True,
-        reporting_data_version_json=(reporting_data_version, reporting_data_json),
+        finalisation_zip_bytes=create_runner_finalisation_zip(
+            has_finalisation_data=True, reporting_data_version_json=(reporting_data_version, reporting_data_json)
+        ),
         existing_report_bytes=None,
     )
 
@@ -1406,7 +1333,7 @@ async def create_playlist_for_test(
 
 @pytest.mark.asyncio
 async def test_playlist_finalize_advances_to_next_test(
-    client, mocked_pod: MockedPod, zip_file_data, pg_base_config, client_cert_pem_bytes, valid_jwt_user1
+    client, mocked_pod: MockedPod, finalisation_zip_bytes, pg_base_config, client_cert_pem_bytes, valid_jwt_user1
 ):
     response_model = await create_playlist_for_test(
         client,
@@ -1425,8 +1352,7 @@ async def test_playlist_finalize_advances_to_next_test(
         await session.execute(update(Run).where(Run.run_id == first_run_id).values(run_status=RunStatus.started))
         await session.commit()
 
-    finalize_data = zip_file_data
-    mocked_pod.finalize.return_value = finalize_data
+    mocked_pod.finalize.return_value = finalisation_zip_bytes
     mocked_pod.status.return_value = generate_class_instance(RunnerStatus, step_status={})
     mocked_pod.next_test.return_value = generate_class_instance(InitResponseBody, is_started=True)
 
@@ -1453,7 +1379,7 @@ async def test_playlist_finalize_advances_to_next_test(
 
 @pytest.mark.asyncio
 async def test_playlist_finalize_teardown_on_last_test(
-    client, mocked_pod: MockedPod, zip_file_data, pg_base_config, client_cert_pem_bytes, valid_jwt_user1
+    client, mocked_pod: MockedPod, finalisation_zip_bytes, pg_base_config, client_cert_pem_bytes, valid_jwt_user1
 ):
     response_model = await create_playlist_for_test(
         client,
@@ -1475,8 +1401,7 @@ async def test_playlist_finalize_teardown_on_last_test(
         await session.execute(update(Run).where(Run.run_id == second_run_id).values(run_status=RunStatus.started))
         await session.commit()
 
-    finalize_data = zip_file_data
-    mocked_pod.finalize.return_value = finalize_data
+    mocked_pod.finalize.return_value = finalisation_zip_bytes
     mocked_pod.status.return_value = generate_class_instance(RunnerStatus, step_status={})
 
     # Finalize last run
@@ -1580,7 +1505,7 @@ async def test_start_run_rejects_out_of_order_playlist_run(
 
 @pytest.mark.asyncio
 async def test_playlist_finalize_next_test_error_falls_back_to_teardown(
-    client, mocked_pod: MockedPod, zip_file_data, pg_base_config, client_cert_pem_bytes, valid_jwt_user1
+    client, mocked_pod: MockedPod, finalisation_zip_bytes, pg_base_config, client_cert_pem_bytes, valid_jwt_user1
 ):
     """If the runner rejects /next-test (e.g. a mismatch, or it's unreachable), the orchestrator tears down
     rather than leaving the playlist stuck."""
@@ -1599,7 +1524,7 @@ async def test_playlist_finalize_next_test_error_falls_back_to_teardown(
         await session.execute(update(Run).where(Run.run_id == first_run_id).values(run_status=RunStatus.started))
         await session.commit()
 
-    mocked_pod.finalize.return_value = zip_file_data
+    mocked_pod.finalize.return_value = finalisation_zip_bytes
     mocked_pod.status.return_value = generate_class_instance(RunnerStatus, step_status={})
     mocked_pod.next_test.side_effect = RunnerClientError("boom", http_status_code=HTTPStatus.CONFLICT)
 
