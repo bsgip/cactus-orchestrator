@@ -80,7 +80,7 @@ async def test_generate_pdf_report_v1():
             definition=get_test_procedure(test_procedure_id=TestProcedureId.ALL_01),
             step_status={},
             finished_zip_path=None,
-            resource_annotations=ResourceAnnotations(der_control_ids_by_alias={"a": 1}),
+            resource_annotations=ResourceAnnotations(der_control_ids_by_alias={"a": "1"}),
         ),
     )
     reporting_data = generate_class_instance(
@@ -121,7 +121,7 @@ async def test_generate_pdf_report_v1_with_readings():
             definition=get_test_procedure(test_procedure_id=TestProcedureId.ALL_01),
             step_status={},
             finished_zip_path=None,
-            resource_annotations=ResourceAnnotations(der_control_ids_by_alias={"a": 1}),
+            resource_annotations=ResourceAnnotations(der_control_ids_by_alias={"a": "1"}),
         ),
         client_interactions=[
             generate_class_instance(
@@ -153,7 +153,7 @@ async def test_generate_pdf_report_v1_regenerates_pre_warnings_artifact():
             definition=get_test_procedure(test_procedure_id=TestProcedureId.ALL_01),
             step_status={},
             finished_zip_path=None,
-            resource_annotations=ResourceAnnotations(der_control_ids_by_alias={"a": 1}),
+            resource_annotations=ResourceAnnotations(der_control_ids_by_alias={"a": "1"}),
             random_values=RandomValues(),
         ),
     )
