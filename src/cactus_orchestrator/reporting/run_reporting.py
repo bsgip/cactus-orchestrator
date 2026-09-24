@@ -566,7 +566,9 @@ def generate_criteria_section(
     requires_witness_testing: bool,
     stylesheet: StyleSheet,
 ) -> list[Flowable]:
-    check_values = [check_result.passed for check_result in check_results.values()]
+    check_values = [
+        False if check_result.passed is None else check_result.passed for check_result in check_results.values()
+    ]
     num_passed = sum(check_values)
     num_failed = len(check_values) - num_passed
 
