@@ -413,7 +413,7 @@ wheels = [
 [[package]]
 name = "cactus-test-definitions"
 version = "1.18.1"
-source = { git = "https://github.com/bsgip/cactus-test-definitions.git?rev=plugfest_definitions#c8ea9a3bdcd416dc20032809471baf0112574026" }
+source = { git = "https://github.com/bsgip/cactus-test-definitions.git?rev=plugfest_definitions#c6796a210625921a37a6bf927652b124a5861642" }
 dependencies = [
     { name = "dataclass-wizard" },
     { name = "pyyaml" },
