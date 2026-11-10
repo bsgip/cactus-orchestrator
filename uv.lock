@@ -341,9 +341,9 @@ requires-dist = [
     { name = "assertical", marker = "extra == 'test'", specifier = ">=0.4.0" },
     { name = "asyncpg" },
     { name = "bandit", marker = "extra == 'dev'" },
-    { name = "cactus-runner", git = "https://github.com/bsgip/cactus-runner.git?rev=v2.10.0" },
+    { name = "cactus-runner", git = "https://github.com/bsgip/cactus-runner.git?rev=v2.11.0" },
     { name = "cactus-schema", specifier = "==1.4.0" },
-    { name = "cactus-test-definitions", specifier = "==1.18.2" },
+    { name = "cactus-test-definitions", specifier = "==1.19.1" },
     { name = "coverage", marker = "extra == 'dev'" },
     { name = "cryptography" },
     { name = "fastapi", specifier = "==0.131.0" },
@@ -382,8 +382,8 @@ provides-extras = ["dev", "test"]
 
 [[package]]
 name = "cactus-runner"
-version = "2.10.0"
-source = { git = "https://github.com/bsgip/cactus-runner.git?rev=v2.10.0#ded60694a7be9f42dc9ce04319da02d9243efe5e" }
+version = "2.11.0"
+source = { git = "https://github.com/bsgip/cactus-runner.git?rev=v2.11.0#766545c1c7e8c2b4a76a742648d6cd6bee0dc387" }
 dependencies = [
     { name = "aiohttp" },
     { name = "apluggy" },
@@ -412,16 +412,16 @@ wheels = [
 
 [[package]]
 name = "cactus-test-definitions"
-version = "1.18.2"
+version = "1.19.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "dataclass-wizard" },
     { name = "pyyaml" },
     { name = "pyyaml-include" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/b7/15/e18205993fb3b8adc18039fca58b7e09290ce06d0f81c699068be2e74740/cactus_test_definitions-1.18.2.tar.gz", hash = "sha256:2affd938a56ac38f9931f1218424a6c80296c0fb61d6a06d0be856d106271dd4", size = 192477, upload-time = "2026-10-14T22:45:45.287Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/1c/53/a2164dfb0272b83febe423a7178b08087592e722f5cd43551155204b664a/cactus_test_definitions-1.19.1.tar.gz", hash = "sha256:3ea9dc96b546a09a6ca36c96f0ac048bf80ed64eebac7e40501e0218521450cc", size = 198269, upload-time = "2026-11-06T05:40:24.435Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/74/e0/8b7240783494c6f2ce6915ab2e2948e0206575f024dcbca7d397e5f5b845/cactus_test_definitions-1.18.2-py3-none-any.whl", hash = "sha256:8b68c9841c6932c76c6f72cf489dd21959feed6c519d8257c0c8204abd834afb", size = 374021, upload-time = "2026-10-14T22:45:42.919Z" },
+    { url = "https://files.pythonhosted.org/packages/b6/60/c726e52560f10ac53ede96b9819b88e6565b32a56faf3661f2f58dde2d44/cactus_test_definitions-1.19.1-py3-none-any.whl", hash = "sha256:07f633cedd0a386b84eb29b8793b1918b55d9249b30728cdbec84f6bcaea9aee", size = 382309, upload-time = "2026-11-06T05:40:22.881Z" },
 ]
 
 [[package]]
@@ -732,8 +732,8 @@ wheels = [
 
 [[package]]
 name = "envoy"
-version = "2.5.0"
-source = { git = "https://github.com/bsgip/envoy.git?rev=v2.5.0#9d00340b5592f1fdf09dc74bd743fc251da0bfb5" }
+version = "2.5.1"
+source = { git = "https://github.com/bsgip/envoy.git?rev=v2.5.1#f439b52ae699f7b2678bfb22716d54a3908dd2a3" }
 dependencies = [
     { name = "alembic" },
     { name = "asyncpg" },
@@ -748,7 +748,6 @@ dependencies = [
     { name = "pydantic-settings" },
     { name = "pydantic-xml", extra = ["lxml"] },
     { name = "pyjwt" },
-    { name = "python-dateutil" },
     { name = "python-dotenv" },
     { name = "sqlalchemy" },
     { name = "tzlocal" },
