@@ -11,7 +11,7 @@ requires-python = ">= 3.12"
 dependencies = [
     "podman",
     "cryptography",
-    "fastapi==0.131.0",
+    "fastapi",
     "shortuuid",
     "pydantic-settings",
     "httpx",
@@ -21,7 +21,7 @@ dependencies = [
     "cactus-test-definitions==1.19.1",
     "cactus-schema==1.4.0",
     "cactus-runner @ git+https://github.com/bsgip/cactus-runner.git@v2.11.0",
-    "fastapi-pagination<0.15.16",                                              # 0.15.16 breaks with fastapi<0.140.5 (bad signature detection)
+    "fastapi-pagination<0.15.16",                                              # 0.15.16 needs fastapi>=0.140.5 but envoy caps fastapi<0.137
     "fastapi-utils",
     "typing_inspect",                                                          # fastapi-utils missing dep?
     "pyasn1",
