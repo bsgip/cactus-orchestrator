@@ -356,6 +356,8 @@ async def client(
     _reset_current_settings()
 
     async with start_app_with_client(generate_app(get_current_settings())) as c:
+        # FastAPI >= 0.132 rejects JSON bodies without this header (all our test request bodies are JSON)
+        c.headers["Content-Type"] = "application/json"
         yield c
 
 

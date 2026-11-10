@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from collections.abc import AsyncIterator, Callable, Coroutine
+from collections.abc import AsyncGenerator, Callable, Coroutine
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from typing import Any, Never
@@ -254,7 +254,7 @@ def generate_pulltask(pulltask_repeat_every_seconds: int) -> Callable[[], Corout
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI, settings: CactusOrchestratorSettings) -> AsyncIterator[Never]:
+async def lifespan(app: FastAPI, settings: CactusOrchestratorSettings) -> AsyncGenerator[Never]:
     """Lifespan event to start background tasks with fastapi app."""
 
     task_references: set[asyncio.Task] = set()
