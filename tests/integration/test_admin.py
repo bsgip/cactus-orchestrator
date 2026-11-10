@@ -115,7 +115,7 @@ def admin_endpoints() -> list[str]:
     path_parameters = {"{run_group_id}": "1", "{run_id}": "1"}
 
     for route in app.routes:
-        path = route.path  # ty:ignore[unresolved-attribute]
+        path = route.path  # ty:ignore[missing-attribute]
         if path.startswith("/admin"):
             for match, replacement in path_parameters.items():
                 if match in path:

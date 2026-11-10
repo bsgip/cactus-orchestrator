@@ -13,11 +13,11 @@ async def test_endpoints_fail_without_auth():
     app = generate_app(get_current_settings())
     with TestClient(app) as client:
         for route in app.routes:
-            if route.name not in ("openapi", "swagger_ui_html", "swagger_ui_redirect", "redoc_html"):  # ty:ignore[unresolved-attribute]
+            if route.name not in ("openapi", "swagger_ui_html", "swagger_ui_redirect", "redoc_html"):  # ty:ignore[missing-attribute]
                 if hasattr(route, "methods"):
                     for method in route.methods:  # ty:ignore[not-iterable]
                         if method in ["GET", "POST", "PUT", "DELETE", "PATCH"]:
-                            url = route.path  # ty:ignore[unresolved-attribute]
+                            url = route.path  # ty:ignore[missing-attribute]
 
                             response = client.request(method, url)
 
