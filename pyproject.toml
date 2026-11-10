@@ -21,7 +21,7 @@ dependencies = [
     "cactus-test-definitions==1.19.1",
     "cactus-schema==1.4.0",
     "cactus-runner @ git+https://github.com/bsgip/cactus-runner.git@v2.11.0",
-    "fastapi-pagination",
+    "fastapi-pagination<0.15.16",                                              # 0.15.16 breaks with fastapi<0.140.5 (bad signature detection)
     "fastapi-utils",
     "typing_inspect",                                                          # fastapi-utils missing dep?
     "pyasn1",
