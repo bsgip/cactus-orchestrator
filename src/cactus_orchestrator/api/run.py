@@ -16,6 +16,7 @@ from cactus_schema.orchestrator import (
     HEADER_USER_NAME,
     InitRunRequest,
     InitRunResponse,
+    Pagination,
     PlaylistRunInfo,
     ProceedResponse,
     RunArtifactMultipleRequest,
@@ -41,7 +42,6 @@ from cactus_test_definitions.client.test_procedures import TestProcedureId, get_
 from cryptography import x509
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi_async_sqlalchemy import db
-from fastapi_pagination import Page, paginate
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from cactus_orchestrator.api.common import (
@@ -52,11 +52,13 @@ from cactus_orchestrator.api.common import (
     select_user_run_group_or_raise,
     select_user_run_group_run_or_raise,
 )
+from cactus_orchestrator.api.pagination import PageParams, build_page
 from cactus_orchestrator.artifact import fetch_run_artifact_zip, fetch_run_reporting_data_json
 from cactus_orchestrator.auth import AuthPerm, UserContext, jwt_validator
 from cactus_orchestrator.chart import generate_power_limit_chart
 from cactus_orchestrator.crud import (
     ACTIVE_RUN_STATUSES,
+    count_runs_for_group,
     delete_runs,
     delete_upcoming_playlist_runs,
     insert_playlist_runs,
@@ -151,14 +153,23 @@ def generate_run_zip_response_for_user(user: User, run: Run, run_group: RunGroup
 async def get_group_runs_paginated(
     run_group_id: int,
     user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.user_all}))],
+    page_params: Annotated[PageParams, Depends()],
     finalised: bool | None = Query(default=None),
     created_after: datetime = Query(default=None),  # noqa: B008
-) -> Page[RunResponse]:
+) -> Pagination[RunResponse]:
     # check permissions
     _, run_group = await select_user_run_group_or_raise(db.session, user_context, run_group_id)
 
     # get runs
-    runs = await select_runs_for_group(db.session, run_group_id, finalised=finalised, created_at_gte=created_after)
+    total = await count_runs_for_group(db.session, run_group_id, finalised=finalised, created_at_gte=created_after)
+    runs = await select_runs_for_group(
+        db.session,
+        run_group_id,
+        finalised=finalised,
+        created_at_gte=created_after,
+        offset=page_params.offset,
+        limit=page_params.limit,
+    )
 
     settings = get_current_settings()
     if runs:
@@ -181,7 +192,7 @@ async def get_group_runs_paginated(
         ]
     else:
         resp = []
-    return paginate(resp)
+    return build_page(resp, total, page_params)
 
 
 @router.post(

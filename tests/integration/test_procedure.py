@@ -22,6 +22,24 @@ async def test_get_version_list_populated(client, valid_jwt_user1):
 
 
 @pytest.mark.asyncio
+async def test_get_test_procedure_list_paginated(client, valid_jwt_user1):
+    """Static lists are still paginated via page/size"""
+    headers = {"Authorization": f"Bearer {valid_jwt_user1}"}
+    full = (await client.get("/procedure", params={"size": 100}, headers=headers)).json()
+    all_ids = [i["test_procedure_id"] for i in full["items"]]
+    assert len(all_ids) > 3
+
+    res = await client.get("/procedure", params={"size": 2, "page": 2}, headers=headers)
+    assert res.status_code == HTTPStatus.OK
+    data = res.json()
+    assert [i["test_procedure_id"] for i in data["items"]] == all_ids[2:4]
+    assert data["total_items"] == full["total_items"]
+    assert data["current_page"] == 2
+    assert data["prev_page"] == 1
+    assert data["page_size"] == 2
+
+
+@pytest.mark.asyncio
 async def test_get_version_list_with_ignore(add_ignored_v12_version, client, valid_jwt_user1):
     """Test when there are test procedure available."""
 
@@ -50,7 +68,7 @@ async def test_get_test_procedure_list_populated(client, valid_jwt_user1):
     # Assert
     assert res.status_code == HTTPStatus.OK
     data = res.json()
-    assert data["total"] > 1
+    assert data["total_items"] > 1
     assert len(data["items"]) > 1
     assert data["items"][0]["test_procedure_id"] == "ALL-01"
     assert CSIPAusVersion.RELEASE_1_2.value in data["items"][0]["target_versions"]

@@ -5,6 +5,7 @@ from typing import Annotated
 
 from cactus_schema.orchestrator import (
     CSIPAusVersionResponse,
+    Pagination,
     RunResponse,
     TestProcedureResponse,
     TestProcedureRunSummaryResponse,
@@ -14,16 +15,19 @@ from cactus_test_definitions import CSIPAusVersion
 from cactus_test_definitions.client import TestProcedure, TestProcedureId
 from fastapi import APIRouter, Depends, HTTPException, Response
 from fastapi_async_sqlalchemy import db
-from fastapi_pagination import Page, paginate
-from fastapi_pagination.utils import disable_installed_extensions_check
 
 from cactus_orchestrator.api.common import (
     map_run_to_run_response,
     select_user_run_group_or_raise,
     test_procedures_by_id,
 )
+from cactus_orchestrator.api.pagination import PageParams, build_page, paginate_sequence
 from cactus_orchestrator.auth import AuthPerm, UserContext, jwt_validator
-from cactus_orchestrator.crud import select_group_runs_aggregated_by_procedure, select_group_runs_for_procedure
+from cactus_orchestrator.crud import (
+    count_group_runs_for_procedure,
+    select_group_runs_aggregated_by_procedure,
+    select_group_runs_for_procedure,
+)
 from cactus_orchestrator.pod.models import PodResources, PodRoutes
 from cactus_orchestrator.settings import get_current_settings
 
@@ -31,8 +35,6 @@ logger = logging.getLogger(__name__)
 
 
 router = APIRouter()
-
-disable_installed_extensions_check()
 
 
 def map_from_definitions_to_responses(definitions: dict[TestProcedureId, TestProcedure]) -> list[TestProcedureResponse]:
@@ -66,15 +68,17 @@ test_procedure_responses = map_from_definitions_to_responses(test_procedures_by_
 @router.get(uri.VersionList, status_code=HTTPStatus.OK)
 async def get_versions_list_paginated(
     _: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.user_all}))],
-) -> Page[CSIPAusVersionResponse]:
-    return paginate(map_versions())
+    page_params: Annotated[PageParams, Depends()],
+) -> Pagination[CSIPAusVersionResponse]:
+    return paginate_sequence(map_versions(), page_params)
 
 
 @router.get(uri.ProcedureList, status_code=HTTPStatus.OK)
 async def get_test_procedure_list_paginated(
     _: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.user_all}))],
-) -> Page[TestProcedureResponse]:
-    return paginate(test_procedure_responses)
+    page_params: Annotated[PageParams, Depends()],
+) -> Pagination[TestProcedureResponse]:
+    return paginate_sequence(test_procedure_responses, page_params)
 
 
 @router.get(uri.Procedure, status_code=HTTPStatus.OK)
@@ -142,13 +146,17 @@ async def get_runs_for_procedure_in_group(
     user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.user_all}))],
     run_group_id: int,
     test_procedure_id: str,
-) -> Page[RunResponse]:
+    page_params: Annotated[PageParams, Depends()],
+) -> Pagination[RunResponse]:
     # Check permissions
 
     user, run_group = await select_user_run_group_or_raise(db.session, user_context, run_group_id)
 
     # Get runs
-    runs = await select_group_runs_for_procedure(db.session, run_group_id, test_procedure_id)
+    total = await count_group_runs_for_procedure(db.session, run_group_id, test_procedure_id)
+    runs = await select_group_runs_for_procedure(
+        db.session, run_group_id, test_procedure_id, offset=page_params.offset, limit=page_params.limit
+    )
 
     settings = get_current_settings()
     run_responses: list[RunResponse] = []
@@ -164,4 +172,4 @@ async def get_runs_for_procedure_in_group(
         )
         run_responses.append(map_run_to_run_response(settings, run, pod_routes))
 
-    return paginate(run_responses)
+    return build_page(run_responses, total, page_params)

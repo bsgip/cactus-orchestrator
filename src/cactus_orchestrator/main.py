@@ -7,7 +7,6 @@ from functools import partial
 from fastapi import FastAPI
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi_async_sqlalchemy import SQLAlchemyMiddleware
-from fastapi_pagination import add_pagination
 
 from cactus_orchestrator.api import (
     admin_router,
@@ -41,7 +40,6 @@ def generate_app(new_main_settings: CactusOrchestratorSettings) -> FastAPI:
     app.add_middleware(
         SQLAlchemyMiddleware, db_url=str(new_main_settings.orchestrator_database_url), commit_on_exit=False
     )
-    add_pagination(app)
     app.add_middleware(GZipMiddleware, minimum_size=1000, compresslevel=5)
 
     # include routers

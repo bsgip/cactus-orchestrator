@@ -7,7 +7,7 @@ from typing import Any
 from cactus_schema.orchestrator import AdminStatsResponse
 from cactus_test_definitions import CSIPAusVersion
 from cactus_test_definitions.client import TestProcedureId
-from sqlalchemy import String, and_, case, cast, delete, func, select, update
+from sqlalchemy import ColumnElement, Select, String, and_, case, cast, delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload, selectinload, undefer
 
@@ -136,15 +136,42 @@ async def select_users(session: AsyncSession) -> Sequence[User]:
     return result.scalars().all()
 
 
+def _apply_limit_offset[T: Select[Any]](stmt: T, offset: int | None, limit: int | None) -> T:
+    """Applies optional offset/limit to stmt (None means no offset/limit)."""
+    if offset is not None:
+        stmt = stmt.offset(offset)
+    if limit is not None:
+        stmt = stmt.limit(limit)
+    return stmt
+
+
+async def _count(session: AsyncSession, stmt: Select[Any]) -> int:
+    """Executes stmt (which should be a select with any filters applied) wrapped in a COUNT(*)."""
+    resp = await session.execute(select(func.count()).select_from(stmt.order_by(None).subquery()))
+    return resp.scalar_one()
+
+
 async def select_run_groups_for_user(
-    session: AsyncSession, user_id: int, for_update: bool = False
+    session: AsyncSession,
+    user_id: int,
+    for_update: bool = False,
+    offset: int | None = None,
+    limit: int | None = None,
 ) -> Sequence[RunGroup]:
+    """Selects RunGroups for user_id ordered by run_group_id ascending. offset/limit are optional pagination
+    parameters (None = no limit)."""
     stmt = select(RunGroup).where(RunGroup.user_id == user_id).order_by(RunGroup.run_group_id)
+    stmt = _apply_limit_offset(stmt, offset, limit)
     if for_update:
         # Lock the rows so concurrent certificate generation serialises on certificate_id
         stmt = stmt.with_for_update()
     resp = await session.execute(stmt)
     return resp.scalars().all()
+
+
+async def count_run_groups_for_user(session: AsyncSession, user_id: int) -> int:
+    """Counts the RunGroups that select_run_groups_for_user would return (ignoring pagination)."""
+    return await _count(session, select(RunGroup.run_group_id).where(RunGroup.user_id == user_id))
 
 
 async def update_user_name(session: AsyncSession, user_id: int, user_name: str) -> None:
@@ -201,12 +228,11 @@ async def select_run_for_group(session: AsyncSession, run_group_id: int, run_id:
     return resp.scalar_one_or_none()
 
 
-async def select_runs_for_group(
-    session: AsyncSession, run_group_id: int, finalised: bool | None, created_at_gte: datetime | None
-) -> Sequence[Run]:
-    # runs statement
-    stmt = select(Run).where(Run.run_group_id == run_group_id).order_by(Run.run_id.desc())
-    filters = []
+def _runs_for_group_filters(
+    run_group_id: int, finalised: bool | None, created_at_gte: datetime | None
+) -> list[ColumnElement[bool]]:
+    """Generates the WHERE clauses shared by select_runs_for_group / count_runs_for_group"""
+    filters: list[ColumnElement[bool]] = [Run.run_group_id == run_group_id]
     if created_at_gte is not None:
         filters.append(Run.created_at >= created_at_gte)
 
@@ -218,11 +244,37 @@ async def select_runs_for_group(
         # Keep single runs and truly active playlist runs (provisioning/started)
         filters.append((Run.run_status != RunStatus.initialised) | (Run.playlist_execution_id == None))  # noqa: E711
 
-    if filters:
-        stmt = stmt.where(and_(*filters))
+    return filters
+
+
+async def select_runs_for_group(
+    session: AsyncSession,
+    run_group_id: int,
+    finalised: bool | None,
+    created_at_gte: datetime | None,
+    offset: int | None = None,
+    limit: int | None = None,
+) -> Sequence[Run]:
+    """Selects runs for run_group_id ordered by run_id descending (most recent first). offset/limit are optional
+    pagination parameters (None = no limit)."""
+    stmt = (
+        select(Run)
+        .where(and_(*_runs_for_group_filters(run_group_id, finalised, created_at_gte)))
+        .order_by(Run.run_id.desc())
+    )
+    stmt = _apply_limit_offset(stmt, offset, limit)
 
     resp = await session.execute(stmt)
     return resp.scalars().all()
+
+
+async def count_runs_for_group(
+    session: AsyncSession, run_group_id: int, finalised: bool | None, created_at_gte: datetime | None
+) -> int:
+    """Counts the runs that select_runs_for_group would return (ignoring pagination)."""
+    return await _count(
+        session, select(Run.run_id).where(and_(*_runs_for_group_filters(run_group_id, finalised, created_at_gte)))
+    )
 
 
 async def select_runs_for_user(session: AsyncSession, user_id: int, run_ids: list[int]) -> Sequence[Run]:
@@ -380,19 +432,32 @@ async def select_group_runs_aggregated_by_procedure(
 
 
 async def select_group_runs_for_procedure(
-    session: AsyncSession, run_group_id: int, test_procedure_id: str
+    session: AsyncSession,
+    run_group_id: int,
+    test_procedure_id: str,
+    offset: int | None = None,
+    limit: int | None = None,
 ) -> Sequence[Run]:
     """Selects all RunGroup runs that exist under a test procedure. Will not include deferred data. Returns runs
-    returned in run_id descending order (most recent first)."""
+    returned in run_id descending order (most recent first). offset/limit are optional pagination parameters
+    (None = no limit)."""
 
-    # Fetch all runs
-    resp = await session.execute(
+    stmt = (
         select(Run)
         .where(and_(Run.run_group_id == run_group_id, Run.testprocedure_id == test_procedure_id))
         .order_by(Run.run_id.desc())
     )
+    resp = await session.execute(_apply_limit_offset(stmt, offset, limit))
 
     return resp.scalars().all()
+
+
+async def count_group_runs_for_procedure(session: AsyncSession, run_group_id: int, test_procedure_id: str) -> int:
+    """Counts the runs that select_group_runs_for_procedure would return (ignoring pagination)."""
+    return await _count(
+        session,
+        select(Run.run_id).where(and_(Run.run_group_id == run_group_id, Run.testprocedure_id == test_procedure_id)),
+    )
 
 
 async def finalise_compliance_request(
@@ -447,28 +512,51 @@ async def select_user_compliance_request(
     return result.scalar_one()
 
 
-async def select_user_compliance_requests(session: AsyncSession, user_id: int) -> Sequence[ComplianceRequest]:
-    """Get compliance requests for user_id ordered by creation date DESCENDING"""
+async def select_user_compliance_requests(
+    session: AsyncSession, user_id: int, offset: int | None = None, limit: int | None = None
+) -> Sequence[ComplianceRequest]:
+    """Get compliance requests for user_id ordered by creation date DESCENDING (ties broken by
+    compliance_request_id DESCENDING). offset/limit are optional pagination parameters (None = no limit)."""
     stmt = (
         select(ComplianceRequest)
         .where(ComplianceRequest.created_by == user_id)
-        .order_by(ComplianceRequest.created_at.desc())
+        .order_by(ComplianceRequest.created_at.desc(), ComplianceRequest.compliance_request_id.desc())
     )
+    stmt = _apply_limit_offset(stmt, offset, limit)
     stmt = stmt.options(selectinload(ComplianceRequest.classes))
     stmt = stmt.options(selectinload(ComplianceRequest.runs))
     result = await session.execute(stmt)
     return result.scalars().all()
 
 
-async def select_compliance_requests(session: AsyncSession) -> Sequence[ComplianceRequest]:
-    """Get compliance requests for all users ordered by creation date DESCENDING"""
-    stmt = select(ComplianceRequest).order_by(ComplianceRequest.created_at.desc())
+async def count_user_compliance_requests(session: AsyncSession, user_id: int) -> int:
+    """Counts the compliance requests that select_user_compliance_requests would return (ignoring pagination)."""
+    return await _count(
+        session,
+        select(ComplianceRequest.compliance_request_id).where(ComplianceRequest.created_by == user_id),
+    )
+
+
+async def select_compliance_requests(
+    session: AsyncSession, offset: int | None = None, limit: int | None = None
+) -> Sequence[ComplianceRequest]:
+    """Get compliance requests for all users ordered by creation date DESCENDING (ties broken by
+    compliance_request_id DESCENDING). offset/limit are optional pagination parameters (None = no limit)."""
+    stmt = select(ComplianceRequest).order_by(
+        ComplianceRequest.created_at.desc(), ComplianceRequest.compliance_request_id.desc()
+    )
+    stmt = _apply_limit_offset(stmt, offset, limit)
     stmt = stmt.options(selectinload(ComplianceRequest.classes))
     stmt = stmt.options(selectinload(ComplianceRequest.runs))
     stmt = stmt.options(joinedload(ComplianceRequest.created_by_user))
     stmt = stmt.options(joinedload(ComplianceRequest.updated_by_user))
     result = await session.execute(stmt)
     return result.scalars().all()
+
+
+async def count_compliance_requests(session: AsyncSession) -> int:
+    """Counts the compliance requests that select_compliance_requests would return (ignoring pagination)."""
+    return await _count(session, select(ComplianceRequest.compliance_request_id))
 
 
 async def insert_compliance_request(

@@ -13,7 +13,12 @@ from sqlalchemy.exc import IntegrityError, NoResultFound
 from cactus_orchestrator.auth import UserContext
 from cactus_orchestrator.crud import (
     ProcedureRunAggregated,
+    count_compliance_requests,
+    count_group_runs_for_procedure,
     count_playlist_runs,
+    count_run_groups_for_user,
+    count_runs_for_group,
+    count_user_compliance_requests,
     delete_compliance_request,
     delete_upcoming_playlist_runs,
     finalise_compliance_request,
@@ -1347,3 +1352,91 @@ async def test_select_admin_stats_empty(pg_empty_config):
     assert stats.runs_per_user == {}
     assert len(stats.procedures) == len(test_procedures_by_id)
     assert all(p["total_runs"] == 0 for p in stats.procedures)
+
+
+# Offset/limit combinations used to check pagination is a consistent slice of the unpaginated results
+PAGINATION_CASES = [(0, 1), (1, 1), (0, 2), (1, 2), (2, 3), (0, 100), (5, 100), (100, 10)]
+
+
+@pytest.mark.parametrize("offset, limit", PAGINATION_CASES)
+@pytest.mark.parametrize("user_id", [1, 2, 3])
+@pytest.mark.asyncio
+async def test_select_run_groups_for_user_paginated(pg_base_config, user_id: int, offset: int, limit: int):
+    async with generate_async_session(pg_base_config) as session:
+        all_ids = [g.run_group_id for g in await select_run_groups_for_user(session, user_id)]
+        page = await select_run_groups_for_user(session, user_id, offset=offset, limit=limit)
+        assert [g.run_group_id for g in page] == all_ids[offset : offset + limit]
+        assert await count_run_groups_for_user(session, user_id) == len(all_ids)
+
+
+@pytest.mark.parametrize("offset, limit", PAGINATION_CASES)
+@pytest.mark.parametrize(
+    "run_group_id, finalised, created_at",
+    [
+        (1, None, None),
+        (2, None, None),
+        (99, None, None),
+        (1, True, None),
+        (1, False, None),
+        (1, None, datetime(2024, 1, 1, 0, 5, tzinfo=UTC)),
+        (1, True, datetime(2024, 1, 1, 0, 3, 5, tzinfo=UTC)),
+    ],
+)
+@pytest.mark.asyncio
+async def test_select_runs_for_group_paginated(
+    pg_base_config,
+    run_group_id: int,
+    finalised: bool | None,
+    created_at: datetime | None,
+    offset: int,
+    limit: int,
+):
+    async with generate_async_session(pg_base_config) as session:
+        all_ids = [r.run_id for r in await select_runs_for_group(session, run_group_id, finalised, created_at)]
+        page = await select_runs_for_group(session, run_group_id, finalised, created_at, offset=offset, limit=limit)
+        assert [r.run_id for r in page] == all_ids[offset : offset + limit]
+        assert await count_runs_for_group(session, run_group_id, finalised, created_at) == len(all_ids)
+
+
+@pytest.mark.parametrize("offset, limit", PAGINATION_CASES)
+@pytest.mark.parametrize(
+    "run_group_id, test_procedure_id", [(1, "ALL-01"), (2, "ALL-01"), (1, "ALL-02"), (99, "ALL-01")]
+)
+@pytest.mark.asyncio
+async def test_select_group_runs_for_procedure_paginated(
+    pg_base_config, run_group_id: int, test_procedure_id: str, offset: int, limit: int
+):
+    async with generate_async_session(pg_base_config) as session:
+        all_ids = [r.run_id for r in await select_group_runs_for_procedure(session, run_group_id, test_procedure_id)]
+        page = await select_group_runs_for_procedure(
+            session, run_group_id, test_procedure_id, offset=offset, limit=limit
+        )
+        assert [r.run_id for r in page] == all_ids[offset : offset + limit]
+        assert await count_group_runs_for_procedure(session, run_group_id, test_procedure_id) == len(all_ids)
+
+
+@pytest.mark.parametrize("offset, limit", PAGINATION_CASES)
+@pytest.mark.parametrize("user_id", [1, 2, 99])
+@pytest.mark.asyncio
+async def test_select_user_compliance_requests_paginated(pg_compliance_config, user_id: int, offset: int, limit: int):
+    async with generate_async_session(pg_compliance_config) as session:
+        all_ids = [
+            r.compliance_request_id for r in await select_user_compliance_requests(session=session, user_id=user_id)
+        ]
+        page = await select_user_compliance_requests(session=session, user_id=user_id, offset=offset, limit=limit)
+        assert [r.compliance_request_id for r in page] == all_ids[offset : offset + limit]
+        assert await count_user_compliance_requests(session, user_id) == len(all_ids)
+
+
+@pytest.mark.parametrize("offset, limit", PAGINATION_CASES)
+@pytest.mark.asyncio
+async def test_select_compliance_requests_paginated(pg_compliance_config, offset: int, limit: int):
+    async with generate_async_session(pg_compliance_config) as session:
+        all_ids = [r.compliance_request_id for r in await select_compliance_requests(session=session)]
+        page = await select_compliance_requests(session=session, offset=offset, limit=limit)
+        assert [r.compliance_request_id for r in page] == all_ids[offset : offset + limit]
+        for r in page:
+            # Eager loads still populated when paginating
+            assert isinstance(r.created_by_user, User)
+            assert all(isinstance(c, ComplianceRequestClass) for c in r.classes)
+        assert await count_compliance_requests(session) == len(all_ids) == 4

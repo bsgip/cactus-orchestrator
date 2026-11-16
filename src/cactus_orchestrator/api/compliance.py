@@ -8,16 +8,18 @@ from cactus_schema.orchestrator import (
     ComplianceRequestRequest,
     ComplianceRequestResponse,
     ComplianceRequestUpdateRequest,
+    Pagination,
     uri,
 )
 from fastapi import APIRouter, Depends, HTTPException, Response
 from fastapi_async_sqlalchemy import db
-from fastapi_pagination import Page, paginate
 from sqlalchemy.exc import NoResultFound
 
 from cactus_orchestrator.api.common import map_to_compliance_request_response, select_user_or_raise
+from cactus_orchestrator.api.pagination import PageParams, build_page
 from cactus_orchestrator.auth import AuthPerm, UserContext, jwt_validator
 from cactus_orchestrator.crud import (
+    count_user_compliance_requests,
     insert_compliance_request,
     safe_delete_compliance_request,
     select_user_compliance_request,
@@ -75,7 +77,8 @@ async def get_compliance_request_artifact(
 @router.get(uri.ComplianceRequestList, status_code=HTTPStatus.OK)
 async def get_compliance_requests_paginated(
     user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.user_all}))],
-) -> Page[ComplianceRequestResponse]:
+    page_params: Annotated[PageParams, Depends()],
+) -> Pagination[ComplianceRequestResponse]:
     # check permissions
     user = await select_user_or_raise(
         db.session,
@@ -83,14 +86,17 @@ async def get_compliance_requests_paginated(
     )
 
     # get compliance requests
-    requests = await select_user_compliance_requests(db.session, user.user_id)
+    total = await count_user_compliance_requests(db.session, user.user_id)
+    requests = await select_user_compliance_requests(
+        db.session, user.user_id, offset=page_params.offset, limit=page_params.limit
+    )
 
     if requests:
         awaitables = [map_to_compliance_request_response(request) for request in requests]
         resp = await asyncio.gather(*awaitables)
     else:
         resp = []
-    return paginate(resp)
+    return build_page(resp, total, page_params)
 
 
 @router.get(uri.ComplianceRequest, status_code=HTTPStatus.OK)
