@@ -12,6 +12,7 @@ from cactus_schema.orchestrator import (
     ComplianceRequestResponse,
     ComplianceRequestUpdateRequest,
     ComplianceRequestUser,
+    Pagination,
     ProceedResponse,
     RunGroupResponse,
     RunResponse,
@@ -24,7 +25,6 @@ from fastapi import APIRouter, Depends, Query
 from fastapi.exceptions import HTTPException
 from fastapi.responses import Response
 from fastapi_async_sqlalchemy import db
-from fastapi_pagination import Page, paginate
 from sqlalchemy.exc import NoResultFound
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -36,6 +36,7 @@ from cactus_orchestrator.api.common import (
     select_user_run_group_run_or_raise,
     test_procedures_by_id,
 )
+from cactus_orchestrator.api.pagination import PageParams, build_page
 from cactus_orchestrator.api.run import generate_run_zip_response_for_user
 from cactus_orchestrator.api.run_group import map_group_to_group_response
 from cactus_orchestrator.artifact import fetch_run_artifact_zip
@@ -43,6 +44,10 @@ from cactus_orchestrator.auth import AuthPerm, UserContext, jwt_validator
 from cactus_orchestrator.chart import generate_power_limit_chart
 from cactus_orchestrator.crud import (
     ACTIVE_RUN_STATUSES,
+    count_compliance_requests,
+    count_group_runs_for_procedure,
+    count_run_groups_for_user,
+    count_runs_for_group,
     finalise_compliance_request,
     safe_delete_compliance_request,
     select_admin_stats,
@@ -250,8 +255,9 @@ async def admin_get_procedure_run_summaries_for_group(
 @router.get(uri.AdminRunGroupList, status_code=HTTPStatus.OK)
 async def admin_get_groups_paginated(
     user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.admin_all}))],
+    page_params: Annotated[PageParams, Depends()],
     run_group_id: int | None = Query(default=None),
-) -> Page[RunGroupResponse]:
+) -> Pagination[RunGroupResponse]:
     """Gets all the run groups for a user which owns 'run_group_id'.
 
     This is the admin equivalent to 'get_groups_paginated'.
@@ -272,7 +278,10 @@ async def admin_get_groups_paginated(
     settings = get_current_settings()
 
     # get runs
-    run_groups = await select_run_groups_for_user(db.session, user.user_id)
+    total = await count_run_groups_for_user(db.session, user.user_id)
+    run_groups = await select_run_groups_for_user(
+        db.session, user.user_id, offset=page_params.offset, limit=page_params.limit
+    )
     run_group_counts = await select_run_group_counts_for_user(db.session, [r.run_group_id for r in run_groups])
 
     if run_groups:
@@ -285,7 +294,7 @@ async def admin_get_groups_paginated(
         ]
     else:
         resp = []
-    return paginate(resp)
+    return build_page(resp, total, page_params)
 
 
 @router.get(uri.AdminRunArtifact, status_code=HTTPStatus.OK)
@@ -375,14 +384,18 @@ async def admin_get_runs_for_procedure_in_group(
     user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.admin_all}))],
     run_group_id: int,
     test_procedure_id: str,
-) -> Page[RunResponse]:
+    page_params: Annotated[PageParams, Depends()],
+) -> Pagination[RunResponse]:
 
     # Get runs
     user_context, original_user_context = await assume_user_context_from_run_group(
         session=db.session, user_context=user_context, run_group_id=run_group_id
     )
     user, run_group = await select_user_run_group_or_raise(db.session, user_context, run_group_id)
-    runs = await select_group_runs_for_procedure(db.session, run_group_id, test_procedure_id)
+    total = await count_group_runs_for_procedure(db.session, run_group_id, test_procedure_id)
+    runs = await select_group_runs_for_procedure(
+        db.session, run_group_id, test_procedure_id, offset=page_params.offset, limit=page_params.limit
+    )
 
     settings = get_current_settings()
     run_responses: list[RunResponse] = []
@@ -398,23 +411,32 @@ async def admin_get_runs_for_procedure_in_group(
         )
         run_responses.append(map_run_to_run_response(settings, run, pod_routes))
 
-    return paginate(run_responses)
+    return build_page(run_responses, total, page_params)
 
 
 @router.get(uri.AdminRunGroupRunList, status_code=HTTPStatus.OK)
 async def admin_get_group_runs_paginated(
     run_group_id: int,
     user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.admin_all}))],
+    page_params: Annotated[PageParams, Depends()],
     finalised: bool | None = Query(default=None),
     created_after: datetime = Query(default=None),  # noqa: B008
-) -> Page[RunResponse]:
+) -> Pagination[RunResponse]:
 
     # get runs
     user_context, original_user_context = await assume_user_context_from_run_group(
         session=db.session, user_context=user_context, run_group_id=run_group_id
     )
     user, run_group = await select_user_run_group_or_raise(db.session, user_context, run_group_id)
-    runs = await select_runs_for_group(db.session, run_group_id, finalised=finalised, created_at_gte=created_after)
+    total = await count_runs_for_group(db.session, run_group_id, finalised=finalised, created_at_gte=created_after)
+    runs = await select_runs_for_group(
+        db.session,
+        run_group_id,
+        finalised=finalised,
+        created_at_gte=created_after,
+        offset=page_params.offset,
+        limit=page_params.limit,
+    )
 
     settings = get_current_settings()
     run_responses: list[RunResponse] = []
@@ -429,7 +451,7 @@ async def admin_get_group_runs_paginated(
             run,
         )
         run_responses.append(map_run_to_run_response(settings, run, pod_routes))
-    return paginate(run_responses)
+    return build_page(run_responses, total, page_params)
 
 
 @router.get(uri.AdminRunStatus, status_code=HTTPStatus.OK)
@@ -584,15 +606,17 @@ async def map_to_admin_compliance_request_response(request: ComplianceRequest) -
 @router.get(uri.AdminComplianceRequestList, status_code=HTTPStatus.OK)
 async def admin_get_compliance_requests_paginated(
     user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.admin_all}))],
-) -> Page[AdminComplianceRequestResponse]:
-    requests = await select_compliance_requests(session=db.session)
+    page_params: Annotated[PageParams, Depends()],
+) -> Pagination[AdminComplianceRequestResponse]:
+    total = await count_compliance_requests(session=db.session)
+    requests = await select_compliance_requests(session=db.session, offset=page_params.offset, limit=page_params.limit)
 
     if requests:
         awaitables = [map_to_admin_compliance_request_response(r) for r in requests]
         resp = await asyncio.gather(*awaitables)
     else:
         resp = []
-    return paginate(resp)
+    return build_page(resp, total, page_params)
 
 
 @router.get(uri.AdminComplianceRequest, status_code=HTTPStatus.OK)

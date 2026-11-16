@@ -594,6 +594,49 @@ async def test_get_group_runs_paginated(
 
 
 @pytest.mark.parametrize(
+    "params, expected_run_ids, expected_pagination",
+    [
+        # run group 1 has runs [8, 7, 4, 3, 2, 1]
+        ({}, [8, 7, 4, 3, 2, 1], (1, 6, 50, 1, None, None)),
+        ({"size": 4}, [8, 7, 4, 3], (1, 6, 4, 2, None, 2)),
+        ({"size": 4, "page": 2}, [2, 1], (2, 6, 4, 2, 1, None)),
+        ({"size": 2, "page": 2}, [4, 3], (2, 6, 2, 3, 1, 3)),
+        ({"size": 2, "page": 9}, [], (9, 6, 2, 3, 8, None)),
+        ({"size": 1, "page": 1, "finalised": True}, [7], (1, 4, 1, 4, None, 2)),
+    ],
+)
+@pytest.mark.asyncio
+async def test_get_group_runs_pagination_params(
+    client,
+    pg_base_config,
+    valid_jwt_user1,
+    params: dict,
+    expected_run_ids: list[int],
+    expected_pagination: tuple[int, int, int, int, int | None, int | None],
+):
+    """Checks page/size query params are honoured and the Pagination metadata is correct"""
+    res = await client.get("/run_group/1/run", params=params, headers={"Authorization": f"Bearer {valid_jwt_user1}"})
+
+    assert res.status_code == HTTPStatus.OK
+    data = res.json()
+    assert expected_run_ids == [i["run_id"] for i in data["items"]]
+    current_page, total_items, page_size, total_pages, prev_page, next_page = expected_pagination
+    assert data["current_page"] == current_page
+    assert data["total_items"] == total_items
+    assert data["page_size"] == page_size
+    assert data["total_pages"] == total_pages
+    assert data["prev_page"] == prev_page
+    assert data["next_page"] == next_page
+
+
+@pytest.mark.parametrize("params", [{"page": 0}, {"page": -1}, {"size": 0}, {"size": 101}, {"page": "abc"}])
+@pytest.mark.asyncio
+async def test_get_group_runs_invalid_pagination_params(client, pg_base_config, valid_jwt_user1, params: dict):
+    res = await client.get("/run_group/1/run", params=params, headers={"Authorization": f"Bearer {valid_jwt_user1}"})
+    assert res.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
+
+
+@pytest.mark.parametrize(
     "run_id, expected_status",
     [(1, HTTPStatus.OK), (7, HTTPStatus.OK), (5, HTTPStatus.OK), (6, HTTPStatus.NOT_FOUND), (99, HTTPStatus.NOT_FOUND)],
 )

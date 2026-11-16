@@ -2,16 +2,17 @@ import logging
 from http import HTTPStatus
 from typing import Annotated
 
-from cactus_schema.orchestrator import RunGroupRequest, RunGroupResponse, RunGroupUpdateRequest, uri
+from cactus_schema.orchestrator import Pagination, RunGroupRequest, RunGroupResponse, RunGroupUpdateRequest, uri
 from cactus_test_definitions import CSIPAusVersion
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi_async_sqlalchemy import db
-from fastapi_pagination import Page, paginate
 
 from cactus_orchestrator.api.common import envoy_dcap_uri_for_host, select_user_or_raise, select_user_run_group_or_raise
+from cactus_orchestrator.api.pagination import PageParams, build_page
 from cactus_orchestrator.auth import AuthPerm, UserContext, jwt_validator
 from cactus_orchestrator.crud import (
     ACTIVE_RUN_STATUSES,
+    count_run_groups_for_user,
     delete_runs,
     insert_run_group,
     select_run_group_counts_for_user,
@@ -55,12 +56,16 @@ def map_group_to_group_response(
 @router.get(uri.RunGroupList, status_code=HTTPStatus.OK)
 async def get_groups_paginated(
     user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.user_all}))],
-) -> Page[RunGroupResponse]:
+    page_params: Annotated[PageParams, Depends()],
+) -> Pagination[RunGroupResponse]:
     # get user
     user = await select_user_or_raise(db.session, user_context)
 
     # get runs
-    run_groups = await select_run_groups_for_user(db.session, user.user_id)
+    total = await count_run_groups_for_user(db.session, user.user_id)
+    run_groups = await select_run_groups_for_user(
+        db.session, user.user_id, offset=page_params.offset, limit=page_params.limit
+    )
     run_group_counts = await select_run_group_counts_for_user(db.session, [r.run_group_id for r in run_groups])
 
     settings = get_current_settings()
@@ -74,7 +79,7 @@ async def get_groups_paginated(
         ]
     else:
         resp = []
-    return paginate(resp)
+    return build_page(resp, total, page_params)
 
 
 @router.post(uri.RunGroupList, status_code=HTTPStatus.CREATED)
