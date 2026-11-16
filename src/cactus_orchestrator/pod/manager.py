@@ -57,9 +57,9 @@ async def get_podman_version(podman_socket: str) -> tuple[int, int, int]:
 
     if len(version_parts) < 3:
         # If we have "2.3" return (2,3,0)
-        return tuple(version_parts + [0] * (3 - len(version_parts)))  # ty:ignore[invalid-return-type]
+        return tuple(version_parts + [0] * (3 - len(version_parts)))  # ty:ignore[invalid-explicit-return]
     else:
-        return tuple(version_parts[:3])  # ty:ignore[invalid-return-type]
+        return tuple(version_parts[:3])  # ty: ignore[invalid-explicit-return]
 
 
 def _fetch_raw_podman_version(client: podman.PodmanClient) -> str:

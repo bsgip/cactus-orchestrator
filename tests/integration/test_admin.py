@@ -24,6 +24,7 @@ from cactus_schema.orchestrator import (
 )
 from cactus_schema.runner import RunnerStatus
 from cactus_test_definitions.client import TestProcedureId
+from fastapi.routing import iter_route_contexts
 from httpx import AsyncClient
 
 from cactus_orchestrator.filestore import REPORT_FILE_NAME, save_compliance_finalisation_report
@@ -114,9 +115,10 @@ def admin_endpoints() -> list[str]:
     # We only need an properly constructed URL to test whether the route is authorised
     path_parameters = {"{run_group_id}": "1", "{run_id}": "1"}
 
-    for route in app.routes:
-        path = route.path  # ty:ignore[missing-attribute]
-        if path.startswith("/admin"):
+    # FastAPI now lazily wraps included routers - iter_route_contexts flattens them into concrete routes
+    for route in iter_route_contexts(app.routes):
+        path = route.path
+        if path is not None and path.startswith("/admin"):
             for match, replacement in path_parameters.items():
                 if match in path:
                     path = path.replace(match, replacement)
