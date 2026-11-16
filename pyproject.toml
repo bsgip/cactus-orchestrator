@@ -20,8 +20,8 @@ dependencies = [
     "asyncpg",
     "cactus-test-definitions==1.19.3",
     "cactus-schema==1.4.0",
-    "cactus-runner @ git+https://github.com/bsgip/cactus-runner.git@v2.11.0",
-    "fastapi-pagination<0.15.16",                                              # 0.15.16 needs fastapi>=0.140.5 but envoy caps fastapi<0.137
+    "cactus-runner @ git+https://github.com/bsgip/cactus-runner.git@v2.11.1",
+    "fastapi-pagination",
     "fastapi-utils",
     "typing_inspect",                                                          # fastapi-utils missing dep?
     "pyasn1",
