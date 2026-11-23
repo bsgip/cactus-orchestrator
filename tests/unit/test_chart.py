@@ -585,8 +585,8 @@ def test_doe_tags_by_id_from_serialised_reporting_data(reporting_data_json, seri
 
 def test_replay_labels_subscribed_controls_by_tag():
     """ALL-29 case: controls created after the client's last derc poll are revealed by the
-    subscription at creation time. They must be labelled by their tag, not the step name of that
-    earlier poll."""
+    subscription at creation time. They must be labelled by their tag, not "Init" (the step of the
+    last poll before creation), as the chart did before."""
     created = T0 + timedelta(seconds=5)
     does = [
         _make_doe_row(1795386198, 1, created, 120, created=created),

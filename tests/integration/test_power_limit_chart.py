@@ -2203,15 +2203,14 @@ async def test_chart_gen10_derc456_subscribed(pg_envoy_base_config):
         derc5.superseded = True
         await session.commit()
 
-    # No DERC polls needed (subscribed). Requests carry step names for strip labelling:
-    # step_name for each DOE = last request to that group's DERC path at or before created_time.
+    # No DERC polls needed (subscribed): these polls merge with the subscription's
+    # instant-knowledge observations at each created_time and do not change what is received.
     polls = [
         # ct4 = T0+30s: DERC4 (grp1) and DERC5 (grp2) both created here.
-        # Each group gets step_name from its own DERC-path request.
         _poll(1, ct4, req_id=1, step_name="GET-DERC-4"),
         _poll(2, ct4, req_id=2, step_name="GET-DERC-5"),
         _poll(2, T0 + timedelta(minutes=7), req_id=3, step_name="WAIT-OBSERVE-DERC-5"),
-        # ct6 = T0+7m30s: DERC6 created here → gets "GET-DERC-6"
+        # ct6 = T0+7m30s: DERC6 created here
         _poll(2, ct6, req_id=4, step_name="GET-DERC-6"),
         _poll(2, T0 + timedelta(minutes=11), req_id=5, step_name="WAIT-OBSERVE-DERC-6"),
         _poll(

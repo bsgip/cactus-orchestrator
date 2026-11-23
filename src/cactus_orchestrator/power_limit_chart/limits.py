@@ -343,9 +343,9 @@ def _sweep_timeline(
     """Single pass over the event timeline producing (upper_events, lower_events, step_intervals).
 
     step_intervals are (label, start, end) windows showing the controller binding the traces
-    at each moment (see _controller_band_at): a binding or connect/energise DOE (labelled by
-    step name, falling back to 'Grp{gid} DOE#{id}'), else the binding default
-    ('Default-DERP{gid}'). Periods with neither are omitted."""
+    at each moment (see _controller_band_at): a binding or connect/energise DOE (labelled by its
+    tag, else 'Control N' - see _control_labels), else the binding default ('Default-DERP{gid}').
+    Periods with neither are omitted."""
     upper_events: list[_LimitEvent] = []
     lower_events: list[_LimitEvent] = []
     prev_upper: float | None = None
