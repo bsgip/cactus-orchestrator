@@ -37,12 +37,9 @@ def _patch_legacy_site_der_id(data: dict | list | str) -> Any:  # noqa: ANN401
 
 
 def _doe_tags_by_id(resource_annotations: ResourceAnnotations) -> dict[int, str]:
-    """Inverts the runner's tag -> DERControl id annotation map into doe_id -> tag.
-
-    This allows the chart to label each control by its YAML tag rather than inferring a step name
-    from request timestamps (which is fragile when controls are created during the same request that
-    polls the DERC list). The runner serialises the ids as strings, so they are cast to match the
-    integer dynamic_operating_envelope_id used by the chart."""
+    """Inverts the runner's tag -> DERControl id annotation map into doe_id -> tag, so the chart can
+    label each control by its test-definition tag. The runner serialises the ids as strings, so they
+    are cast to match the integer dynamic_operating_envelope_id used by the chart."""
     return {int(doe_id): tag for tag, doe_id in resource_annotations.der_control_ids_by_alias.items()}
 
 

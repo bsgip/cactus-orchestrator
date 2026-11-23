@@ -575,19 +575,20 @@ def _build_receipt_markers(
     subscribed_group_ids: set[int],
 ) -> list[_ReceiptMarker]:
     """One marker per unique (group, revealing observation) pair — the initial receipt of each
-    control plus any later observation that revealed a server-side value update."""
-    seen: set[tuple[int, datetime]] = set()
-    markers: list[_ReceiptMarker] = []
+    control plus any later observation that revealed a server-side value update. A marker is
+    labelled with every control its observation revealed, in creation order."""
+    revealed: dict[tuple[int, datetime], list[_KnownControlSegment]] = {}
     for seg in segments:
-        key = (seg.site_control_group_id, seg.observed_at)
-        if key not in seen:
-            seen.add(key)
-            markers.append(
-                _ReceiptMarker(
-                    time=seg.observed_at,
-                    group_id=seg.site_control_group_id,
-                    is_subscribed=seg.site_control_group_id in subscribed_group_ids,
-                    label=seg.label,
-                )
+        revealed.setdefault((seg.site_control_group_id, seg.observed_at), []).append(seg)
+    markers: list[_ReceiptMarker] = []
+    for (group_id, time), group_segments in revealed.items():
+        group_segments.sort(key=lambda s: (s.row.created_time, s.row.dynamic_operating_envelope_id))
+        markers.append(
+            _ReceiptMarker(
+                time=time,
+                group_id=group_id,
+                is_subscribed=group_id in subscribed_group_ids,
+                label=", ".join(s.label for s in group_segments),
             )
+        )
     return sorted(markers, key=lambda m: m.time)

@@ -442,7 +442,7 @@ def _replay_control_knowledge(
                     observed_at=span.known_from,
                     effective_start=seg_start,
                     effective_end=seg_end,
-                    label=labels[control.doe_id],
+                    label=labels.get(control.doe_id, f"DERC{control.doe_id}"),
                 )
             )
     return segments
