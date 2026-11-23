@@ -3,7 +3,8 @@
 The chart models what the CLIENT knows, not what the server stored. The client's view of a
 group refreshes only at observation events: successful GETs of the group's DERControl list
 (or DefaultDERControl) taken from the request history, or - for subscribed groups -
-server-side changes (notifications assumed delivered at the moment of change).
+server-side changes (notifications assumed delivered at the moment of change). Observations are
+plain timestamps.
 
 Between observations the client executes the schedule it last saw: cancellations, value
 updates and supersessions only take effect at the next observation that reveals them.
@@ -144,13 +145,6 @@ def _default_version_at(rows: list[_RawDefault], t: datetime) -> _RawDefault | N
 
 
 @dataclass
-class _Observation:
-    """A moment at which the client's knowledge of a group's server state refreshes."""
-
-    time: datetime
-
-
-@dataclass
 class _PollHistory:
     """Client poll observations extracted from the request history, per group.
 
@@ -158,8 +152,8 @@ class _PollHistory:
     ANY GET to the list endpoint regardless of status - a failed poll gives the client no new
     knowledge, but does prove the client was polling (so no instant-knowledge fallback)."""
 
-    derc: dict[int, list[_Observation]] = field(default_factory=dict)
-    dderc: dict[int, list[_Observation]] = field(default_factory=dict)
+    derc: dict[int, list[datetime]] = field(default_factory=dict)
+    dderc: dict[int, list[datetime]] = field(default_factory=dict)
     derc_attempted: set[int] = field(default_factory=set)
     dderc_attempted: set[int] = field(default_factory=set)
 
@@ -170,7 +164,7 @@ def _collect_poll_observations(sorted_requests: list[RequestEntry]) -> _PollHist
         if req.method != "GET":
             continue
         succeeded = 200 <= int(req.status) < 300
-        observation = _Observation(req.timestamp)
+        observation = req.timestamp
         m = _DDERC_PATH_RE.search(req.path)
         if m:
             gid = int(m.group(1))
@@ -187,7 +181,7 @@ def _collect_poll_observations(sorted_requests: list[RequestEntry]) -> _PollHist
     return history
 
 
-def _synthesize_observations(rows: Iterable[_RawDOE] | Iterable[_RawDefault]) -> list[_Observation]:
+def _synthesize_observations(rows: Iterable[_RawDOE] | Iterable[_RawDefault]) -> list[datetime]:
     """Instant-knowledge observations at every server-side change (creation and boundary).
     Used for subscribed groups (notifications assumed delivered at the moment of change)."""
     times: set[datetime] = set()
@@ -196,30 +190,30 @@ def _synthesize_observations(rows: Iterable[_RawDOE] | Iterable[_RawDefault]) ->
         boundary = _boundary_time(row)
         if boundary < _FAR_FUTURE:
             times.add(boundary)
-    return [_Observation(t) for t in sorted(times)]
+    return sorted(times)
 
 
-def _assemble_observations(polls: list[_Observation], synthesized: list[_Observation]) -> list[_Observation]:
+def _assemble_observations(polls: list[datetime], synthesized: list[datetime]) -> list[datetime]:
     """Merge and time-dedupe observations."""
-    return [_Observation(t) for t in sorted({obs.time for obs in polls + synthesized})]
+    return sorted(set(polls) | set(synthesized))
 
 
 def _observations_for_groups[RowT: _GroupScoped](
     rows_by_group: dict[int, list[RowT]],
-    polls_by_group: dict[int, list[_Observation]],
+    polls_by_group: dict[int, list[datetime]],
     attempted_group_ids: set[int],
     subscribed_group_ids: set[int],
-    synthesize: Callable[[list[RowT]], list[_Observation]],
+    synthesize: Callable[[list[RowT]], list[datetime]],
     resource_label: str,
-) -> dict[int, list[_Observation]]:
+) -> dict[int, list[datetime]]:
     """Assemble per-group observation events from polls and subscriptions.
 
     Raises ValueError for a group with rows but no poll attempts and no subscription -
     such a client is non-compliant and its knowledge cannot be modelled."""
-    observations: dict[int, list[_Observation]] = {}
+    observations: dict[int, list[datetime]] = {}
     for gid, rows in rows_by_group.items():
         polls = polls_by_group.get(gid, [])
-        synthesized: list[_Observation] = []
+        synthesized: list[datetime] = []
         if gid in subscribed_group_ids:
             synthesized = synthesize(rows)
         elif not polls and gid not in attempted_group_ids:
@@ -243,7 +237,7 @@ def _build_group_observations(
     sorted_requests: list[RequestEntry],
     subscribed_group_ids: set[int],
     default_subscribed_group_ids: set[int],
-) -> tuple[dict[int, list[_Observation]], dict[int, list[_Observation]]]:
+) -> tuple[dict[int, list[datetime]], dict[int, list[datetime]]]:
     """Returns (derc_observations_by_group, dderc_observations_by_group)."""
     history = _collect_poll_observations(sorted_requests)
     derc_observations = _observations_for_groups(
@@ -280,7 +274,7 @@ class _Known[RowT]:
 
 
 def _observed_spans[RowT](
-    observations: list[_Observation], row_at: Callable[[datetime], RowT | None]
+    observations: list[datetime], row_at: Callable[[datetime], RowT | None]
 ) -> list[_Known[RowT]]:
     """Walk a group's observations, returning the row-version the client believed over time.
 
@@ -288,14 +282,14 @@ def _observed_spans[RowT](
     observations the client keeps its last belief. Contiguous spans of the same row merge."""
     spans: list[_Known[RowT]] = []
     for i, obs in enumerate(observations):
-        row = row_at(obs.time)
+        row = row_at(obs)
         if row is None:
             continue  # The client sees nothing live at this observation
-        known_until = observations[i + 1].time if i + 1 < len(observations) else _FAR_FUTURE
-        if spans and spans[-1].row is row and spans[-1].known_until >= obs.time:
+        known_until = observations[i + 1] if i + 1 < len(observations) else _FAR_FUTURE
+        if spans and spans[-1].row is row and spans[-1].known_until >= obs:
             spans[-1].known_until = known_until
         else:
-            spans.append(_Known(row=row, known_from=obs.time, known_until=known_until))
+            spans.append(_Known(row=row, known_from=obs, known_until=known_until))
     return spans
 
 
@@ -396,7 +390,7 @@ def _control_labels(all_does: list[_RawDOE], doe_tags: dict[int, str], test_star
 
 def _replay_control_knowledge(
     all_does: list[_RawDOE],
-    observations_by_group: dict[int, list[_Observation]],
+    observations_by_group: dict[int, list[datetime]],
     groups_by_id: dict[int, _RawControlGroup],
     doe_tags: dict[int, str],
     test_start: datetime,
@@ -456,7 +450,7 @@ def _replay_control_knowledge(
 
 def _replay_default_knowledge(
     all_defaults: list[_RawDefault],
-    observations_by_group: dict[int, list[_Observation]],
+    observations_by_group: dict[int, list[datetime]],
 ) -> dict[int, list[_Known[_RawDefault]]]:
     """Replays the client's knowledge of each group's default control from dderc observations."""
     known: dict[int, list[_Known[_RawDefault]]] = {}
