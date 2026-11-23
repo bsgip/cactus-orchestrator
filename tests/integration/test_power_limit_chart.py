@@ -165,7 +165,7 @@ def _make_site_and_group_with_setting(
         grad_w=grad_w,
         soft_grad_w=None,
     )
-    site = generate_class_instance(Site, seed=seed, aggregator_id=aggregator_id)
+    site = generate_class_instance(Site, seed=seed, aggregator_id=aggregator_id, nmi_checksum=None)
     site.site_der_setting = der_setting
 
     site_group = generate_class_instance(SiteGroup, seed=seed + 101, default_group=False)
@@ -249,7 +249,7 @@ async def test_get_der_setting_no_site(pg_envoy_base_config):
 async def test_get_der_setting_no_der_setting(pg_envoy_base_config):
     """Returns None when a site exists but has no SiteDERSetting attached."""
     async with generate_async_session(pg_envoy_base_config) as session:
-        site = generate_class_instance(Site, seed=1, aggregator_id=1)
+        site = generate_class_instance(Site, seed=1, aggregator_id=1, nmi_checksum=None)
         site.site_der_setting = None
         session.add(site)
         await session.commit()
