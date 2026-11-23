@@ -56,7 +56,6 @@ from cactus_orchestrator.power_limit_chart.replay import (
     _build_control_versions,
     _Known,
     _KnownControlSegment,
-    _Observation,
     _replay_control_knowledge,
 )
 
@@ -973,7 +972,7 @@ def _u_ctrl(doe: _RawDOE) -> _KnownControlSegment:
         observed_at=T0,
         effective_start=T0,
         effective_end=T0 + timedelta(hours=2),
-        step_name="",
+        label="",
     )
 
 
@@ -1149,8 +1148,8 @@ def test_replay_control_knowledge_resumes_lower_priority_after_superseded_overri
     )
 
     observations_by_group = {
-        grp_a.site_control_group_id: [_Observation(time=T0)],
-        grp_b.site_control_group_id: [_Observation(time=T0 + timedelta(minutes=2))],
+        grp_a.site_control_group_id: [T0],
+        grp_b.site_control_group_id: [T0 + timedelta(minutes=2)],
     }
 
     segments = _replay_control_knowledge(
@@ -1184,7 +1183,7 @@ def test_replay_control_knowledge_resumes_lower_priority_after_superseded_overri
 
 
 def _replay_single_group_pair(
-    doe_a: _RawDOE, doe_b: _RawDOE, observations: list[_Observation]
+    doe_a: _RawDOE, doe_b: _RawDOE, observations: list[datetime]
 ) -> tuple[_RawControlGroup, dict[int, list[_KnownControlSegment]]]:
     """Replay two DOEs in one group under a shared observation list; returns (group, segments_by_group)."""
     group = _u_group(site_control_group_id=doe_a.site_control_group_id, primacy=1)
@@ -1217,9 +1216,7 @@ def test_replay_control_knowledge_same_program_supersession_is_permanent():
         start_time=T0 + timedelta(minutes=2),
         duration_seconds=120,
     )
-    group, segments_by_group = _replay_single_group_pair(
-        doe_a, doe_b, [_Observation(time=T0), _Observation(time=T0 + timedelta(minutes=2))]
-    )
+    group, segments_by_group = _replay_single_group_pair(doe_a, doe_b, [T0, T0 + timedelta(minutes=2)])
 
     val, src = _get_effective_upper_at(T0 + timedelta(minutes=1), [group], segments_by_group, {})
     assert val == pytest.approx(2000.0)
@@ -1247,9 +1244,7 @@ def test_replay_control_knowledge_same_program_supersession_applies_at_observati
         start_time=T0 + timedelta(minutes=2),
         duration_seconds=300,
     )
-    group, segments_by_group = _replay_single_group_pair(
-        doe_a, doe_b, [_Observation(time=T0), _Observation(time=T0 + timedelta(minutes=6))]
-    )
+    group, segments_by_group = _replay_single_group_pair(doe_a, doe_b, [T0, T0 + timedelta(minutes=6)])
 
     # Client is unaware of B until T0+6m: A still governs at T0+3m despite B being live server-side
     val, src = _get_effective_upper_at(T0 + timedelta(minutes=3), [group], segments_by_group, {})
@@ -1278,9 +1273,7 @@ def test_replay_control_knowledge_same_program_disjoint_fields_do_not_supersede(
         start_time=T0 + timedelta(minutes=2),
         duration_seconds=120,
     )
-    group, segments_by_group = _replay_single_group_pair(
-        doe_a, doe_b, [_Observation(time=T0), _Observation(time=T0 + timedelta(minutes=2))]
-    )
+    group, segments_by_group = _replay_single_group_pair(doe_a, doe_b, [T0, T0 + timedelta(minutes=2)])
 
     # A's export limit holds during AND after B's import-only overlap
     for t in (T0 + timedelta(minutes=3), T0 + timedelta(minutes=5)):
@@ -1305,7 +1298,7 @@ def test_build_trace_equal_target_event_stops_active_ramp():
         observed_at=T0,
         effective_start=T0,
         effective_end=T0 + timedelta(hours=1),
-        step_name="",
+        label="",
     )
     events = [
         # Ramp 0 -> 2000 over rampTms=100s (20 W/s), starting T0+60s
