@@ -46,9 +46,8 @@ class _ReceiptMarker:
     """Records when the device received (a version of) a DERControl."""
 
     time: datetime
-    group_id: int
     is_subscribed: bool  # True = notification delivered; False = polled
-    step_name: str  # step active at receipt time (empty string if unknown)
+    label: str  # label of the control revealed by this receipt
 
 
 def _fmt_video_time(seconds: float) -> str:
@@ -319,8 +318,7 @@ def _controller_band_at(
     if control_sources:
         best_primacy = min(s.primacy for s in control_sources)
         winner = _newest_control([s for s in control_sources if s.primacy == best_primacy])
-        doe_id = winner.row.dynamic_operating_envelope_id
-        return ("doe", doe_id), winner.step_name or f"Grp{winner.site_control_group_id} DOE#{doe_id}"
+        return ("doe", winner.row.dynamic_operating_envelope_id), winner.label
 
     group_order = {g.site_control_group_id: i for i, g in enumerate(sorted_groups)}
     default_sources = [s for s in sources if not isinstance(s, _KnownControlSegment)]
@@ -345,9 +343,9 @@ def _sweep_timeline(
     """Single pass over the event timeline producing (upper_events, lower_events, step_intervals).
 
     step_intervals are (label, start, end) windows showing the controller binding the traces
-    at each moment (see _controller_band_at): a binding or connect/energise DOE (labelled by
-    step name, falling back to 'Grp{gid} DOE#{id}'), else the binding default
-    ('Default-DERP{gid}'). Periods with neither are omitted."""
+    at each moment (see _controller_band_at): a binding or connect/energise DOE (labelled by its
+    tag, else 'Control N' - see _control_labels), else the binding default ('Default-DERP{gid}').
+    Periods with neither are omitted."""
     upper_events: list[_LimitEvent] = []
     lower_events: list[_LimitEvent] = []
     prev_upper: float | None = None
@@ -523,7 +521,7 @@ def _build_trace(  # noqa: C901
             ramp_secs, desc = _compute_ramp(ev.source, ev.time, delta_w, set_max_w, defaults_by_group)
         rel_secs = (ev.time - test_start).total_seconds() + video_offset_seconds
         if isinstance(ev.source, _KnownControlSegment):
-            ctrl_label = ev.source.label
+            ctrl_label = f"{ev.source.label} (envoy id {ev.source.row.dynamic_operating_envelope_id})"
         elif ev.source is not None:
             ctrl_label = f"Default DERP{ev.source.row.site_control_group_id}"
         else:
@@ -576,19 +574,19 @@ def _build_receipt_markers(
     subscribed_group_ids: set[int],
 ) -> list[_ReceiptMarker]:
     """One marker per unique (group, revealing observation) pair — the initial receipt of each
-    control plus any later observation that revealed a server-side value update."""
-    seen: set[tuple[int, datetime]] = set()
-    markers: list[_ReceiptMarker] = []
+    control plus any later observation that revealed a server-side value update. A marker is
+    labelled with every control its observation revealed, in creation order."""
+    revealed: dict[tuple[int, datetime], list[_KnownControlSegment]] = {}
     for seg in segments:
-        key = (seg.site_control_group_id, seg.observed_at)
-        if key not in seen:
-            seen.add(key)
-            markers.append(
-                _ReceiptMarker(
-                    time=seg.observed_at,
-                    group_id=seg.site_control_group_id,
-                    is_subscribed=seg.site_control_group_id in subscribed_group_ids,
-                    step_name=seg.step_name,
-                )
+        revealed.setdefault((seg.site_control_group_id, seg.observed_at), []).append(seg)
+    markers: list[_ReceiptMarker] = []
+    for (group_id, time), group_segments in revealed.items():
+        group_segments.sort(key=lambda s: (s.row.created_time, s.row.dynamic_operating_envelope_id))
+        markers.append(
+            _ReceiptMarker(
+                time=time,
+                is_subscribed=group_id in subscribed_group_ids,
+                label=", ".join(s.label for s in group_segments),
             )
+        )
     return sorted(markers, key=lambda m: m.time)

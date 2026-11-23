@@ -1,14 +1,19 @@
+import json
 from datetime import UTC, datetime, timedelta
 from http import HTTPStatus
 
 import pytest
+from cactus_runner.models import ReportingData, ResourceAnnotations
 from cactus_schema.runner.schema import HTTPMethod, RequestEntry
 
+from cactus_orchestrator.chart import _doe_tags_by_id
 from cactus_orchestrator.power_limit_chart.db import _RawControlGroup, _RawDefault, _RawDOE
 from cactus_orchestrator.power_limit_chart.limits import (
     _build_receipt_markers,
+    _build_trace,
     _compute_disconnect_intervals,
     _get_effective_upper_at,
+    _LimitEvent,
     _sweep_timeline,
 )
 from cactus_orchestrator.power_limit_chart.replay import (
@@ -16,8 +21,8 @@ from cactus_orchestrator.power_limit_chart.replay import (
     _build_control_versions,
     _build_group_observations,
     _collect_poll_observations,
+    _control_labels,
     _KnownControlSegment,
-    _Observation,
     _replay_control_knowledge,
     _replay_default_knowledge,
     _version_at,
@@ -102,12 +107,12 @@ def _make_segment(
         observed_at=observed_at if observed_at is not None else start,
         effective_start=start,
         effective_end=end,
-        step_name="",
+        label="",
     )
 
 
-def _obs(*offsets_seconds: int) -> list[_Observation]:
-    return [_Observation(T0 + timedelta(seconds=s)) for s in offsets_seconds]
+def _obs(*offsets_seconds: int) -> list[datetime]:
+    return [T0 + timedelta(seconds=s) for s in offsets_seconds]
 
 
 _GROUPS = {1: _RawControlGroup(site_control_group_id=1, primacy=1)}
@@ -393,10 +398,9 @@ def test_collect_poll_observations_separates_derc_and_dderc():
         _req("/edev/1/derp/2/derc", T0 + timedelta(seconds=20)),
     ]
     history = _collect_poll_observations(reqs)
-    assert [o.time for o in history.derc[1]] == [T0]
-    assert [o.time for o in history.dderc[1]] == [T0 + timedelta(seconds=10)]
-    assert [o.time for o in history.derc[2]] == [T0 + timedelta(seconds=20)]
-    assert history.derc[1][0].step_name == "STEP-1"
+    assert history.derc[1] == [T0]
+    assert history.dderc[1] == [T0 + timedelta(seconds=10)]
+    assert history.derc[2] == [T0 + timedelta(seconds=20)]
 
 
 def test_collect_poll_observations_ignores_failures_and_non_gets():
@@ -406,7 +410,7 @@ def test_collect_poll_observations_ignores_failures_and_non_gets():
         _req("/edev/1/derp/1/derc", T0 + timedelta(seconds=20)),
     ]
     history = _collect_poll_observations(reqs)
-    assert [o.time for o in history.derc[1]] == [T0 + timedelta(seconds=20)]
+    assert history.derc[1] == [T0 + timedelta(seconds=20)]
     # The failed GET still proves the client was polling this group's list
     assert history.derc_attempted == {1}
 
@@ -419,7 +423,7 @@ def test_collect_poll_observations_ignores_single_control_gets():
         _req("/edev/1/derp/1/derc?l=10&s=0", T0 + timedelta(seconds=10)),
     ]
     history = _collect_poll_observations(reqs)
-    assert [o.time for o in history.derc[1]] == [T0 + timedelta(seconds=10)]
+    assert history.derc[1] == [T0 + timedelta(seconds=10)]
     assert history.derc_attempted == {1}
 
 
@@ -438,7 +442,7 @@ def test_build_group_observations_subscribed_merges_polls_and_changes():
 
     derc_obs, _ = _build_group_observations([doe], [], polls, {1}, set())
 
-    assert [o.time for o in derc_obs[1]] == [T0, T0 + timedelta(seconds=50)]
+    assert derc_obs[1] == [T0, T0 + timedelta(seconds=50)]
 
 
 # ─── _compute_disconnect_intervals ────────────────────────────────────────────
@@ -540,3 +544,98 @@ def test_receipt_marker_at_update_reveal():
 
     assert [m.time for m in markers] == [T0 + timedelta(seconds=30), T0 + timedelta(seconds=400)]
     assert all(not m.is_subscribed for m in markers)
+
+
+def test_receipt_marker_lists_every_control_revealed_by_one_poll():
+    """A single poll revealing several controls labels its marker with all of them, in creation order
+    (not database row order)."""
+    later = _make_doe_row(2, 1, T0, 900, created=T0 + timedelta(seconds=10))
+    earlier = _make_doe_row(1, 1, T0 + timedelta(seconds=900), 900, created=T0 + timedelta(seconds=5))
+    segments = _replay_control_knowledge([later, earlier], {1: _obs(30)}, _GROUPS, {2: "DERC2"}, T0)
+
+    markers = _build_receipt_markers(segments, set())
+
+    assert [(m.time, m.label) for m in markers] == [(T0 + timedelta(seconds=30), "Control 1, DERC2")]
+
+
+# ─── Control tag labels ───────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("serialised_id", ["1795386198", 1795386198])
+def test_doe_tags_by_id_from_serialised_reporting_data(reporting_data_json, serialised_id):
+    """Exercises the real deserialisation boundary: current runners serialise control ids as strings,
+    runners before cactus-runner#201 as integers. Either way the tag map must be keyed by the integer
+    dynamic_operating_envelope_id, or every tag lookup in the replay silently misses."""
+    data = json.loads(reporting_data_json)
+    data["runnerState"]["activeTestProcedure"]["resourceAnnotations"]["derControlIdsByAlias"] = {"DERC1": serialised_id}
+    reporting_data = ReportingData.from_json(data["version"], json.dumps(data))
+
+    doe_tags = _doe_tags_by_id(reporting_data.runner_state.active_test_procedure.resource_annotations)
+
+    assert doe_tags == {1795386198: "DERC1"}
+
+
+def test_replay_labels_subscribed_controls_by_tag():
+    """ALL-29 case: controls created after the client's last derc poll are revealed by the
+    subscription at creation time. They must be labelled by their tag, not "Init" (the step of the
+    last poll before creation), as the chart did before."""
+    created = T0 + timedelta(seconds=5)
+    does = [
+        _make_doe_row(1795386198, 1, created, 120, created=created),
+        _make_doe_row(1795386199, 1, created + timedelta(seconds=120), 120, created=created),
+    ]
+    polls = [_req("/edev/1/derp/1/derc", T0)]
+    derc_obs, _ = _build_group_observations(does, [], polls, {1}, set())
+    doe_tags = _doe_tags_by_id(
+        ResourceAnnotations(der_control_ids_by_alias={"DERC1": "1795386198", "DERC2": "1795386199"})
+    )
+
+    segments = _replay_control_knowledge(does, derc_obs, _GROUPS, doe_tags, T0 - timedelta(minutes=5))
+
+    assert {s.row.dynamic_operating_envelope_id: s.label for s in segments} == {
+        1795386198: "DERC1",
+        1795386199: "DERC2",
+    }
+
+
+def test_control_labels_numbers_untagged_in_creation_order():
+    """Untagged controls are numbered by creation time (id breaks ties) among untagged controls
+    only; tagged controls keep their tag; controls created before the test are not labelled."""
+    does = [
+        _make_doe_row(30, 1, T0, 60, created=T0 + timedelta(seconds=10)),
+        _make_doe_row(20, 1, T0, 60, created=T0 + timedelta(seconds=10)),
+        _make_doe_row(10, 2, T0, 60, created=T0 + timedelta(seconds=20)),
+        _make_doe_row(40, 1, T0, 60, created=T0 + timedelta(seconds=5)),
+        _make_doe_row(5, 1, T0, 60, created=T0 - timedelta(seconds=1)),
+    ]
+
+    labels = _control_labels(does, {40: "DERC1"}, T0)
+
+    assert labels == {40: "DERC1", 20: "Control 1", 30: "Control 2", 10: "Control 3"}
+
+
+def test_control_labels_stable_across_versions():
+    """An updated control is labelled by its first creation, and every version shares the label."""
+    t_update = T0 + timedelta(seconds=300)
+    old = _make_doe_row(1, 1, T0, 900, is_archive=True, archive_time=t_update)
+    new = _make_doe_row(1, 1, T0, 900, export_limit=2000.0)
+    other = _make_doe_row(2, 1, T0 + timedelta(seconds=900), 300, created=T0 + timedelta(seconds=100))
+
+    segments = _replay_control_knowledge([new, other, old], {1: _obs(30, 400)}, _GROUPS, {}, T0)
+
+    assert sorted((s.row.dynamic_operating_envelope_id, s.label) for s in segments) == [
+        (1, "Control 1"),
+        (1, "Control 1"),
+        (2, "Control 2"),
+    ]
+
+
+def test_build_trace_hover_includes_envoy_id():
+    row = _make_doe_row(1795386198, 1, T0, 900, export_limit=2000.0)
+    seg = _make_segment(row, T0, T0 + timedelta(seconds=900))
+    seg.label = "Control 1"
+    events = [_LimitEvent(time=T0 + timedelta(seconds=60), target=2000.0, source=seg)]
+
+    trace = _build_trace(events, T0, T0 + timedelta(seconds=900), 10000.0, 10000.0, [], {}, 0.0)
+
+    assert any("Control received: Control 1 (envoy id 1795386198)" in hover for _, _, hover in trace)
