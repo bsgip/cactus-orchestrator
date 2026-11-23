@@ -10,6 +10,25 @@ from cactus_runner.app.timeline import Timeline
 from cactus_orchestrator.reporting.trace_colors import POWER_STREAM_COLORS
 
 
+def interval_step_xy(
+    timeline: Timeline, values: list[int | None], to_x: Callable[[datetime], Any]
+) -> tuple[list[Any], list[int | None]]:
+    """Line points drawing each timeline value as a flat step across its whole interval, with gaps breaking the line"""
+    interval = timedelta(seconds=timeline.interval_seconds)
+    x: list[Any] = []
+    y: list[int | None] = []
+    for i, watts in enumerate(values):
+        start = timeline.start + i * interval
+        if watts is None:
+            if y and y[-1] is not None:
+                x.append(to_x(start))
+                y.append(None)
+            continue
+        x.extend([to_x(start), to_x(start + interval)])
+        y.extend([watts, watts])
+    return x, y
+
+
 def add_power_reading_traces(
     fig: go.Figure, timeline: Timeline | None, to_x: Callable[[datetime], Any], export_positive: bool
 ) -> list[int]:
@@ -21,25 +40,15 @@ def add_power_reading_traces(
         return []
 
     sign = -1 if export_positive else 1
-    interval = timedelta(seconds=timeline.interval_seconds)
     plotted: list[int] = []
     for ds in timeline.data_streams:
         color = POWER_STREAM_COLORS.get(ds.label)
         if color is None:
             continue
 
-        x: list[Any] = []
-        y: list[int | None] = []
-        for i, watts in enumerate(ds.offset_watt_values):
-            start = timeline.start + i * interval
-            if watts is None:
-                if y and y[-1] is not None:
-                    x.append(to_x(start))
-                    y.append(None)  # Breaks the line across gaps
-                continue
-            x.extend([to_x(start), to_x(start + interval)])
-            y.extend([sign * watts, sign * watts])
-            plotted.append(sign * watts)
+        values = [None if w is None else sign * w for w in ds.offset_watt_values]
+        plotted.extend(w for w in values if w is not None)
+        x, y = interval_step_xy(timeline, values, to_x)
 
         fig.add_trace(
             go.Scatter(

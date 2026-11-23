@@ -63,7 +63,7 @@ from reportlab.platypus import (
 )
 
 from cactus_orchestrator import __version__ as cactus_orchestrator_version
-from cactus_orchestrator.reporting.power_readings import add_power_reading_traces
+from cactus_orchestrator.reporting.power_readings import add_power_reading_traces, interval_step_xy
 from cactus_orchestrator.reporting.trace_colors import POWER_STREAM_COLORS, timeline_stream_colors
 
 logger = logging.getLogger(__name__)
@@ -1009,27 +1009,33 @@ def generate_controls_chart(controls: list[DynamicOperatingEnvelope]) -> Image:
     return fig_to_image(fig=fig, content_width=MAX_CONTENT_WIDTH)
 
 
-def generate_timeline_chart(timeline: Timeline, sites: list[Site]) -> Image:
-    fig = go.Figure()
+def _interval_offset(timeline: Timeline, t: datetime) -> float:
+    return (t - timeline.start).total_seconds() / timeline.interval_seconds
+
+
+def _add_timeline_stream_traces(fig: go.Figure, timeline: Timeline) -> None:
+    to_interval_x = partial(_interval_offset, timeline)
 
     # Measured power streams are drawn as muted background traces, beneath the controls
-    add_power_reading_traces(
-        fig,
-        timeline,
-        lambda t: (t - timeline.start).total_seconds() / timeline.interval_seconds,
-        export_positive=False,  # This chart is import positive
-    )
+    add_power_reading_traces(fig, timeline, to_interval_x, export_positive=False)  # This chart is import positive
 
-    # Add data streams with numeric x-axis
+    # Add data streams with numeric x-axis. Stepped values are drawn across their whole interval (to the next one)
     colors = timeline_stream_colors([ds.label for ds in timeline.data_streams])
     for ds in timeline.data_streams:
         if ds.label in POWER_STREAM_COLORS:
             continue
-        x_data = list(range(len(ds.offset_watt_values)))
-        y_data = ds.offset_watt_values
-        line_shape = "hv" if ds.stepped else "linear"
+        x_data, y_data = (
+            interval_step_xy(timeline, ds.offset_watt_values, to_interval_x)
+            if ds.stepped
+            else (list(range(len(ds.offset_watt_values))), ds.offset_watt_values)
+        )
         line = {"color": colors[ds.label], "dash": "dash"} if ds.dashed else {"color": colors[ds.label]}
-        fig.add_trace(go.Scatter(x=x_data, y=y_data, name=ds.label, line_shape=line_shape, line=line))
+        fig.add_trace(go.Scatter(x=x_data, y=y_data, name=ds.label, line=line))
+
+
+def generate_timeline_chart(timeline: Timeline, sites: list[Site]) -> Image:
+    fig = go.Figure()
+    _add_timeline_stream_traces(fig, timeline)
 
     # Figure out the effective device max for each direction: prefer the asymmetric
     # setMaxDischargeRateW (export) / setMaxChargeRateW (import), falling back to setMaxW.

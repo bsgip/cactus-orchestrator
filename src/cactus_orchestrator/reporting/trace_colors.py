@@ -14,10 +14,7 @@ CONTROL_COLORS = {
 }
 
 # Labels the runner gives its measured power streams in cactus_runner.app.timeline.generate_timeline.
-POWER_STREAM_COLORS = {
-    "Site Power": "rgba(90,110,150,0.5)",
-    "Device Power": "rgba(175,130,60,0.55)"
-}
+POWER_STREAM_COLORS = {"Site Power": "rgba(90,110,150,0.5)", "Device Power": "rgba(175,130,60,0.55)"}
 
 # Unrecognised streams get the only extra hue that stays distinct from the above, then fall back to grey
 FALLBACK_COLORS = ["#e0a800"]
