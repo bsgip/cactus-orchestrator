@@ -1078,6 +1078,7 @@ def generate_timeline_chart(timeline: Timeline, sites: list[Site]) -> Image:
     ]
     annotations = []
 
+    # This chart is import positive: the export/discharge max is negative and the import/charge max is positive
     if upper_max_w is not None:
         shapes.append(
             dict(
@@ -1086,8 +1087,8 @@ def generate_timeline_chart(timeline: Timeline, sites: list[Site]) -> Image:
                 x0=0,
                 x1=1,
                 yref="y",
-                y0=upper_max_w,
-                y1=upper_max_w,
+                y0=-upper_max_w,
+                y1=-upper_max_w,
                 line=dict(color="red", width=2, dash="dash"),
             )
         )
@@ -1095,7 +1096,7 @@ def generate_timeline_chart(timeline: Timeline, sites: list[Site]) -> Image:
             dict(
                 xref="paper",
                 x=0.5,  # Middle of the page
-                y=upper_max_w,
+                y=-upper_max_w,
                 xanchor="center",
                 yanchor="middle",
                 text=upper_max_label,
@@ -1113,8 +1114,8 @@ def generate_timeline_chart(timeline: Timeline, sites: list[Site]) -> Image:
                 x0=0,
                 x1=1,
                 yref="y",
-                y0=-lower_max_w,
-                y1=-lower_max_w,
+                y0=lower_max_w,
+                y1=lower_max_w,
                 line=dict(color="red", width=2, dash="dash"),
             )
         )
@@ -1122,7 +1123,7 @@ def generate_timeline_chart(timeline: Timeline, sites: list[Site]) -> Image:
             dict(
                 xref="paper",
                 x=0.5,  # Middle of the page
-                y=-lower_max_w,
+                y=lower_max_w,
                 xanchor="center",
                 yanchor="middle",
                 text=lower_max_label,
@@ -1146,7 +1147,7 @@ def generate_timeline_chart(timeline: Timeline, sites: list[Site]) -> Image:
         tickmode="array",
         tickvals=tickvals,
         ticktext=x_labels,
-        range=[0, max(num_intervals - 1, 1)],
+        range=[0, max(num_intervals, 1)],  # Each interval's value is drawn as a step to the next interval
     )
 
     fig.update_yaxes(title="Watts", zeroline=True)
@@ -1270,7 +1271,7 @@ def generate_timeline_checklist(timeline: Timeline, runner_state: RunnerState) -
         tickvals=list(range(num_intervals)),
         ticktext=[],
         showticklabels=False,
-        range=[0, max(num_intervals - 1, 1)],  # CRITICAL: Match top chart range exactly
+        range=[0, max(num_intervals, 1)],  # CRITICAL: Match top chart range exactly
     )
     fig.update_yaxes(title="", showticklabels=False, showgrid=False, range=[0, 1])
     fig.update_layout(
