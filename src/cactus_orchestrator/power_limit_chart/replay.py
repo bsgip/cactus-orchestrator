@@ -392,7 +392,7 @@ def _replay_control_knowledge(
     all_does: list[_RawDOE],
     observations_by_group: dict[int, list[datetime]],
     groups_by_id: dict[int, _RawControlGroup],
-    labels: dict[int, str],
+    doe_tags: dict[int, str],
     test_start: datetime,
 ) -> list[_KnownControlSegment]:
     """Replays the client's knowledge of each DOE from its group's observation events.
@@ -402,8 +402,10 @@ def _replay_control_knowledge(
     or value update only takes effect at the next observation that reveals it. A control the
     client never observed contributes nothing. A control superseded within its own program
     (see _supersession_kill_times) contributes nothing after the observation that revealed
-    its superseder. labels must cover every control created during the test (see _control_labels)."""
+    its superseder. Controls created before test_start are excluded (they have no label; see
+    _control_labels)."""
     versions_by_id = _build_control_versions(all_does)
+    labels = _control_labels(all_does, doe_tags, test_start)
     observed: list[_ObservedControl] = []
 
     for doe_id, versions in versions_by_id.items():
@@ -413,8 +415,8 @@ def _replay_control_knowledge(
         group = groups_by_id.get(first_row.site_control_group_id)
         if group is None:
             continue
-        # Only include controls created during the test
-        if first_row.created_time < test_start:
+        # Only include controls created during the test (exactly those _control_labels labels)
+        if doe_id not in labels:
             continue
 
         observations = observations_by_group.get(group.site_control_group_id, [])

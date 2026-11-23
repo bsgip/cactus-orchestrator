@@ -118,16 +118,6 @@ def _obs(*offsets_seconds: int) -> list[datetime]:
 _GROUPS = {1: _RawControlGroup(site_control_group_id=1, primacy=1)}
 
 
-def _replay(
-    does: list[_RawDOE],
-    observations: dict[int, list[datetime]],
-    test_start: datetime,
-    doe_tags: dict[int, str] | None = None,
-) -> list[_KnownControlSegment]:
-    labels = _control_labels(does, doe_tags or {}, test_start)
-    return _replay_control_knowledge(does, observations, _GROUPS, labels, test_start)
-
-
 # ─── _build_control_versions / _version_at ────────────────────────────────────
 
 
@@ -204,7 +194,7 @@ def test_replay_cancellation_observed_at_next_poll():
     doe = _make_doe_row(3, 1, T0, 900, is_archive=True, deleted_time=t_cancel)
     observations = {1: _obs(30, 90, 150, 210, 270, 330)}
 
-    segments = _replay([doe], observations, T0 - timedelta(minutes=5))
+    segments = _replay_control_knowledge([doe], observations, _GROUPS, {}, T0 - timedelta(minutes=5))
 
     assert len(segments) == 1
     ctrl = segments[0]
@@ -220,7 +210,7 @@ def test_replay_cancellation_never_reobserved_runs_full_course():
     doe = _make_doe_row(3, 1, T0, 900, is_archive=True, deleted_time=t_cancel)
     observations = {1: _obs(30)}  # single poll, before the cancellation
 
-    segments = _replay([doe], observations, T0 - timedelta(minutes=5))
+    segments = _replay_control_knowledge([doe], observations, _GROUPS, {}, T0 - timedelta(minutes=5))
 
     assert len(segments) == 1
     assert segments[0].effective_end == T0 + timedelta(seconds=900)
@@ -233,7 +223,7 @@ def test_replay_value_update_observed_at_next_poll():
     new = _make_doe_row(1, 1, T0, 900, export_limit=2000.0)
     observations = {1: _obs(30, 400)}
 
-    segments = _replay([new, old], observations, T0 - timedelta(minutes=5))
+    segments = _replay_control_knowledge([new, old], observations, _GROUPS, {}, T0 - timedelta(minutes=5))
 
     assert len(segments) == 2
     first, second = sorted(segments, key=lambda c: c.effective_start)
@@ -254,7 +244,7 @@ def test_replay_never_observed_control_excluded():
     doe = _make_doe_row(1, 1, T0 + timedelta(seconds=500), 900, created=T0 + timedelta(seconds=500))
     observations = {1: _obs(30, 90)}  # both polls before creation
 
-    segments = _replay([doe], observations, T0 - timedelta(minutes=5))
+    segments = _replay_control_knowledge([doe], observations, _GROUPS, {}, T0 - timedelta(minutes=5))
 
     assert segments == []
 
@@ -265,7 +255,7 @@ def test_replay_superseded_flag_alone_does_not_exclude():
     doe = _make_doe_row(1, 1, T0, 900, superseded=True)
     observations = {1: _obs(30, 90)}
 
-    segments = _replay([doe], observations, T0 - timedelta(minutes=5))
+    segments = _replay_control_knowledge([doe], observations, _GROUPS, {}, T0 - timedelta(minutes=5))
 
     assert len(segments) == 1
     assert segments[0].effective_start == T0 + timedelta(seconds=30)
@@ -281,7 +271,9 @@ def test_replay_supersession_observed_at_next_poll():
     replacement = _make_doe_row(2, 1, t_supersede, 600, created=t_supersede, export_limit=1000.0)
     observations = {1: _obs(30, 400)}
 
-    segments = _replay([old_post, old_pre, replacement], observations, T0 - timedelta(minutes=5))
+    segments = _replay_control_knowledge(
+        [old_post, old_pre, replacement], observations, _GROUPS, {}, T0 - timedelta(minutes=5)
+    )
 
     by_id = {c.row.dynamic_operating_envelope_id: c for c in segments}
     assert set(by_id) == {1, 2}
@@ -295,7 +287,7 @@ def test_replay_scheduled_start_honoured_without_a_poll():
     doe = _make_doe_row(1, 1, start, 300, created=T0 + timedelta(seconds=10))
     observations = {1: _obs(30)}  # only poll is well before start_time
 
-    segments = _replay([doe], observations, T0 - timedelta(minutes=5))
+    segments = _replay_control_knowledge([doe], observations, _GROUPS, {}, T0 - timedelta(minutes=5))
 
     assert len(segments) == 1
     assert segments[0].effective_start == start
@@ -306,7 +298,7 @@ def test_replay_control_created_before_test_start_excluded():
     doe = _make_doe_row(1, 1, T0, 900)
     observations = {1: _obs(30)}
 
-    segments = _replay([doe], observations, T0 + timedelta(minutes=5))
+    segments = _replay_control_knowledge([doe], observations, _GROUPS, {}, T0 + timedelta(minutes=5))
 
     assert segments == []
 
@@ -546,7 +538,7 @@ def test_receipt_marker_at_update_reveal():
     old = _make_doe_row(1, 1, T0, 900, export_limit=5000.0, is_archive=True, archive_time=t_update)
     new = _make_doe_row(1, 1, T0, 900, export_limit=2000.0)
     observations = {1: _obs(30, 400)}
-    segments = _replay([new, old], observations, T0 - timedelta(minutes=5))
+    segments = _replay_control_knowledge([new, old], observations, _GROUPS, {}, T0 - timedelta(minutes=5))
 
     markers = _build_receipt_markers(segments, set())
 
@@ -559,7 +551,7 @@ def test_receipt_marker_lists_every_control_revealed_by_one_poll():
     (not database row order)."""
     later = _make_doe_row(2, 1, T0, 900, created=T0 + timedelta(seconds=10))
     earlier = _make_doe_row(1, 1, T0 + timedelta(seconds=900), 900, created=T0 + timedelta(seconds=5))
-    segments = _replay([later, earlier], {1: _obs(30)}, T0, {2: "DERC2"})
+    segments = _replay_control_knowledge([later, earlier], {1: _obs(30)}, _GROUPS, {2: "DERC2"}, T0)
 
     markers = _build_receipt_markers(segments, set())
 
@@ -598,7 +590,7 @@ def test_replay_labels_subscribed_controls_by_tag():
         ResourceAnnotations(der_control_ids_by_alias={"DERC1": "1795386198", "DERC2": "1795386199"})
     )
 
-    segments = _replay(does, derc_obs, T0 - timedelta(minutes=5), doe_tags)
+    segments = _replay_control_knowledge(does, derc_obs, _GROUPS, doe_tags, T0 - timedelta(minutes=5))
 
     assert {s.row.dynamic_operating_envelope_id: s.label for s in segments} == {
         1795386198: "DERC1",
@@ -629,7 +621,7 @@ def test_control_labels_stable_across_versions():
     new = _make_doe_row(1, 1, T0, 900, export_limit=2000.0)
     other = _make_doe_row(2, 1, T0 + timedelta(seconds=900), 300, created=T0 + timedelta(seconds=100))
 
-    segments = _replay([new, other, old], {1: _obs(30, 400)}, T0)
+    segments = _replay_control_knowledge([new, other, old], {1: _obs(30, 400)}, _GROUPS, {}, T0)
 
     assert sorted((s.row.dynamic_operating_envelope_id, s.label) for s in segments) == [
         (1, "Control 1"),

@@ -54,7 +54,6 @@ from cactus_orchestrator.power_limit_chart.limits import (
 from cactus_orchestrator.power_limit_chart.replay import (
     _FAR_FUTURE,
     _build_control_versions,
-    _control_labels,
     _Known,
     _KnownControlSegment,
     _replay_control_knowledge,
@@ -1157,7 +1156,7 @@ def test_replay_control_knowledge_resumes_lower_priority_after_superseded_overri
         all_does=[doe_a, doe_b],
         observations_by_group=observations_by_group,
         groups_by_id=groups_by_id,
-        labels=_control_labels([doe_a, doe_b], {}, T0),
+        doe_tags={},
         test_start=T0,
     )
     segments_by_group: dict[int, list[_KnownControlSegment]] = {}
@@ -1192,7 +1191,7 @@ def _replay_single_group_pair(
         all_does=[doe_a, doe_b],
         observations_by_group={group.site_control_group_id: observations},
         groups_by_id={group.site_control_group_id: group},
-        labels=_control_labels([doe_a, doe_b], {}, T0),
+        doe_tags={},
         test_start=T0,
     )
     segments_by_group: dict[int, list[_KnownControlSegment]] = {}
