@@ -11,6 +11,7 @@ See replay.py for the client knowledge model and limits.py for limit/ramp resolu
 import logging
 from datetime import datetime
 
+from cactus_runner.app.timeline import Timeline
 from cactus_schema.runner.schema import RequestEntry
 from envoy.server.model.subscription import SubscriptionResource
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -50,6 +51,7 @@ async def generate_power_limit_chart_html(
     doe_tags: dict[int, str] | None = None,
     video_start_seconds: float | None = None,
     step_completions: list[tuple[str, datetime]] | None = None,
+    timeline: Timeline | None = None,
 ) -> str | None:
     """Generate a standalone HTML chart of expected device power limits.
 
@@ -162,4 +164,5 @@ async def generate_power_limit_chart_html(
         test_name=test_name,
         video_start_seconds=video_start_seconds,
         step_completions=step_completions or [],
+        timeline=timeline,
     )

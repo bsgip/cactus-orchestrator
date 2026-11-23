@@ -134,6 +134,7 @@ async def generate_power_limit_chart(
                     doe_tags=doe_tags,
                     video_start_seconds=video_start_seconds,
                     step_completions=step_completions,
+                    timeline=reporting_data.timeline,
                 )
         finally:
             await engine.dispose()

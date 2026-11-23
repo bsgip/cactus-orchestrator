@@ -4,11 +4,13 @@ from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 
 import plotly.graph_objects as go  # type: ignore[import-untyped]
+from cactus_runner.app.timeline import Timeline
 
 from cactus_orchestrator.power_limit_chart.limits import (
     _OP_MOD_CONNECT_GRACE_SECONDS,
     _ReceiptMarker,
 )
+from cactus_orchestrator.reporting.power_readings import add_power_reading_traces
 
 # Cycling colour palette for step-name bands (semi-transparent fills)
 _STEP_PALETTE = [
@@ -269,6 +271,7 @@ def _render_html_chart(
     test_name: str = "",
     video_start_seconds: float | None = None,
     step_completions: list[tuple[str, datetime]] | None = None,
+    timeline: Timeline | None = None,
 ) -> str:
     duration_secs = (test_end - test_start).total_seconds()
 
@@ -299,6 +302,9 @@ def _render_html_chart(
     height = top_margin + 350 + bottom_margin
 
     fig = go.Figure()
+
+    # ── Measured power (muted, beneath the limits) ───────────────────────────
+    add_power_reading_traces(fig, timeline, to_chart_x, export_positive=True)
 
     # ── Main limit traces ────────────────────────────────────────────────────
     fig.add_trace(
@@ -372,7 +378,7 @@ def _render_html_chart(
 
     # ── Layout ───────────────────────────────────────────────────────────────
     fig.update_layout(
-        title=dict(text="Expected Device Power Limits", font=dict(size=16)),
+        title=dict(text="Expected Device Power Limits", font=dict(size=16), y=0.99, yanchor="top"),
         height=height,
         xaxis=dict(
             title=x_title,
@@ -408,7 +414,9 @@ def _render_html_chart(
         "This chart is an estimation of what device active power should look like during the witness test. "
         "It is based on active and default controls, polling and subscription timing, primacy, and expected "
         "ramp behaviour. It is intended to align with the TS5573 test definitions, but should not be used "
-        "instead of these test procedures for client development."
+        "instead of these test procedures for client development. Measured site and device power (muted lines) "
+        "are reading averages shown for reference only: they lag limit changes by up to one reading interval, and "
+        "site power includes other site load/generation so is only comparable against export/import limits."
         "</p>"
         "</div>"
     )
