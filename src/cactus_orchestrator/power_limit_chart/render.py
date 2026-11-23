@@ -11,6 +11,7 @@ from cactus_orchestrator.power_limit_chart.limits import (
     _ReceiptMarker,
 )
 from cactus_orchestrator.reporting.power_readings import add_power_reading_traces
+from cactus_orchestrator.reporting.trace_colors import EXPORT_LIMIT_COLOR, IMPORT_LIMIT_COLOR
 
 # Runners before v2.12.1 / v1.20.1 report raw (not import positive) power readings, so earlier timelines aren't charted
 MEASURED_POWER_FROM = datetime(2026, 11, 23, tzinfo=UTC)
@@ -318,7 +319,7 @@ def _render_html_chart(
             y=[v for _, v, _ in upper_trace],
             mode="lines",
             name="Upper limit (Export / Gen)",
-            line=dict(color="#e74c3c", width=2),
+            line=dict(color=EXPORT_LIMIT_COLOR, width=2),
             customdata=[[h] for _, _, h in upper_trace],
             hovertemplate="%{customdata[0]}<extra>Upper</extra>",
         )
@@ -329,7 +330,7 @@ def _render_html_chart(
             y=[v for _, v, _ in lower_trace],
             mode="lines",
             name="Lower limit (Import / Load)",
-            line=dict(color="#3498db", width=2),
+            line=dict(color=IMPORT_LIMIT_COLOR, width=2),
             customdata=[[h] for _, _, h in lower_trace],
             hovertemplate="%{customdata[0]}<extra>Lower</extra>",
         )

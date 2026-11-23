@@ -63,7 +63,8 @@ from reportlab.platypus import (
 )
 
 from cactus_orchestrator import __version__ as cactus_orchestrator_version
-from cactus_orchestrator.reporting.power_readings import POWER_STREAM_COLORS, add_power_reading_traces
+from cactus_orchestrator.reporting.power_readings import add_power_reading_traces
+from cactus_orchestrator.reporting.trace_colors import POWER_STREAM_COLORS, timeline_stream_colors
 
 logger = logging.getLogger(__name__)
 
@@ -1020,13 +1021,14 @@ def generate_timeline_chart(timeline: Timeline, sites: list[Site]) -> Image:
     )
 
     # Add data streams with numeric x-axis
+    colors = timeline_stream_colors([ds.label for ds in timeline.data_streams])
     for ds in timeline.data_streams:
         if ds.label in POWER_STREAM_COLORS:
             continue
         x_data = list(range(len(ds.offset_watt_values)))
         y_data = ds.offset_watt_values
         line_shape = "hv" if ds.stepped else "linear"
-        line = {"dash": "dash"} if ds.dashed else {}
+        line = {"color": colors[ds.label], "dash": "dash"} if ds.dashed else {"color": colors[ds.label]}
         fig.add_trace(go.Scatter(x=x_data, y=y_data, name=ds.label, line_shape=line_shape, line=line))
 
     # Figure out the effective device max for each direction: prefer the asymmetric

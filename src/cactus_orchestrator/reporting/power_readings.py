@@ -7,11 +7,7 @@ from typing import Any
 import plotly.graph_objects as go
 from cactus_runner.app.timeline import Timeline
 
-# Labels the runner gives its (import positive) measured power streams in cactus_runner.app.timeline.generate_timeline
-POWER_STREAM_COLORS = {
-    "Site Power": "rgba(60,150,140,0.5)",
-    "Device Power": "rgba(175,130,60,0.55)",
-}
+from cactus_orchestrator.reporting.trace_colors import POWER_STREAM_COLORS
 
 
 def add_power_reading_traces(
