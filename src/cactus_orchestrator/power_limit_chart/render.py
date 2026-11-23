@@ -98,10 +98,7 @@ def _add_receipt_markers(
                     color=["#27ae60" if m.is_subscribed else "#e67e22" for m in receipt_markers],
                     opacity=0.85,
                 ),
-                customdata=[
-                    ["Notification" if m.is_subscribed else "Poll", m.step_name or f"Group {m.group_id}"]
-                    for m in receipt_markers
-                ],
+                customdata=[["Notification" if m.is_subscribed else "Poll", m.label] for m in receipt_markers],
                 hovertemplate="%{customdata[0]} receipt — %{customdata[1]}<extra>Receipt</extra>",
                 showlegend=False,
             )

@@ -48,7 +48,7 @@ class _ReceiptMarker:
     time: datetime
     group_id: int
     is_subscribed: bool  # True = notification delivered; False = polled
-    step_name: str  # step active at receipt time (empty string if unknown)
+    label: str  # label of the control revealed by this receipt
 
 
 def _fmt_video_time(seconds: float) -> str:
@@ -319,8 +319,7 @@ def _controller_band_at(
     if control_sources:
         best_primacy = min(s.primacy for s in control_sources)
         winner = _newest_control([s for s in control_sources if s.primacy == best_primacy])
-        doe_id = winner.row.dynamic_operating_envelope_id
-        return ("doe", doe_id), winner.step_name or f"Grp{winner.site_control_group_id} DOE#{doe_id}"
+        return ("doe", winner.row.dynamic_operating_envelope_id), winner.label
 
     group_order = {g.site_control_group_id: i for i, g in enumerate(sorted_groups)}
     default_sources = [s for s in sources if not isinstance(s, _KnownControlSegment)]
@@ -523,7 +522,7 @@ def _build_trace(  # noqa: C901
             ramp_secs, desc = _compute_ramp(ev.source, ev.time, delta_w, set_max_w, defaults_by_group)
         rel_secs = (ev.time - test_start).total_seconds() + video_offset_seconds
         if isinstance(ev.source, _KnownControlSegment):
-            ctrl_label = ev.source.label
+            ctrl_label = f"{ev.source.label} (envoy id {ev.source.row.dynamic_operating_envelope_id})"
         elif ev.source is not None:
             ctrl_label = f"Default DERP{ev.source.row.site_control_group_id}"
         else:
@@ -588,7 +587,7 @@ def _build_receipt_markers(
                     time=seg.observed_at,
                     group_id=seg.site_control_group_id,
                     is_subscribed=seg.site_control_group_id in subscribed_group_ids,
-                    step_name=seg.step_name,
+                    label=seg.label,
                 )
             )
     return sorted(markers, key=lambda m: m.time)

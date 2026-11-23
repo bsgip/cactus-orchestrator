@@ -148,7 +148,6 @@ class _Observation:
     """A moment at which the client's knowledge of a group's server state refreshes."""
 
     time: datetime
-    step_name: str = ""
 
 
 @dataclass
@@ -171,7 +170,7 @@ def _collect_poll_observations(sorted_requests: list[RequestEntry]) -> _PollHist
         if req.method != "GET":
             continue
         succeeded = 200 <= int(req.status) < 300
-        observation = _Observation(req.timestamp, (req.step_name or "").strip())
+        observation = _Observation(req.timestamp)
         m = _DDERC_PATH_RE.search(req.path)
         if m:
             gid = int(m.group(1))
@@ -188,23 +187,7 @@ def _collect_poll_observations(sorted_requests: list[RequestEntry]) -> _PollHist
     return history
 
 
-def _step_name_at(sorted_requests: list[RequestEntry], group_id: int, t: datetime) -> str:
-    """The last non-empty step name on a request to this group's DERControl list at or before t."""
-    step = ""
-    for req in sorted_requests:
-        if req.timestamp > t:
-            break
-        m = _DERC_PATH_RE.search(req.path)
-        if m and int(m.group(1)) == group_id:
-            name = (req.step_name or "").strip()
-            if name:
-                step = name
-    return step
-
-
-def _synthesize_observations(
-    rows: Iterable[_RawDOE] | Iterable[_RawDefault], step_at: Callable[[datetime], str] | None = None
-) -> list[_Observation]:
+def _synthesize_observations(rows: Iterable[_RawDOE] | Iterable[_RawDefault]) -> list[_Observation]:
     """Instant-knowledge observations at every server-side change (creation and boundary).
     Used for subscribed groups (notifications assumed delivered at the moment of change)."""
     times: set[datetime] = set()
@@ -213,19 +196,12 @@ def _synthesize_observations(
         boundary = _boundary_time(row)
         if boundary < _FAR_FUTURE:
             times.add(boundary)
-    return [_Observation(t, step_at(t) if step_at is not None else "") for t in sorted(times)]
+    return [_Observation(t) for t in sorted(times)]
 
 
 def _assemble_observations(polls: list[_Observation], synthesized: list[_Observation]) -> list[_Observation]:
-    """Merge and time-dedupe observations (first non-empty step name wins per instant)."""
-    by_time: dict[datetime, _Observation] = {}
-    for obs in polls + synthesized:
-        existing = by_time.get(obs.time)
-        if existing is None:
-            by_time[obs.time] = obs
-        elif not existing.step_name and obs.step_name:
-            existing.step_name = obs.step_name
-    return [by_time[t] for t in sorted(by_time)]
+    """Merge and time-dedupe observations."""
+    return [_Observation(t) for t in sorted({obs.time for obs in polls + synthesized})]
 
 
 def _observations_for_groups[RowT: _GroupScoped](
@@ -233,7 +209,7 @@ def _observations_for_groups[RowT: _GroupScoped](
     polls_by_group: dict[int, list[_Observation]],
     attempted_group_ids: set[int],
     subscribed_group_ids: set[int],
-    synthesize: Callable[[list[RowT], int], list[_Observation]],
+    synthesize: Callable[[list[RowT]], list[_Observation]],
     resource_label: str,
 ) -> dict[int, list[_Observation]]:
     """Assemble per-group observation events from polls and subscriptions.
@@ -245,7 +221,7 @@ def _observations_for_groups[RowT: _GroupScoped](
         polls = polls_by_group.get(gid, [])
         synthesized: list[_Observation] = []
         if gid in subscribed_group_ids:
-            synthesized = synthesize(rows, gid)
+            synthesized = synthesize(rows)
         elif not polls and gid not in attempted_group_ids:
             raise ValueError(
                 f"Group {gid} has {resource_label} entries but the client never polled the "
@@ -270,19 +246,12 @@ def _build_group_observations(
 ) -> tuple[dict[int, list[_Observation]], dict[int, list[_Observation]]]:
     """Returns (derc_observations_by_group, dderc_observations_by_group)."""
     history = _collect_poll_observations(sorted_requests)
-
-    def synth_controls(rows: list[_RawDOE], gid: int) -> list[_Observation]:
-        return _synthesize_observations(rows, partial(_step_name_at, sorted_requests, gid))
-
-    def synth_defaults(rows: list[_RawDefault], gid: int) -> list[_Observation]:
-        return _synthesize_observations(rows)
-
     derc_observations = _observations_for_groups(
         _group_by_gid(all_does),
         history.derc,
         history.derc_attempted,
         subscribed_group_ids,
-        synth_controls,
+        _synthesize_observations,
         "DERControl",
     )
     dderc_observations = _observations_for_groups(
@@ -290,7 +259,7 @@ def _build_group_observations(
         history.dderc,
         history.dderc_attempted,
         default_subscribed_group_ids,
-        synth_defaults,
+        _synthesize_observations,
         "DefaultDERControl",
     )
     return derc_observations, dderc_observations
@@ -303,13 +272,11 @@ def _build_group_observations(
 class _Known[RowT]:
     """A server row as the client knew it during [known_from, known_until).
 
-    known_from is the observation that revealed this row (version) to the client;
-    step_name is the step active at that observation ("" if unknown)."""
+    known_from is the observation that revealed this row (version) to the client."""
 
     row: RowT
     known_from: datetime
     known_until: datetime
-    step_name: str = ""
 
 
 def _observed_spans[RowT](
@@ -328,7 +295,7 @@ def _observed_spans[RowT](
         if spans and spans[-1].row is row and spans[-1].known_until >= obs.time:
             spans[-1].known_until = known_until
         else:
-            spans.append(_Known(row=row, known_from=obs.time, known_until=known_until, step_name=obs.step_name))
+            spans.append(_Known(row=row, known_from=obs.time, known_until=known_until))
     return spans
 
 
@@ -342,11 +309,7 @@ class _KnownControlSegment:
     observed_at: datetime  # the observation that revealed this version to the client
     effective_start: datetime  # max(row.start_time, observed_at)
     effective_end: datetime
-    step_name: str
-
-    @property
-    def label(self) -> str:
-        return self.step_name or f"DERC{self.row.dynamic_operating_envelope_id}"
+    label: str  # the control's tag, else "Control N" (see _control_labels)
 
 
 @dataclass
@@ -409,6 +372,28 @@ def _supersession_kill_times(controls: list[_ObservedControl]) -> dict[int, date
     return kill
 
 
+def _control_labels(all_does: list[_RawDOE], doe_tags: dict[int, str], test_start: datetime) -> dict[int, str]:
+    """doe_id -> chart label for every control created during the test.
+
+    Tagged controls use their test-definition tag. Untagged controls are numbered "Control N" in
+    creation order (ties broken by id) among the untagged controls only, so numbering is stable
+    regardless of which controls the client went on to observe."""
+    created: dict[int, datetime] = {}
+    for row in all_does:
+        doe_id = row.dynamic_operating_envelope_id
+        if doe_id not in created or row.created_time < created[doe_id]:
+            created[doe_id] = row.created_time
+    labels: dict[int, str] = {}
+    untagged = 0
+    for doe_id in sorted((d for d, t in created.items() if t >= test_start), key=lambda d: (created[d], d)):
+        tag = doe_tags.get(doe_id)
+        if tag is None:
+            untagged += 1
+            tag = f"Control {untagged}"
+        labels[doe_id] = tag
+    return labels
+
+
 def _replay_control_knowledge(
     all_does: list[_RawDOE],
     observations_by_group: dict[int, list[_Observation]],
@@ -425,6 +410,7 @@ def _replay_control_knowledge(
     (see _supersession_kill_times) contributes nothing after the observation that revealed
     its superseder."""
     versions_by_id = _build_control_versions(all_does)
+    labels = _control_labels(all_does, doe_tags, test_start)
     observed: list[_ObservedControl] = []
 
     for doe_id, versions in versions_by_id.items():
@@ -462,9 +448,7 @@ def _replay_control_knowledge(
                     observed_at=span.known_from,
                     effective_start=seg_start,
                     effective_end=seg_end,
-                    # Prefer the tag recorded at control-creation time; fall back to the step
-                    # name active at the observation that revealed this version.
-                    step_name=doe_tags.get(control.doe_id, span.step_name),
+                    label=labels[control.doe_id],
                 )
             )
     return segments
