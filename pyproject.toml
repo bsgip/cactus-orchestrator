@@ -20,7 +20,7 @@ dependencies = [
     "asyncpg",
     "cactus-test-definitions==1.19.3",
     "cactus-schema==1.4.0",
-    "cactus-runner @ git+https://github.com/bsgip/cactus-runner.git@v2.11.1",
+    "cactus-runner @ git+https://github.com/bsgip/cactus-runner.git@v2.12.1",
     "fastapi-utils",
     "typing_inspect",                                                          # fastapi-utils missing dep?
     "pyasn1",
