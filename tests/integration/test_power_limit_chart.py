@@ -1395,8 +1395,13 @@ async def test_chart_single_program_export_curtailment(pg_envoy_base_config, mon
         ],
     )
 
-    monkeypatch.setattr("cactus_orchestrator.reporting.power_readings.MEASURED_POWER_FROM", T0)
     async with generate_async_session(pg_envoy_base_config) as session:
+        # Timelines from before the cutoff (older runners) don't report import positive power, so aren't charted
+        html = await generate_power_limit_chart_html(session, T0, test_end, polls, timeline=timeline)
+        assert html is not None
+        assert "(measured)" not in html
+
+        monkeypatch.setattr("cactus_orchestrator.power_limit_chart.render.MEASURED_POWER_FROM", T0)
         html = await generate_power_limit_chart_html(session, T0, test_end, polls, timeline=timeline)
 
     assert html is not None, "Chart generation returned None"

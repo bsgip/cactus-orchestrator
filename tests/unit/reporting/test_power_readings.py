@@ -1,10 +1,10 @@
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
 import plotly.graph_objects as go
 import pytest
 from cactus_runner.app.timeline import Timeline, TimelineDataStream
 
-from cactus_orchestrator.reporting.power_readings import MEASURED_POWER_FROM, add_power_reading_traces
+from cactus_orchestrator.reporting.power_readings import add_power_reading_traces
 
 T0 = datetime(2026, 12, 1, 12, 0, 0, tzinfo=UTC)
 
@@ -16,16 +16,6 @@ def _to_seconds(t: datetime) -> float:
 def test_add_power_reading_traces_none_timeline():
     fig = go.Figure()
     assert add_power_reading_traces(fig, None, _to_seconds, export_positive=True) == []
-    assert len(fig.data) == 0
-
-
-def test_add_power_reading_traces_skips_timelines_before_cutoff():
-    """Older runners didn't report import positive power, so their timelines aren't charted"""
-    timeline = Timeline(
-        MEASURED_POWER_FROM - timedelta(seconds=1), 20, [TimelineDataStream("Site Power", [100], False, False)]
-    )
-    fig = go.Figure()
-    assert add_power_reading_traces(fig, timeline, _to_seconds, export_positive=True) == []
     assert len(fig.data) == 0
 
 

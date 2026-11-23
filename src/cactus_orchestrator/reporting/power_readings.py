@@ -1,7 +1,7 @@
 """Measured site/device active power from the runner's timeline, rendered as muted background traces on power charts."""
 
 from collections.abc import Callable
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 import plotly.graph_objects as go
@@ -13,9 +13,6 @@ POWER_STREAM_COLORS = {
     "Device Power": "rgba(175,130,60,0.55)",
 }
 
-# Runners before v2.12.1 / v1.20.1 report raw (not import positive) power readings, so earlier timelines are skipped
-MEASURED_POWER_FROM = datetime(2026, 11, 23, tzinfo=UTC)
-
 
 def add_power_reading_traces(
     fig: go.Figure, timeline: Timeline | None, to_x: Callable[[datetime], Any], export_positive: bool
@@ -24,7 +21,7 @@ def add_power_reading_traces(
     these sit beneath. Each value covers its whole interval, so it's drawn as a flat step across it.
 
     Returns every (signed) watt value plotted"""
-    if timeline is None or timeline.start < MEASURED_POWER_FROM:
+    if timeline is None:
         return []
 
     sign = -1 if export_positive else 1

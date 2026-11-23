@@ -12,6 +12,9 @@ from cactus_orchestrator.power_limit_chart.limits import (
 )
 from cactus_orchestrator.reporting.power_readings import add_power_reading_traces
 
+# Runners before v2.12.1 / v1.20.1 report raw (not import positive) power readings, so earlier timelines aren't charted
+MEASURED_POWER_FROM = datetime(2026, 11, 23, tzinfo=UTC)
+
 # Cycling colour palette for step-name bands (semi-transparent fills)
 _STEP_PALETTE = [
     "rgba(130,179,255,0.45)",
@@ -286,6 +289,8 @@ def _render_html_chart(
     fig = go.Figure()
 
     # ── Measured power (muted, beneath the limits) ───────────────────────────
+    if timeline is not None and timeline.start < MEASURED_POWER_FROM:
+        timeline = None
     measured_watts = add_power_reading_traces(fig, timeline, to_chart_x, export_positive=True)
 
     # Expand the range so limits commanded beyond the device maximum, and measured power, stay visible.
