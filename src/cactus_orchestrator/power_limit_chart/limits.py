@@ -46,7 +46,6 @@ class _ReceiptMarker:
     """Records when the device received (a version of) a DERControl."""
 
     time: datetime
-    group_id: int
     is_subscribed: bool  # True = notification delivered; False = polled
     label: str  # label of the control revealed by this receipt
 
@@ -586,7 +585,6 @@ def _build_receipt_markers(
         markers.append(
             _ReceiptMarker(
                 time=time,
-                group_id=group_id,
                 is_subscribed=group_id in subscribed_group_ids,
                 label=", ".join(s.label for s in group_segments),
             )

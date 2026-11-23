@@ -33,6 +33,7 @@ from cactus_orchestrator.power_limit_chart.limits import (
 from cactus_orchestrator.power_limit_chart.render import _render_html_chart
 from cactus_orchestrator.power_limit_chart.replay import (
     _build_group_observations,
+    _control_labels,
     _group_by_gid,
     _replay_control_knowledge,
     _replay_default_knowledge,
@@ -104,7 +105,8 @@ async def generate_power_limit_chart_html(
         all_does, all_defaults, sorted_requests, subscribed_group_ids, default_subscribed_group_ids
     )
 
-    segments = _replay_control_knowledge(all_does, derc_observations, groups_by_id, doe_tags or {}, test_start)
+    labels = _control_labels(all_does, doe_tags or {}, test_start)
+    segments = _replay_control_knowledge(all_does, derc_observations, groups_by_id, labels, test_start)
     segments_by_group = _group_by_gid(segments)
     defaults_by_group = _replay_default_knowledge(all_defaults, dderc_observations)
 
