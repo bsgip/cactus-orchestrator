@@ -63,6 +63,7 @@ from reportlab.platypus import (
 )
 
 from cactus_orchestrator import __version__ as cactus_orchestrator_version
+from cactus_orchestrator.reporting.power_readings import POWER_STREAM_COLORS, add_power_reading_traces
 
 logger = logging.getLogger(__name__)
 
@@ -1010,8 +1011,18 @@ def generate_controls_chart(controls: list[DynamicOperatingEnvelope]) -> Image:
 def generate_timeline_chart(timeline: Timeline, sites: list[Site]) -> Image:
     fig = go.Figure()
 
+    # Measured power streams are drawn as muted background traces, beneath the controls
+    add_power_reading_traces(
+        fig,
+        timeline,
+        lambda t: (t - timeline.start).total_seconds() / timeline.interval_seconds,
+        export_positive=False,  # This chart is import positive
+    )
+
     # Add data streams with numeric x-axis
     for ds in timeline.data_streams:
+        if ds.label in POWER_STREAM_COLORS:
+            continue
         x_data = list(range(len(ds.offset_watt_values)))
         y_data = ds.offset_watt_values
         line_shape = "hv" if ds.stepped else "linear"
