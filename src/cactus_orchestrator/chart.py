@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import Any
 
 import testing.postgresql
-from cactus_runner.models import ReportingData
+from cactus_runner.models import ReportingData, ResourceAnnotations
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from cactus_orchestrator.artifact import fetch_run_envoy_db, fetch_run_reporting_data_json
@@ -34,6 +34,16 @@ def _patch_legacy_site_der_id(data: dict | list | str) -> Any:  # noqa: ANN401
         for item in data:
             _patch_legacy_site_der_id(item)
     return data
+
+
+def _doe_tags_by_id(resource_annotations: ResourceAnnotations) -> dict[int, str]:
+    """Inverts the runner's tag -> DERControl id annotation map into doe_id -> tag.
+
+    This allows the chart to label each control by its YAML tag rather than inferring a step name
+    from request timestamps (which is fragile when controls are created during the same request that
+    polls the DERC list). The runner serialises the ids as strings, so they are cast to match the
+    integer dynamic_operating_envelope_id used by the chart."""
+    return {int(doe_id): tag for tag, doe_id in resource_annotations.der_control_ids_by_alias.items()}
 
 
 async def generate_power_limit_chart(
@@ -77,12 +87,7 @@ async def generate_power_limit_chart(
     test_end: datetime = reporting_data.created_at
     request_history = reporting_data.runner_state.request_history
 
-    # Build doe_id → tag from the runner's tag → doe_id annotation map (inverted).
-    # This allows the chart to label each control by its YAML tag rather than inferring
-    # a step name from request timestamps (which is fragile when controls are created
-    # during the same request that polls the DERC list).
-    tag_by_alias = reporting_data.runner_state.active_test_procedure.resource_annotations.der_control_ids_by_alias
-    doe_tags: dict[int, str] = {doe_id: tag for tag, doe_id in tag_by_alias.items()}
+    doe_tags = _doe_tags_by_id(reporting_data.runner_state.active_test_procedure.resource_annotations)
 
     step_completions: list[tuple[str, datetime]] = [
         (name, info.completed_at)
