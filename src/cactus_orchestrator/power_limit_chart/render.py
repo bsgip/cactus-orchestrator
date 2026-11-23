@@ -283,9 +283,14 @@ def _render_html_chart(
     def to_chart_x(t: datetime) -> datetime:
         return _fake_epoch + _video_offset + (t - test_start)
 
-    # Expand the range so limits commanded beyond the device maximum stay visible.
-    y_max = max(upper_max_w, max((v for _, v, _ in upper_trace), default=0.0)) * 1.1
-    y_min = min(-lower_max_w, min((v for _, v, _ in lower_trace), default=0.0)) * 1.1
+    fig = go.Figure()
+
+    # ── Measured power (muted, beneath the limits) ───────────────────────────
+    measured_watts = add_power_reading_traces(fig, timeline, to_chart_x, export_positive=True)
+
+    # Expand the range so limits commanded beyond the device maximum, and measured power, stay visible.
+    y_max = max(upper_max_w, *(v for _, v, _ in upper_trace), *measured_watts) * 1.1
+    y_min = min(-lower_max_w, *(v for _, v, _ in lower_trace), *measured_watts) * 1.1
     has_steps = bool(step_intervals)
     bottom_margin = 230 if has_steps else 130
     completions = sorted(step_completions or [], key=lambda x: x[1])
@@ -300,11 +305,6 @@ def _render_html_chart(
     legend_y = 1.06 + (max_lane + 1) * 0.06 + 0.06 if completions else 1.16
     top_margin = (140 + (max_lane + 1) * 30) if completions else 150
     height = top_margin + 350 + bottom_margin
-
-    fig = go.Figure()
-
-    # ── Measured power (muted, beneath the limits) ───────────────────────────
-    add_power_reading_traces(fig, timeline, to_chart_x, export_positive=True)
 
     # ── Main limit traces ────────────────────────────────────────────────────
     fig.add_trace(

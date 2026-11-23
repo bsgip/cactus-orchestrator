@@ -1,7 +1,7 @@
 """Measured site/device active power from the runner's timeline, rendered as muted background traces on power charts."""
 
 from collections.abc import Callable
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import plotly.graph_objects as go
@@ -13,17 +13,23 @@ POWER_STREAM_COLORS = {
     "Device Power": "rgba(175,130,60,0.55)",
 }
 
+# Runners before v2.12.1 / v1.20.1 report raw (not import positive) power readings, so earlier timelines are skipped
+MEASURED_POWER_FROM = datetime(2026, 11, 23, tzinfo=UTC)
+
 
 def add_power_reading_traces(
     fig: go.Figure, timeline: Timeline | None, to_x: Callable[[datetime], Any], export_positive: bool
-) -> None:
+) -> list[int]:
     """Adds the timeline's measured power streams as muted, non-hoverable traces. Call before adding the main traces so
-    these sit beneath. Each value covers its whole interval, so it's drawn as a flat step across it."""
-    if timeline is None:
-        return
+    these sit beneath. Each value covers its whole interval, so it's drawn as a flat step across it.
+
+    Returns every (signed) watt value plotted"""
+    if timeline is None or timeline.start < MEASURED_POWER_FROM:
+        return []
 
     sign = -1 if export_positive else 1
     interval = timedelta(seconds=timeline.interval_seconds)
+    plotted: list[int] = []
     for ds in timeline.data_streams:
         color = POWER_STREAM_COLORS.get(ds.label)
         if color is None:
@@ -40,6 +46,7 @@ def add_power_reading_traces(
                 continue
             x.extend([to_x(start), to_x(start + interval)])
             y.extend([sign * watts, sign * watts])
+            plotted.append(sign * watts)
 
         fig.add_trace(
             go.Scatter(
@@ -49,5 +56,8 @@ def add_power_reading_traces(
                 name=f"{ds.label} (measured)",
                 line=dict(color=color, width=1.5),
                 hoverinfo="skip",
+                legendrank=1001,  # Listed after the main traces (default rank 1000) despite being added first
             )
         )
+
+    return plotted

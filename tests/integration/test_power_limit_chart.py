@@ -1323,7 +1323,7 @@ def test_build_trace_equal_target_event_stops_active_ramp():
 # ─── Scenario A: Single program, export curtailment steps with AS4777 ramps ──
 
 
-async def test_chart_single_program_export_curtailment(pg_envoy_base_config):
+async def test_chart_single_program_export_curtailment(pg_envoy_base_config, monkeypatch):
     """
     One DERProgram (primacy 1). Export is stepped down and back up over 40 minutes.
     Device polls 60 seconds after each control is created. AS4777 ramp rate (grad_w=28).
@@ -1395,6 +1395,7 @@ async def test_chart_single_program_export_curtailment(pg_envoy_base_config):
         ],
     )
 
+    monkeypatch.setattr("cactus_orchestrator.reporting.power_readings.MEASURED_POWER_FROM", T0)
     async with generate_async_session(pg_envoy_base_config) as session:
         html = await generate_power_limit_chart_html(session, T0, test_end, polls, timeline=timeline)
 

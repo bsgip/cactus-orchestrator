@@ -1,12 +1,12 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import plotly.graph_objects as go
 import pytest
 from cactus_runner.app.timeline import Timeline, TimelineDataStream
 
-from cactus_orchestrator.reporting.power_readings import add_power_reading_traces
+from cactus_orchestrator.reporting.power_readings import MEASURED_POWER_FROM, add_power_reading_traces
 
-T0 = datetime(2026, 2, 1, 12, 0, 0, tzinfo=UTC)
+T0 = datetime(2026, 12, 1, 12, 0, 0, tzinfo=UTC)
 
 
 def _to_seconds(t: datetime) -> float:
@@ -15,7 +15,17 @@ def _to_seconds(t: datetime) -> float:
 
 def test_add_power_reading_traces_none_timeline():
     fig = go.Figure()
-    add_power_reading_traces(fig, None, _to_seconds, export_positive=True)
+    assert add_power_reading_traces(fig, None, _to_seconds, export_positive=True) == []
+    assert len(fig.data) == 0
+
+
+def test_add_power_reading_traces_skips_timelines_before_cutoff():
+    """Older runners didn't report import positive power, so their timelines aren't charted"""
+    timeline = Timeline(
+        MEASURED_POWER_FROM - timedelta(seconds=1), 20, [TimelineDataStream("Site Power", [100], False, False)]
+    )
+    fig = go.Figure()
+    assert add_power_reading_traces(fig, timeline, _to_seconds, export_positive=True) == []
     assert len(fig.data) == 0
 
 
@@ -32,9 +42,10 @@ def test_add_power_reading_traces(export_positive, sign):
     )
     fig = go.Figure()
 
-    add_power_reading_traces(fig, timeline, _to_seconds, export_positive=export_positive)
+    plotted = add_power_reading_traces(fig, timeline, _to_seconds, export_positive=export_positive)
 
-    # Only the power streams are added - each value is a step across its interval, with gaps breaking the line
+    # Only the power streams are added - each value is a step across its interval, with gaps breaking the line. A
+    # leading gap doesn't add a break.
     assert [t.name for t in fig.data] == ["Site Power (measured)", "Device Power (measured)"]
     site, device = fig.data
     assert list(site.x) == [0, 20, 20, 40, 40, 60, 80]
@@ -42,3 +53,5 @@ def test_add_power_reading_traces(export_positive, sign):
     assert list(device.x) == [20, 40, 40, 60, 60]
     assert list(device.y) == [sign * -50, sign * -50, sign * -50, sign * -50, None]
     assert all(t.hoverinfo == "skip" for t in fig.data)
+    assert all(t.legendrank == 1001 for t in fig.data)
+    assert plotted == [sign * v for v in [100, 200, 300, -50, -50]]
