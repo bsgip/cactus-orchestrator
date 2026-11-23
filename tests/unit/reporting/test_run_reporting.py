@@ -275,6 +275,27 @@ def test_pdf_report_as_bytes_with_timeline(has_set_max_w):
     assert len(report) > 0
 
 
+def test_pdf_report_as_bytes_with_timeline_power_streams():
+    t = Timeline(
+        DT_NOW - timedelta(seconds=300),
+        20,
+        [
+            TimelineDataStream("/derp/1 opModExpLimW", [None] * 5 + [-500] * 10, True, False),
+            TimelineDataStream("Site Power", [1000] * 5 + [None] * 2 + [-800] * 8, False, False),
+            TimelineDataStream("Device Power", [-2000] * 15, False, False),
+        ],
+    )
+    report = pdf_report_as_bytes(
+        runner_state=runner_state(request_history=[]),
+        check_results={},
+        readings={},
+        reading_counts={},
+        sites=sites(num=1, with_ders=False),
+        timeline=t,
+    )
+    assert len(report) > 0
+
+
 def test_pdf_report_with_witness_test():
     state = runner_state(client_interactions=client_interactions(), witness_testing=True)
 
