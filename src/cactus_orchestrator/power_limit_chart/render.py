@@ -4,11 +4,14 @@ from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 
 import plotly.graph_objects as go  # type: ignore[import-untyped]
+from cactus_runner.app.timeline import Timeline
 
 from cactus_orchestrator.power_limit_chart.limits import (
     _OP_MOD_CONNECT_GRACE_SECONDS,
     _ReceiptMarker,
 )
+from cactus_orchestrator.reporting.power_readings import add_power_reading_traces
+from cactus_orchestrator.reporting.trace_colors import EXPORT_LIMIT_COLOR, IMPORT_LIMIT_COLOR
 
 # Cycling colour palette for step-name bands (semi-transparent fills)
 _STEP_PALETTE = [
@@ -266,6 +269,7 @@ def _render_html_chart(
     test_name: str = "",
     video_start_seconds: float | None = None,
     step_completions: list[tuple[str, datetime]] | None = None,
+    timeline: Timeline | None = None,
 ) -> str:
     duration_secs = (test_end - test_start).total_seconds()
 
@@ -277,9 +281,15 @@ def _render_html_chart(
     def to_chart_x(t: datetime) -> datetime:
         return _fake_epoch + _video_offset + (t - test_start)
 
-    # Expand the range so limits commanded beyond the device maximum stay visible.
-    y_max = max(upper_max_w, max((v for _, v, _ in upper_trace), default=0.0)) * 1.1
-    y_min = min(-lower_max_w, min((v for _, v, _ in lower_trace), default=0.0)) * 1.1
+    fig = go.Figure()
+
+    # ── Measured power (muted, beneath the limits) ───────────────────────────
+    # The timeline's power is import positive - this chart is export positive
+    measured_watts = add_power_reading_traces(fig, timeline, to_chart_x, export_positive=True)
+
+    # Expand the range so limits commanded beyond the device maximum, and measured power, stay visible.
+    y_max = max(upper_max_w, *(v for _, v, _ in upper_trace), *measured_watts) * 1.1
+    y_min = min(-lower_max_w, *(v for _, v, _ in lower_trace), *measured_watts) * 1.1
     has_steps = bool(step_intervals)
     bottom_margin = 230 if has_steps else 130
     completions = sorted(step_completions or [], key=lambda x: x[1])
@@ -295,8 +305,6 @@ def _render_html_chart(
     top_margin = (140 + (max_lane + 1) * 30) if completions else 150
     height = top_margin + 350 + bottom_margin
 
-    fig = go.Figure()
-
     # ── Main limit traces ────────────────────────────────────────────────────
     fig.add_trace(
         go.Scatter(
@@ -304,7 +312,7 @@ def _render_html_chart(
             y=[v for _, v, _ in upper_trace],
             mode="lines",
             name="Upper limit (Export / Gen)",
-            line=dict(color="#e74c3c", width=2),
+            line=dict(color=EXPORT_LIMIT_COLOR, width=2),
             customdata=[[h] for _, _, h in upper_trace],
             hovertemplate="%{customdata[0]}<extra>Upper</extra>",
         )
@@ -315,7 +323,7 @@ def _render_html_chart(
             y=[v for _, v, _ in lower_trace],
             mode="lines",
             name="Lower limit (Import / Load)",
-            line=dict(color="#3498db", width=2),
+            line=dict(color=IMPORT_LIMIT_COLOR, width=2),
             customdata=[[h] for _, _, h in lower_trace],
             hovertemplate="%{customdata[0]}<extra>Lower</extra>",
         )
@@ -369,7 +377,7 @@ def _render_html_chart(
 
     # ── Layout ───────────────────────────────────────────────────────────────
     fig.update_layout(
-        title=dict(text="Expected Device Power Limits", font=dict(size=16)),
+        title=dict(text="Expected Device Power Limits", font=dict(size=16), y=0.99, yanchor="top"),
         height=height,
         xaxis=dict(
             title=x_title,
@@ -405,7 +413,9 @@ def _render_html_chart(
         "This chart is an estimation of what device active power should look like during the witness test. "
         "It is based on active and default controls, polling and subscription timing, primacy, and expected "
         "ramp behaviour. It is intended to align with the TS5573 test definitions, but should not be used "
-        "instead of these test procedures for client development."
+        "instead of these test procedures for client development. Measured site and device power (muted lines) "
+        "are reading averages shown for reference only: they lag limit changes by up to one reading interval, and "
+        "site power includes other site load/generation so is only comparable against export/import limits."
         "</p>"
         "</div>"
     )

@@ -18,6 +18,7 @@ import pytest
 from assertical.asserts.generator import assert_class_instance_equality
 from assertical.fake.generator import clone_class_instance, generate_class_instance
 from assertical.fixtures.postgres import generate_async_session
+from cactus_runner.app.timeline import Timeline, TimelineDataStream
 from cactus_schema.runner.schema import HTTPMethod, RequestEntry
 from envoy.server.model import SiteGroup, SiteGroupAssignment
 from envoy.server.model.archive.doe import (
@@ -163,7 +164,7 @@ def _make_site_and_group_with_setting(
         grad_w=grad_w,
         soft_grad_w=None,
     )
-    site = generate_class_instance(Site, seed=seed, aggregator_id=aggregator_id)
+    site = generate_class_instance(Site, seed=seed, aggregator_id=aggregator_id, nmi_checksum=None)
     site.site_der_setting = der_setting
 
     site_group = generate_class_instance(SiteGroup, seed=seed + 101, default_group=False)
@@ -247,7 +248,7 @@ async def test_get_der_setting_no_site(pg_envoy_base_config):
 async def test_get_der_setting_no_der_setting(pg_envoy_base_config):
     """Returns None when a site exists but has no SiteDERSetting attached."""
     async with generate_async_session(pg_envoy_base_config) as session:
-        site = generate_class_instance(Site, seed=1, aggregator_id=1)
+        site = generate_class_instance(Site, seed=1, aggregator_id=1, nmi_checksum=None)
         site.site_der_setting = None
         session.add(site)
         await session.commit()
@@ -1375,11 +1376,25 @@ async def test_chart_single_program_export_curtailment(pg_envoy_base_config):
 
     polls = [_poll(1, t + timedelta(seconds=60), req_id=i) for i, t in enumerate(created_times)]
 
+    # Measured power (import positive, as the runner's timeline reports it) roughly following the limits with 1500W
+    # of site load - charted export positive
+    device_watts = [10000] * 6 + [5000] * 10 + [0] * 10 + [10000] * 19
+    timeline = Timeline(
+        T0,
+        60,
+        [
+            TimelineDataStream("Site Power", [1500 - w for w in device_watts], False, False),
+            TimelineDataStream("Device Power", [-w for w in device_watts], False, False),
+        ],
+    )
+
     async with generate_async_session(pg_envoy_base_config) as session:
-        html = await generate_power_limit_chart_html(session, T0, test_end, polls)
+        html = await generate_power_limit_chart_html(session, T0, test_end, polls, timeline=timeline)
 
     assert html is not None, "Chart generation returned None"
     assert "Device Power Chart" in html
+    assert "Site Power (measured)" in html
+    assert "Device Power (measured)" in html
     assert "Ramping from 10000 W to 5000 W" in html
     assert "Ramping from 5000 W to 10000 W" in html  # interrupted mid-ramp by the T+15m step down
     assert "Ramping from 0 W to 10000 W" in html

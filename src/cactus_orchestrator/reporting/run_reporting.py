@@ -63,6 +63,8 @@ from reportlab.platypus import (
 )
 
 from cactus_orchestrator import __version__ as cactus_orchestrator_version
+from cactus_orchestrator.reporting.power_readings import add_power_reading_traces, interval_step_xy
+from cactus_orchestrator.reporting.trace_colors import POWER_STREAM_COLORS, timeline_stream_colors
 
 logger = logging.getLogger(__name__)
 
@@ -1007,16 +1009,33 @@ def generate_controls_chart(controls: list[DynamicOperatingEnvelope]) -> Image:
     return fig_to_image(fig=fig, content_width=MAX_CONTENT_WIDTH)
 
 
+def _interval_offset(timeline: Timeline, t: datetime) -> float:
+    return (t - timeline.start).total_seconds() / timeline.interval_seconds
+
+
+def _add_timeline_stream_traces(fig: go.Figure, timeline: Timeline) -> None:
+    to_interval_x = partial(_interval_offset, timeline)
+
+    # Measured power streams are drawn as muted background traces, beneath the controls
+    add_power_reading_traces(fig, timeline, to_interval_x, export_positive=False)  # This chart is import positive
+
+    # Add data streams with numeric x-axis. Stepped values are drawn across their whole interval (to the next one)
+    colors = timeline_stream_colors([ds.label for ds in timeline.data_streams])
+    for ds in timeline.data_streams:
+        if ds.label in POWER_STREAM_COLORS:
+            continue
+        x_data, y_data = (
+            interval_step_xy(timeline, ds.offset_watt_values, to_interval_x)
+            if ds.stepped
+            else (list(range(len(ds.offset_watt_values))), ds.offset_watt_values)
+        )
+        line = {"color": colors[ds.label], "dash": "dash"} if ds.dashed else {"color": colors[ds.label]}
+        fig.add_trace(go.Scatter(x=x_data, y=y_data, name=ds.label, line=line))
+
+
 def generate_timeline_chart(timeline: Timeline, sites: list[Site]) -> Image:
     fig = go.Figure()
-
-    # Add data streams with numeric x-axis
-    for ds in timeline.data_streams:
-        x_data = list(range(len(ds.offset_watt_values)))
-        y_data = ds.offset_watt_values
-        line_shape = "hv" if ds.stepped else "linear"
-        line = {"dash": "dash"} if ds.dashed else {}
-        fig.add_trace(go.Scatter(x=x_data, y=y_data, name=ds.label, line_shape=line_shape, line=line))
+    _add_timeline_stream_traces(fig, timeline)
 
     # Figure out the effective device max for each direction: prefer the asymmetric
     # setMaxDischargeRateW (export) / setMaxChargeRateW (import), falling back to setMaxW.
@@ -1067,6 +1086,7 @@ def generate_timeline_chart(timeline: Timeline, sites: list[Site]) -> Image:
     ]
     annotations = []
 
+    # This chart is import positive: the export/discharge max is negative and the import/charge max is positive
     if upper_max_w is not None:
         shapes.append(
             dict(
@@ -1075,8 +1095,8 @@ def generate_timeline_chart(timeline: Timeline, sites: list[Site]) -> Image:
                 x0=0,
                 x1=1,
                 yref="y",
-                y0=upper_max_w,
-                y1=upper_max_w,
+                y0=-upper_max_w,
+                y1=-upper_max_w,
                 line=dict(color="red", width=2, dash="dash"),
             )
         )
@@ -1084,7 +1104,7 @@ def generate_timeline_chart(timeline: Timeline, sites: list[Site]) -> Image:
             dict(
                 xref="paper",
                 x=0.5,  # Middle of the page
-                y=upper_max_w,
+                y=-upper_max_w,
                 xanchor="center",
                 yanchor="middle",
                 text=upper_max_label,
@@ -1102,8 +1122,8 @@ def generate_timeline_chart(timeline: Timeline, sites: list[Site]) -> Image:
                 x0=0,
                 x1=1,
                 yref="y",
-                y0=-lower_max_w,
-                y1=-lower_max_w,
+                y0=lower_max_w,
+                y1=lower_max_w,
                 line=dict(color="red", width=2, dash="dash"),
             )
         )
@@ -1111,7 +1131,7 @@ def generate_timeline_chart(timeline: Timeline, sites: list[Site]) -> Image:
             dict(
                 xref="paper",
                 x=0.5,  # Middle of the page
-                y=-lower_max_w,
+                y=lower_max_w,
                 xanchor="center",
                 yanchor="middle",
                 text=lower_max_label,
@@ -1135,7 +1155,7 @@ def generate_timeline_chart(timeline: Timeline, sites: list[Site]) -> Image:
         tickmode="array",
         tickvals=tickvals,
         ticktext=x_labels,
-        range=[0, max(num_intervals - 1, 1)],
+        range=[0, max(num_intervals, 1)],  # Each interval's value is drawn as a step to the next interval
     )
 
     fig.update_yaxes(title="Watts", zeroline=True)
@@ -1259,7 +1279,7 @@ def generate_timeline_checklist(timeline: Timeline, runner_state: RunnerState) -
         tickvals=list(range(num_intervals)),
         ticktext=[],
         showticklabels=False,
-        range=[0, max(num_intervals - 1, 1)],  # CRITICAL: Match top chart range exactly
+        range=[0, max(num_intervals, 1)],  # CRITICAL: Match top chart range exactly
     )
     fig.update_yaxes(title="", showticklabels=False, showgrid=False, range=[0, 1])
     fig.update_layout(

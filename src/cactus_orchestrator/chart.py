@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from cactus_orchestrator.artifact import fetch_run_envoy_db, fetch_run_reporting_data_json
 from cactus_orchestrator.power_limit_chart import generate_power_limit_chart_html
+from cactus_orchestrator.reporting.power_readings import is_import_positive_power_release
 from cactus_orchestrator.settings import CactusOrchestratorSettings
 
 logger = logging.getLogger(__name__)
@@ -44,12 +45,18 @@ def _doe_tags_by_id(resource_annotations: ResourceAnnotations) -> dict[int, str]
 
 
 async def generate_power_limit_chart(
-    settings: CactusOrchestratorSettings, run_id: int, video_start_seconds: float | None = None
+    settings: CactusOrchestratorSettings,
+    run_id: int,
+    video_start_seconds: float | None = None,
+    deploy_release_tag: str | None = None,
 ) -> str | None:
     """Generate a standalone power limit HTML chart from the dumps stored in a RunArtifact.
 
     Spins up an ephemeral local postgres process (via testing.postgresql), restores the
     envoy schema and data dumps, queries the DB, then tears the process down.
+
+    deploy_release_tag is the cactus-deploy release live when the run was created. Measured power is only charted for
+    releases whose runners report it import positive.
 
     Returns the HTML string, or None if the artifact lacks sufficient DER data to build
     the chart (e.g. no SiteDERSettings or SiteControlGroups were ever created).
@@ -136,6 +143,7 @@ async def generate_power_limit_chart(
                     doe_tags=doe_tags,
                     video_start_seconds=video_start_seconds,
                     step_completions=step_completions,
+                    timeline=reporting_data.timeline if is_import_positive_power_release(deploy_release_tag) else None,
                 )
         finally:
             await engine.dispose()

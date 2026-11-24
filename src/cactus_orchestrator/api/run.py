@@ -64,6 +64,7 @@ from cactus_orchestrator.crud import (
     insert_playlist_runs,
     insert_playlist_tail_runs,
     insert_run_for_run_group,
+    select_deploy_release_at,
     select_next_playlist_run,
     select_passed_runs_for_user,
     select_playlist_runs,
@@ -786,9 +787,15 @@ async def get_run_power_limit_chart(
 ) -> Response:
     """Generates and returns a standalone HTML power limit chart for the run's envoy DB artifact."""
     _, _, run = await select_user_run_group_run_or_raise(db.session, user_context, run_id)
+    deploy_release = await select_deploy_release_at(db.session, run.created_at)
     settings = get_current_settings()
     try:
-        html = await generate_power_limit_chart(settings, run.run_id, video_start_seconds=video_start_seconds)
+        html = await generate_power_limit_chart(
+            settings,
+            run.run_id,
+            video_start_seconds=video_start_seconds,
+            deploy_release_tag=deploy_release.release_tag if deploy_release else None,
+        )
     except ValueError as err:
         logger.warning(f"power_limit_chart: generation failed for {run_id=}: {err}")
         raise HTTPException(status_code=HTTPStatus.CONFLICT, detail=f"Chart generation failed: {err}") from err

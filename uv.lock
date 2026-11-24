@@ -404,7 +404,7 @@ requires-dist = [
     { name = "assertical", marker = "extra == 'test'", specifier = ">=0.4.0" },
     { name = "asyncpg" },
     { name = "bandit", marker = "extra == 'dev'" },
-    { name = "cactus-runner", git = "https://github.com/bsgip/cactus-runner.git?rev=v2.11.1" },
+    { name = "cactus-runner", git = "https://github.com/bsgip/cactus-runner.git?rev=v2.12.1" },
     { name = "cactus-schema", specifier = "==1.4.0" },
     { name = "cactus-test-definitions", specifier = "==1.19.3" },
     { name = "coverage", marker = "extra == 'dev'" },
@@ -444,8 +444,8 @@ provides-extras = ["dev", "test"]
 
 [[package]]
 name = "cactus-runner"
-version = "2.11.1"
-source = { git = "https://github.com/bsgip/cactus-runner.git?rev=v2.11.1#3f902586a1b70b9865f205ebfadb108b1e7db5f3" }
+version = "2.12.1"
+source = { git = "https://github.com/bsgip/cactus-runner.git?rev=v2.12.1#32152d0a4c24acc1449265d4a4642092b252d72c" }
 dependencies = [
     { name = "aiohttp" },
     { name = "apluggy" },
@@ -917,8 +917,8 @@ wheels = [
 
 [[package]]
 name = "envoy"
-version = "2.5.3"
-source = { git = "https://github.com/bsgip/envoy.git?rev=v2.5.3#ac723d082491dc7857f90b7cf18fb4bbe5ef37d3" }
+version = "2.6.0"
+source = { git = "https://github.com/bsgip/envoy.git?rev=v2.6.0#d0197b3cd289151a9a88f0b807cc699e869c212d" }
 dependencies = [
     { name = "alembic" },
     { name = "asyncpg" },
@@ -941,15 +941,15 @@ dependencies = [
 
 [[package]]
 name = "envoy-schema"
-version = "2.7.0"
+version = "2.8.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pydantic" },
     { name = "pydantic-xml", extra = ["lxml"] },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/d1/24/d29a0f4cc6c3b127b162fd7fad9566f3e156e3dda8090ea3ee42c56c0c21/envoy_schema-2.7.0.tar.gz", hash = "sha256:32e6274181eff787f14343bd9ecbb1bfa464c1d4e5dde8f631187b4b6a07b6c1", size = 42603, upload-time = "2026-09-18T01:57:19.21Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/bd/c4/f140247cccc813383d91c5fc565f1d31cc9f5a235eb8cb72fce7dc5c13ab/envoy_schema-2.8.0.tar.gz", hash = "sha256:dd491249a4360e98f3c3cb3677065ffc906d56cf3ac7f38fb382b28b608e97e3", size = 43978, upload-time = "2026-11-19T04:35:00.482Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/24/f3/daed589eed5663caa045d8338f3d2c654d1c9e6b521bc0d9a22e11b6f8df/envoy_schema-2.7.0-py3-none-any.whl", hash = "sha256:ce73d5a7de55741b927246093d4cfc3975b306bfd34a9d9ce3e385f813e19c70", size = 54511, upload-time = "2026-09-18T01:57:17.616Z" },
+    { url = "https://files.pythonhosted.org/packages/70/5a/bfd88d9a50fc527931f7457cf55a9fdb804b92e0049e3d1e099c09972229/envoy_schema-2.8.0-py3-none-any.whl", hash = "sha256:8ff06b4e596927c72662add0e1a2d2344aa0f7dbf71d73860774d4da50b384e7", size = 55926, upload-time = "2026-11-19T04:34:59.113Z" },
 ]
 
 [[package]]

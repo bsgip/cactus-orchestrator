@@ -599,6 +599,7 @@ async def test_admin_get_run_power_limit_chart_ok(mock_chart, client, pg_base_co
     assert res.status_code == HTTPStatus.OK
     assert res.headers["content-type"].startswith("text/html")
     assert "<html>chart</html>" in res.text
+    assert mock_chart.call_args.kwargs["deploy_release_tag"] is None  # No deploy releases recorded
 
 
 @pytest.mark.asyncio

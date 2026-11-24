@@ -54,6 +54,7 @@ from cactus_orchestrator.crud import (
     select_compliance_request,
     select_compliance_request_finalisation,
     select_compliance_requests,
+    select_deploy_release_at,
     select_group_runs_aggregated_by_procedure,
     select_group_runs_for_procedure,
     select_run_group_counts_for_user,
@@ -362,10 +363,17 @@ async def admin_get_run_power_limit_chart(
             f"Failed to assume new user context ({run_id=},"
             f" assumed_user_context={user_context}, {original_user_context=})"
         )
+    _, _, run = await select_user_run_group_run_or_raise(db.session, user_context, run_id)
+    deploy_release = await select_deploy_release_at(db.session, run.created_at)
     settings = get_current_settings()
 
     try:
-        html = await generate_power_limit_chart(settings, run_id, video_start_seconds=video_start_seconds)
+        html = await generate_power_limit_chart(
+            settings,
+            run_id,
+            video_start_seconds=video_start_seconds,
+            deploy_release_tag=deploy_release.release_tag if deploy_release else None,
+        )
     except ValueError as err:
         logger.warning(f"power_limit_chart: generation failed for {run_id=}: {err}")
         raise HTTPException(status_code=HTTPStatus.CONFLICT, detail=f"Chart generation failed: {err}") from err
