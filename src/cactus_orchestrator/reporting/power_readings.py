@@ -9,6 +9,20 @@ from cactus_runner.app.timeline import Timeline
 
 from cactus_orchestrator.reporting.trace_colors import POWER_STREAM_COLORS
 
+# First cactus-deploy release shipping runners (v2.12.1 / v1.20.1) that report import positive power readings. Earlier
+# runners report raw (unnormalised) signs, so their measured power isn't charted.
+IMPORT_POSITIVE_POWER_MIN_RELEASE = 198
+
+
+def is_import_positive_power_release(deploy_release_tag: str | None) -> bool:
+    """Whether runs under this deploy release tag (eg "198") report import positive power. Unknown releases (untracked
+    or non numeric branch deploys) are treated as not reporting it."""
+    return (
+        deploy_release_tag is not None
+        and deploy_release_tag.isdigit()
+        and int(deploy_release_tag) >= IMPORT_POSITIVE_POWER_MIN_RELEASE
+    )
+
 
 def interval_step_xy(
     timeline: Timeline, values: list[int | None], to_x: Callable[[datetime], Any]

@@ -47,7 +47,7 @@ from cactus_orchestrator.filestore import (
     run_report_exists,
     run_zip_exists,
 )
-from cactus_orchestrator.model import Run, RunGroup, RunStatus, User
+from cactus_orchestrator.model import DeployRelease, Run, RunGroup, RunStatus, User
 from cactus_orchestrator.pod.models import generate_dynamic_uri_external_host, generate_static_uri_external_host
 from cactus_orchestrator.settings import get_current_settings
 from tests.utils.filestore import load_file_store_for_test
@@ -1816,14 +1816,29 @@ async def test_get_run_power_limit_chart_insufficient_data(mock_chart, client, p
     assert res.status_code == HTTPStatus.NOT_FOUND
 
 
+@pytest.mark.parametrize(
+    "deploy_releases, expected_tag",
+    [
+        ([], None),  # Run predates deploy release tracking
+        # Run 5 was created at 2024-01-01T00:05:00Z - the release live then is passed (not a later one)
+        ([("197", datetime(2024, 1, 1, tzinfo=UTC)), ("198", datetime(2024, 1, 1, 0, 6, tzinfo=UTC))], "197"),
+    ],
+)
 @pytest.mark.asyncio
 @patch("cactus_orchestrator.api.run.generate_power_limit_chart", return_value="<html>chart</html>")
-async def test_get_run_power_limit_chart_ok(mock_chart, client, pg_base_config, valid_jwt_user1):
-    """Returns 200 text/html when chart generation succeeds."""
+async def test_get_run_power_limit_chart_ok(
+    mock_chart, client, pg_base_config, valid_jwt_user1, deploy_releases, expected_tag
+):
+    """Returns 200 text/html when chart generation succeeds, passing the deploy release live when the run was created"""
+    async with generate_async_session(pg_base_config) as session:
+        session.add_all(DeployRelease(release_tag=tag, created_at=at) for tag, at in deploy_releases)
+        await session.commit()
+
     res = await client.get("/run/5/power_limit_chart", headers={"Authorization": f"Bearer {valid_jwt_user1}"})
     assert res.status_code == HTTPStatus.OK
     assert res.headers["content-type"].startswith("text/html")
     assert "<html>chart</html>" in res.text
+    assert mock_chart.call_args.kwargs["deploy_release_tag"] == expected_tag
 
 
 @pytest.mark.parametrize(

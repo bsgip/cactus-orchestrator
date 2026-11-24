@@ -4,7 +4,7 @@ import plotly.graph_objects as go
 import pytest
 from cactus_runner.app.timeline import Timeline, TimelineDataStream
 
-from cactus_orchestrator.reporting.power_readings import add_power_reading_traces
+from cactus_orchestrator.reporting.power_readings import add_power_reading_traces, is_import_positive_power_release
 
 T0 = datetime(2026, 12, 1, 12, 0, 0, tzinfo=UTC)
 
@@ -45,3 +45,11 @@ def test_add_power_reading_traces(export_positive, sign):
     assert all(t.hoverinfo == "skip" for t in fig.data)
     assert all(t.legendrank == 1001 for t in fig.data)
     assert plotted == [sign * v for v in [100, 200, 300, -50, -50]]
+
+
+@pytest.mark.parametrize(
+    "deploy_release_tag, expected",
+    [(None, False), ("podman21", False), ("197", False), ("198", True), ("1000", True)],
+)
+def test_is_import_positive_power_release(deploy_release_tag, expected):
+    assert is_import_positive_power_release(deploy_release_tag) is expected
