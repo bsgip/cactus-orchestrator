@@ -75,7 +75,7 @@ def test_fetch_run_envoy_db_missing_data():
     assert db_dump is None
 
 
-@pytest.mark.parametrize("has_finalisation_data, version", product([True, False], [1, 99]))
+@pytest.mark.parametrize("has_finalisation_data, version", list(product([True, False], [1, 99])))
 def test_fetch_run_reporting_data_json(reporting_data_json: str, has_finalisation_data: bool, version: int):
     # Arrange
     run_id = 123

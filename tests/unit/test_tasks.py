@@ -49,6 +49,9 @@ def podman_mock() -> Generator[MockedPodman, None, None]:
         patch("cactus_orchestrator.tasks.destroy_pod_resources", new_callable=AsyncMock) as destroy_pod_resources,
         patch("cactus_orchestrator.api.run.RunnerClient.last_interaction") as last_interaction,
     ):
+        # Default to "recently active" so a background task firing before the test configures this mock
+        # doesn't receive an AsyncMock (whose methods return never-awaited coroutines)
+        last_interaction.return_value = ClientInteraction(ClientInteractionType.PROXIED_REQUEST, datetime.now())
         yield MockedPodman(
             ensure_images=ensure_images,
             fetch_running_pods=fetch_running_pods,

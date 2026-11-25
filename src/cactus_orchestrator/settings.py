@@ -5,7 +5,7 @@ from pathlib import Path
 
 from pydantic import PostgresDsn
 from pydantic.fields import FieldInfo
-from pydantic_settings import BaseSettings, PydanticBaseSettingsSource
+from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
 
 from cactus_orchestrator.pod.models import PodImages
 
@@ -135,8 +135,7 @@ class JWTAuthSettings(BaseSettings):
     issuer: str
     audience: str
 
-    class Config:
-        env_prefix = "JWTAUTH_"
+    model_config = SettingsConfigDict(env_prefix="JWTAUTH_")
 
 
 _main_settings: CactusOrchestratorSettings | None = None

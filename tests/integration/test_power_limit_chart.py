@@ -411,7 +411,7 @@ async def test_get_does_empty(pg_envoy_base_config):
     assert result == []
 
 
-@pytest.mark.parametrize("seed, optional_is_none", product([101, 202], [True, False]))
+@pytest.mark.parametrize("seed, optional_is_none", list(product([101, 202], [True, False])))
 async def test_get_does_active_doe_fields(pg_envoy_base_config, seed: int, optional_is_none: bool):
     """Active DOE rows are returned with is_archive=False and correct field values."""
 
@@ -436,7 +436,7 @@ async def test_get_does_active_doe_fields(pg_envoy_base_config, seed: int, optio
         session.add(doe)
         await session.flush()
 
-        original_doe = clone_class_instance(doe)
+        original_doe = clone_class_instance(doe, ignored_properties={"site_control_group"})
         await session.commit()
 
     async with generate_async_session(pg_envoy_base_config) as session:
@@ -454,7 +454,7 @@ async def test_get_does_active_doe_fields(pg_envoy_base_config, seed: int, optio
     assert row.archive_time is None
 
 
-@pytest.mark.parametrize("seed, optional_is_none", product([101, 202], [True, False]))
+@pytest.mark.parametrize("seed, optional_is_none", list(product([101, 202], [True, False])))
 async def test_get_does_archive_doe_fields(pg_envoy_base_config, seed: int, optional_is_none: bool):
     """Archive DOE rows are returned with is_archive=True and correct field values."""
 
@@ -628,7 +628,7 @@ async def test_get_defaults_empty(pg_envoy_base_config):
     assert result == []
 
 
-@pytest.mark.parametrize("seed, optional_is_none", product([101, 202], [True, False]))
+@pytest.mark.parametrize("seed, optional_is_none", list(product([101, 202], [True, False])))
 async def test_get_defaults_active_default_fields(pg_envoy_base_config, seed: int, optional_is_none: bool):
     """Active default rows are returned with is_archive=False and correct field values."""
 
@@ -644,8 +644,9 @@ async def test_get_defaults_active_default_fields(pg_envoy_base_config, seed: in
             site_control_group=grp,
         )
         session.add(default)
+        await session.flush()
 
-        original_default = clone_class_instance(default)
+        original_default = clone_class_instance(default, ignored_properties={"site_control_group"})
         await session.commit()
 
     async with generate_async_session(pg_envoy_base_config) as session:
@@ -664,7 +665,7 @@ async def test_get_defaults_active_default_fields(pg_envoy_base_config, seed: in
     assert row.deleted_time is None
 
 
-@pytest.mark.parametrize("seed, optional_is_none", product([101, 202], [True, False]))
+@pytest.mark.parametrize("seed, optional_is_none", list(product([101, 202], [True, False])))
 async def test_get_defaults_archive_default_fields(pg_envoy_base_config, seed: int, optional_is_none: bool):
     """Archive default rows are returned with is_archive=True and archive_time populated."""
 
