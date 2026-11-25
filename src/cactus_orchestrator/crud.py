@@ -835,10 +835,17 @@ async def select_playlist_runs_for_update(
     return result.scalars().all()
 
 
-async def delete_upcoming_playlist_runs(session: AsyncSession, playlist_execution_id: str, active_order: int) -> None:
-    """Delete the not-yet-run tail of a playlist (playlist_order > active_order)."""
-    stmt = delete(Run).where(Run.playlist_execution_id == playlist_execution_id, Run.playlist_order > active_order)
-    await session.execute(stmt)
+async def delete_upcoming_playlist_runs(
+    session: AsyncSession, playlist_execution_id: str, active_order: int
+) -> Sequence[int]:
+    """Delete the not-yet-run tail of a playlist (playlist_order > active_order). Returns the deleted run IDs."""
+    stmt = (
+        delete(Run)
+        .where(Run.playlist_execution_id == playlist_execution_id, Run.playlist_order > active_order)
+        .returning(Run.run_id)
+    )
+    result = await session.execute(stmt)
+    return result.scalars().all()
 
 
 async def insert_playlist_tail_runs(

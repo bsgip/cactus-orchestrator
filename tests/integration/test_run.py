@@ -47,9 +47,10 @@ from cactus_orchestrator.filestore import (
     run_report_exists,
     run_zip_exists,
 )
-from cactus_orchestrator.model import DeployRelease, Run, RunGroup, RunStatus, User
+from cactus_orchestrator.model import AuditChangeType, DeployRelease, Run, RunGroup, RunStatus, User
 from cactus_orchestrator.pod.models import generate_dynamic_uri_external_host, generate_static_uri_external_host
 from cactus_orchestrator.settings import get_current_settings
+from tests.utils.audit import assert_audit_logs
 from tests.utils.filestore import load_file_store_for_test
 from tests.utils.pdf import assert_pdf_file
 from tests.utils.runner import TEST_FINALISATION_DATA, create_runner_finalisation_zip
@@ -210,6 +211,8 @@ async def test_spawn_teststack_and_init_run_dynamic_uris(
         assert new_run.pod_name is not None and str(response_model.run_id) in new_run.pod_name
         assert_nowish(new_run.created_at)
 
+    await assert_audit_logs(pg_base_config, [(1, AuditChangeType.RUN_CREATED, [response_model.run_id])])
+
 
 @pytest.mark.parametrize("is_device_cert, is_started_response", product([True, False], [True, False]))
 @pytest.mark.asyncio
@@ -350,6 +353,8 @@ async def test_spawn_teststack_and_init_failure_from_create(
         after_run_count = (await session.execute(select(func.count()).select_from(Run))).scalar_one()
         assert initial_run_count == after_run_count
 
+    await assert_audit_logs(pg_base_config, [])
+
 
 @pytest.mark.asyncio
 async def test_spawn_teststack_and_init_failure_from_init(
@@ -400,6 +405,8 @@ async def test_spawn_teststack_and_init_failure_from_init(
     async with generate_async_session(pg_base_config) as session:
         after_run_count = (await session.execute(select(func.count()).select_from(Run))).scalar_one()
         assert initial_run_count == after_run_count
+
+    await assert_audit_logs(pg_base_config, [])
 
 
 @pytest.mark.parametrize(
@@ -537,6 +544,9 @@ async def test_start_run(
             if new_run is not None:
                 assert new_run.run_status == RunStatus.initialised
 
+    expected = [(2, AuditChangeType.RUN_STARTED, [run_id])]
+    await assert_audit_logs(pg_base_config, expected if expected_success else [])
+
 
 @pytest.mark.asyncio
 async def test_start_run_precondition_failed(client, mocked_pod: MockedPod, pg_base_config, valid_jwt_user1):
@@ -556,6 +566,8 @@ async def test_start_run_precondition_failed(client, mocked_pod: MockedPod, pg_b
     assert response.status_code == HTTPStatus.PRECONDITION_FAILED
     data = response.json()
     assert data["detail"] == error_message, "The error message we want to communicate is sent via the detail prop"
+
+    await assert_audit_logs(pg_base_config, [])
 
 
 @pytest.mark.parametrize(
@@ -700,6 +712,8 @@ async def test_delete_individual_run(
         mocked_pod.destroy_pod_resources.assert_awaited_once()
     else:
         mocked_pod.destroy_pod_resources.assert_not_awaited()
+
+    await assert_audit_logs(pg_base_config, [(1, AuditChangeType.RUN_DELETED, [run_id])] if expected_delete else [])
 
 
 @pytest.mark.parametrize(
@@ -923,6 +937,8 @@ async def test_finalise_run_and_teardown_teststack_success(
     assert run_report_exists(settings.file_store_path, 1), "Finalize data should be persisted"
     assert_zips_equal(fetch_run_zip(settings.file_store_path, 1), response.content)
 
+    await assert_audit_logs(pg_base_config, [(1, AuditChangeType.RUN_FINALISED, [1])])
+
 
 @pytest.mark.asyncio
 async def test_finalise_run_and_teardown_teststack_idempotent(
@@ -976,6 +992,8 @@ async def test_finalise_run_and_teardown_teststack_idempotent(
     settings = get_current_settings()
     assert run_zip_exists(settings.file_store_path, 1), "Finalize data should be persisted"
     assert run_report_exists(settings.file_store_path, 1), "Finalize data should be persisted"
+
+    await assert_audit_logs(pg_base_config, [(1, AuditChangeType.RUN_FINALISED, [1])])  # Only the first request
 
 
 @pytest.mark.parametrize(
@@ -1299,6 +1317,10 @@ async def test_spawn_teststack_with_playlist(
         assert playlist_runs[0].pod_name
         assert all(r.pod_name == playlist_runs[0].pod_name for r in playlist_runs)  # Same pod
 
+    await assert_audit_logs(
+        pg_base_config, [(1, AuditChangeType.RUN_CREATED, [r.run_id for r in response_model.playlist_runs])]
+    )
+
 
 @pytest.mark.asyncio
 async def test_backwards_compatibility_single_run(
@@ -1423,6 +1445,15 @@ async def test_playlist_finalize_advances_to_next_test(
         assert first_run.run_status == RunStatus.finalised_by_client
         assert second_run.run_status == RunStatus.started  # Advanced to next test
 
+    await assert_audit_logs(
+        pg_base_config,
+        [
+            (1, AuditChangeType.RUN_CREATED, [first_run_id, second_run_id]),
+            (1, AuditChangeType.RUN_FINALISED, [first_run_id]),
+            (1, AuditChangeType.RUN_UPDATED, [second_run_id]),
+        ],
+    )
+
 
 @pytest.mark.asyncio
 async def test_playlist_finalize_teardown_on_last_test(
@@ -1498,6 +1529,10 @@ async def test_delete_playlist_run_deletes_all_siblings(
     async with generate_async_session(pg_base_config) as session:
         remaining_runs = (await session.execute(select(Run).where(Run.run_id.in_(run_ids)))).scalars().all()
         assert len(remaining_runs) == 0
+
+    await assert_audit_logs(
+        pg_base_config, [(1, AuditChangeType.RUN_CREATED, run_ids), (1, AuditChangeType.RUN_DELETED, run_ids)]
+    )
 
 
 @pytest.mark.asyncio
@@ -1582,6 +1617,51 @@ async def test_playlist_finalize_next_test_error_falls_back_to_teardown(
 
     mocked_pod.destroy_pod_resources.assert_awaited_once()
 
+    await assert_audit_logs(
+        pg_base_config,
+        [
+            (1, AuditChangeType.RUN_CREATED, [r.run_id for r in response_model.playlist_runs]),
+            (1, AuditChangeType.RUN_FINALISED, [first_run_id]),
+        ],
+    )
+
+
+@pytest.mark.asyncio
+async def test_finalise_playlist_audit_logs(
+    client, mocked_pod: MockedPod, finalisation_zip_bytes, pg_base_config, client_cert_pem_bytes, valid_jwt_user1
+):
+    """Finalising an entire playlist skips the remaining runs. Repeating the request is a no-op for the DB"""
+    response_model = await create_playlist_for_test(
+        client,
+        mocked_pod,
+        pg_base_config,
+        client_cert_pem_bytes,
+        valid_jwt_user1,
+        [TestProcedureId.ALL_01, TestProcedureId.ALL_02, TestProcedureId.ALL_03],
+    )
+    assert response_model.playlist_runs is not None
+    run_ids = [r.run_id for r in response_model.playlist_runs]
+    mocked_pod.finalize.return_value = finalisation_zip_bytes
+
+    for _ in range(2):
+        response = await client.post(
+            f"/run/{run_ids[0]}/finalise_playlist", headers={"Authorization": f"Bearer {valid_jwt_user1}"}
+        )
+        assert response.status_code == HTTPStatus.OK
+
+    async with generate_async_session(pg_base_config) as session:
+        runs = (await session.execute(select(Run).where(Run.run_id.in_(run_ids)).order_by(Run.run_id))).scalars().all()
+    assert [r.run_status for r in runs] == [RunStatus.finalised_by_client, RunStatus.skipped, RunStatus.skipped]
+
+    await assert_audit_logs(
+        pg_base_config,
+        [
+            (1, AuditChangeType.RUN_CREATED, run_ids),
+            (1, AuditChangeType.RUN_FINALISED, run_ids[:1]),
+            (1, AuditChangeType.RUN_UPDATED, run_ids[1:]),
+        ],
+    )
+
 
 async def _get_playlist_run_response(client, valid_jwt: str, run_id: int) -> RunResponse:
     response = await client.get(f"/run/{run_id}", headers={"Authorization": f"Bearer {valid_jwt}"})
@@ -1634,6 +1714,15 @@ async def test_update_playlist_replaces_upcoming_tail(
     assert run_response.playlist_runs is not None
     assert len(run_response.playlist_runs) == 2
 
+    await assert_audit_logs(
+        pg_base_config,
+        [
+            (1, AuditChangeType.RUN_CREATED, [first_run_id, *old_upcoming_run_ids]),
+            (1, AuditChangeType.RUN_DELETED, list(old_upcoming_run_ids)),
+            (1, AuditChangeType.RUN_CREATED, list(new_run_ids - {first_run_id})),
+        ],
+    )
+
 
 @pytest.mark.asyncio
 async def test_update_playlist_stale_expected_active_run_id_returns_409(
@@ -1661,6 +1750,8 @@ async def test_update_playlist_stale_expected_active_run_id_returns_409(
         headers={"Authorization": f"Bearer {valid_jwt_user1}"},
     )
     assert response.status_code == HTTPStatus.CONFLICT
+
+    await assert_audit_logs(pg_base_config, [(1, AuditChangeType.RUN_CREATED, [first_run_id, second_run_id])])
 
 
 @pytest.mark.asyncio

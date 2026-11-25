@@ -9,6 +9,7 @@ from fastapi_async_sqlalchemy import db
 
 from cactus_orchestrator.api.common import envoy_dcap_uri_for_host, select_user_or_raise, select_user_run_group_or_raise
 from cactus_orchestrator.api.pagination import PageParams, build_page
+from cactus_orchestrator.audit import audit_log
 from cactus_orchestrator.auth import AuthPerm, UserContext, jwt_validator
 from cactus_orchestrator.crud import (
     ACTIVE_RUN_STATUSES,
@@ -19,7 +20,7 @@ from cactus_orchestrator.crud import (
     select_run_groups_for_user,
     select_runs_for_group,
 )
-from cactus_orchestrator.model import RunGroup
+from cactus_orchestrator.model import AuditChangeType, RunGroup
 from cactus_orchestrator.pod.manager import destroy_pod_resources
 from cactus_orchestrator.pod.models import PodResources, generate_static_uri_external_host
 from cactus_orchestrator.settings import get_current_settings
@@ -100,6 +101,13 @@ async def create_group(
 
     # get runs
     run_group = await insert_run_group(db.session, user.user_id, csip_aus_version.value, group_request.is_static_uri)
+    audit_log(
+        db.session,
+        user.user_id,
+        AuditChangeType.RUN_GROUP_CREATED,
+        run_group.run_group_id,
+        f"Created run group for version {run_group.csip_aus_version} is_static_uri={run_group.is_static_uri}",
+    )
     await db.session.commit()
 
     settings = get_current_settings()
@@ -114,12 +122,23 @@ async def update_group(
 ) -> RunGroupResponse:
 
     # get user
-    _, run_group = await select_user_run_group_or_raise(db.session, user_context, run_group_id)
+    user, run_group = await select_user_run_group_or_raise(db.session, user_context, run_group_id)
 
-    if group_request.name:
+    changes: list[str] = []
+    if group_request.name and group_request.name != run_group.name:
+        changes.append(f"name {run_group.name!r} -> {group_request.name!r}")
         run_group.name = group_request.name
-    if group_request.is_static_uri is not None:
+    if group_request.is_static_uri is not None and group_request.is_static_uri != run_group.is_static_uri:
+        changes.append(f"is_static_uri {run_group.is_static_uri} -> {group_request.is_static_uri}")
         run_group.is_static_uri = group_request.is_static_uri
+    if changes:
+        audit_log(
+            db.session,
+            user.user_id,
+            AuditChangeType.RUN_GROUP_UPDATED,
+            run_group_id,
+            f"Updated run group: {', '.join(changes)}",
+        )
 
     # get runs
     await db.session.commit()
@@ -135,7 +154,7 @@ async def delete_group(
 ) -> None:
 
     # get group
-    _, run_group = await select_user_run_group_or_raise(db.session, user_context, run_group_id)
+    user, run_group = await select_user_run_group_or_raise(db.session, user_context, run_group_id)
 
     settings = get_current_settings()
 
@@ -149,5 +168,21 @@ async def delete_group(
     # Delete the runs + groups
     await delete_runs(db.session, all_runs)
     await db.session.delete(run_group)
+
+    if all_runs:
+        audit_log(
+            db.session,
+            user.user_id,
+            AuditChangeType.RUN_DELETED,
+            [run.run_id for run in all_runs],
+            f"Deleted runs as part of deleting run group {run_group_id}",
+        )
+    audit_log(
+        db.session,
+        user.user_id,
+        AuditChangeType.RUN_GROUP_DELETED,
+        run_group_id,
+        f"Deleted run group {run_group.name!r}",
+    )
 
     await db.session.commit()

@@ -1,4 +1,5 @@
 import base64
+import logging
 import os
 import tempfile
 from collections.abc import Generator
@@ -297,6 +298,12 @@ def pg_envoy_base_config(postgresql, preserved_environment) -> Generator[Connect
     """Sets up a temporary envoy DB with migrations and minimal seed data for power_limit_chart tests."""
     os.environ["DATABASE_URL"] = generate_async_conn_str_from_connection(postgresql)
     envoy_upgrade()
+
+    # The envoy migrations call logging.config.fileConfig which disables every pre-existing logger (for ALL later tests)
+    for logger in logging.Logger.manager.loggerDict.values():
+        if isinstance(logger, logging.Logger):
+            logger.disabled = False
+
     execute_test_sql_file(postgresql, "tests/data/envoy_base_config.sql")
     yield postgresql
 

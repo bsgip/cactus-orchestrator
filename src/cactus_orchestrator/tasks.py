@@ -13,6 +13,7 @@ from fastapi_utils.tasks import repeat_every
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from cactus_orchestrator.api.run import finalise_run
+from cactus_orchestrator.audit import audit_log
 from cactus_orchestrator.crud import (
     ACTIVE_RUN_STATUSES,
     select_nonfinalised_runs,
@@ -21,6 +22,8 @@ from cactus_orchestrator.crud import (
     update_run_run_status,
 )
 from cactus_orchestrator.model import (
+    AUDIT_SYSTEM_USER_ID,
+    AuditChangeType,
     Run,
     RunStatus,
 )
@@ -55,22 +58,28 @@ async def finalize_teststack_runs(
     finalised_at: datetime,
     comms_timeout_seconds: int,
 ) -> None:
-    """Finalize all runs for a teststack (handles both single runs and playlists)."""
+    """Finalize all runs for a teststack (handles both single runs and playlists). Audit logs the change as an
+    automated process (the caller is responsible for committing)."""
     if run.playlist_execution_id:
         playlist_runs = await select_playlist_runs(session, run.playlist_execution_id)
-        for sibling in playlist_runs:
-            if sibling.run_status in ACTIVE_RUN_STATUSES:
-                if run_status == RunStatus.terminated:
-                    await update_run_run_status(session, sibling.run_id, run_status, finalised_at)
-                else:
-                    await finalise_run(
-                        settings, sibling, runner_url, session, run_status, finalised_at, comms_timeout_seconds
-                    )
+        runs_to_finalise = [sibling for sibling in playlist_runs if sibling.run_status in ACTIVE_RUN_STATUSES]
     else:  # Single run
+        runs_to_finalise = [run]
+
+    for target in runs_to_finalise:
         if run_status == RunStatus.terminated:
-            await update_run_run_status(session, run.run_id, run_status, finalised_at)
+            await update_run_run_status(session, target.run_id, run_status, finalised_at)
         else:
-            await finalise_run(settings, run, runner_url, session, run_status, finalised_at, comms_timeout_seconds)
+            await finalise_run(settings, target, runner_url, session, run_status, finalised_at, comms_timeout_seconds)
+
+    if runs_to_finalise:
+        audit_log(
+            session,
+            AUDIT_SYSTEM_USER_ID,
+            AuditChangeType.RUN_FINALISED,
+            [target.run_id for target in runs_to_finalise],
+            f"Background task set status {run_status.name} for runs at pod {run.pod_name}",
+        )
 
 
 async def destroy_idle_pods(

@@ -8,8 +8,9 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi_async_sqlalchemy import db
 
 from cactus_orchestrator.api.common import select_user_or_create
+from cactus_orchestrator.audit import audit_log
 from cactus_orchestrator.auth import AuthPerm, UserContext, jwt_validator
-from cactus_orchestrator.model import User
+from cactus_orchestrator.model import AuditChangeType, User
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +50,8 @@ async def update_config(
     user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.user_all}))],
 ) -> UserConfigurationResponse:
     user = await select_user_or_create(db.session, user_context)
+    old_subscription_domain = user.subscription_domain
+    old_pen = user.pen
 
     if body.subscription_domain is not None:
         if len(body.subscription_domain) == 0:
@@ -63,6 +66,20 @@ async def update_config(
 
     if body.pen is not None:
         user.pen = body.pen
+
+    changes: list[str] = []
+    if user.subscription_domain != old_subscription_domain:
+        changes.append(f"subscription_domain {old_subscription_domain!r} -> {user.subscription_domain!r}")
+    if user.pen != old_pen:
+        changes.append(f"pen {old_pen} -> {user.pen}")
+    if changes:
+        audit_log(
+            db.session,
+            user.user_id,
+            AuditChangeType.USER_UPDATED,
+            user.user_id,
+            f"Updated config: {', '.join(changes)}",
+        )
 
     await db.session.commit()
 

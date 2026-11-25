@@ -1,4 +1,5 @@
 import io
+import os
 import zipfile
 from collections.abc import Generator
 from dataclasses import dataclass
@@ -8,6 +9,7 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 from assertical.asserts.type import assert_list_type
 from assertical.fake.generator import generate_class_instance
+from assertical.fixtures.postgres import generate_async_session
 from cactus_schema.orchestrator import (
     HEADER_GROUP_ID,
     HEADER_GROUP_NAME,
@@ -29,7 +31,9 @@ from httpx import AsyncClient
 
 from cactus_orchestrator.filestore import REPORT_FILE_NAME, save_compliance_finalisation_report
 from cactus_orchestrator.main import generate_app
+from cactus_orchestrator.model import AuditChangeType, User
 from cactus_orchestrator.settings import get_current_settings
+from tests.utils.audit import assert_audit_logs
 from tests.utils.filestore import load_file_store_for_test
 from tests.utils.pdf import assert_pdf_file
 from tests.utils.runner import create_runner_finalisation_zip
@@ -548,6 +552,14 @@ async def test_regenerate_run_report_and_get_artifact_data(
         existing_report_bytes=original_pdf_data if has_existing_report else None,
     )
 
+    # The admin needs a registered user record (for audit logging)
+    async with generate_async_session(pg_base_config) as session:
+        admin = User(subject_id="admin1", issuer_id=os.environ["JWTAUTH_ISSUER"])
+        session.add(admin)
+        await session.flush()
+        admin_user_id = admin.user_id
+        await session.commit()
+
     # Act
     res = await client.get(f"admin/run/{run_id}/regenerate", headers={"Authorization": f"Bearer {valid_jwt_admin1}"})
 
@@ -568,6 +580,17 @@ async def test_regenerate_run_report_and_get_artifact_data(
         assert res.headers[HEADER_RUN_ID] == str(run_id)
         assert res.headers[HEADER_GROUP_ID] == expected_group_id
         assert res.headers[HEADER_GROUP_NAME] == expected_group_name
+
+    expected_audit_logs = [(admin_user_id, AuditChangeType.RUN_REPORT_REGENERATED, [run_id])]
+    await assert_audit_logs(pg_base_config, expected_audit_logs if expected_status == HTTPStatus.OK else [])
+
+
+@pytest.mark.asyncio
+async def test_regenerate_run_report_unregistered_admin(client, pg_base_config, valid_jwt_admin1):
+    """Regenerations need to be attributable to a user - base_config has no record for this admin"""
+    res = await client.get("admin/run/1/regenerate", headers={"Authorization": f"Bearer {valid_jwt_admin1}"})
+    assert res.status_code == HTTPStatus.FORBIDDEN
+    await assert_audit_logs(pg_base_config, [])
 
 
 @pytest.mark.asyncio
@@ -674,6 +697,8 @@ async def test_update_compliance_request(client, pg_compliance_config, valid_jwt
     # Assert
     assert res.status_code == HTTPStatus.OK
 
+    await assert_audit_logs(pg_compliance_config, [(4, AuditChangeType.COMPLIANCE_REQUEST_UPDATED, [1])])
+
 
 @pytest.mark.parametrize(
     "compliance_request_id, expected_status_code",
@@ -691,6 +716,36 @@ async def test_delete_compliance_request(
 
     # Assert
     assert res.status_code == expected_status_code
+
+    expected = [(4, AuditChangeType.COMPLIANCE_REQUEST_DELETED, [compliance_request_id])]
+    await assert_audit_logs(pg_compliance_config, expected if expected_status_code == HTTPStatus.OK else [])
+
+
+@pytest.mark.asyncio
+async def test_delete_compliance_request_unregistered_admin(client, pg_base_config, valid_jwt_admin1):
+    """Deletes need to be attributable to a user - base_config has no record for this admin"""
+    res = await client.delete(
+        "/admin/compliance_request/1",
+        headers={"Authorization": f"Bearer {valid_jwt_admin1}"},
+    )
+
+    assert res.status_code == HTTPStatus.FORBIDDEN
+
+
+@pytest.mark.asyncio
+async def test_finalise_compliance_request_failure(client, pg_compliance_config, valid_jwt_admin1, caplog):
+    """Failures should be logged but not audited"""
+    with patch(
+        "cactus_orchestrator.api.admin.save_compliance_finalisation_report", side_effect=Exception("mock failure")
+    ):
+        res = await client.post(
+            "/admin/compliance_request/1/artifact",
+            headers={"Authorization": f"Bearer {valid_jwt_admin1}"},
+        )
+
+    assert res.status_code == HTTPStatus.INTERNAL_SERVER_ERROR
+    assert "mock failure" in caplog.text
+    await assert_audit_logs(pg_compliance_config, [])
 
 
 @pytest.mark.parametrize(
@@ -753,3 +808,7 @@ async def test_finalise_compliance_request(client, pg_compliance_config, valid_j
     assert_pdf_file(res.content)
     assert res.headers["content-type"] == "application/pdf"
     assert res.headers["content-disposition"] and "attachment; filename=" in res.headers["content-disposition"]
+
+    await assert_audit_logs(
+        pg_compliance_config, [(4, AuditChangeType.COMPLIANCE_REQUEST_FINALISED, [compliance_request_id])]
+    )

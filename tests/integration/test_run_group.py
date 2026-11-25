@@ -11,8 +11,9 @@ from cactus_test_definitions import CSIPAusVersion
 from sqlalchemy import func, select
 
 from cactus_orchestrator.filestore import run_report_exists, run_zip_exists
-from cactus_orchestrator.model import Run, RunGroup
+from cactus_orchestrator.model import AuditChangeType, Run, RunGroup
 from cactus_orchestrator.settings import get_current_settings
+from tests.utils.audit import assert_audit_logs
 from tests.utils.filestore import load_file_store_for_test
 from tests.utils.runner import create_runner_finalisation_zip
 
@@ -71,6 +72,9 @@ async def test_update_group(
 ):
     """Can groups be updated for a specific user"""
 
+    async with generate_async_session(pg_base_config) as session:
+        original = (await session.execute(select(RunGroup).where(RunGroup.run_group_id == run_group_id))).scalar_one()
+
     # Act
     body = RunGroupUpdateRequest(name=name, is_static_uri=is_static_uri)
     response = await client.put(
@@ -96,6 +100,12 @@ async def test_update_group(
             assert response_data.static_uri is not None and os.environ["CACTUS_FQDN"] in response_data.static_uri
         else:
             assert response_data.static_uri is None
+
+    # Only actual changes get audited
+    is_changed = (original.name, original.is_static_uri) != (expected_name, expected_is_static_uri)
+    await assert_audit_logs(
+        pg_base_config, [(1, AuditChangeType.RUN_GROUP_UPDATED, [run_group_id])] if is_changed else []
+    )
 
 
 @pytest.mark.parametrize(
@@ -139,10 +149,14 @@ async def test_create_group(client, pg_base_config, valid_jwt_user1, version, is
             assert run_group.csip_aus_version == result.csip_aus_version
             assert run_group.created_at == result.created_at
             assert run_group.is_static_uri == result.is_static_uri
+
+        await assert_audit_logs(pg_base_config, [(1, AuditChangeType.RUN_GROUP_CREATED, [result.run_group_id])])
     else:
         async with generate_async_session(pg_base_config) as session:
             run_group_count = (await session.execute(select(func.count()).select_from(RunGroup))).scalar_one()
             assert run_group_count == 3, "Nothing should be created"
+
+        await assert_audit_logs(pg_base_config, [])
 
 
 @pytest.mark.parametrize(
@@ -203,12 +217,21 @@ async def test_delete_group(
         # Ensure any active runs are properly deallocated
         assert mock_destroy_pod_resources.await_count == len(expected_teardown_run_ids)
 
+        await assert_audit_logs(
+            pg_base_config,
+            [
+                (1, AuditChangeType.RUN_DELETED, expected_run_ids),
+                (1, AuditChangeType.RUN_GROUP_DELETED, [run_group_id]),
+            ],
+        )
+
     else:
         assert after_run_count == before_run_count
         assert after_run_group_count == after_run_group_count
         assert remaining_run_ids == expected_run_ids
 
         mock_destroy_pod_resources.assert_not_awaited()
+        await assert_audit_logs(pg_base_config, [])
 
     # No changes to the file store
     for run_id in run_ids_with_storage:

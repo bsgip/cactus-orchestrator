@@ -40,6 +40,7 @@ from cactus_orchestrator.api.pagination import PageParams, build_page
 from cactus_orchestrator.api.run import generate_run_zip_response_for_user
 from cactus_orchestrator.api.run_group import map_group_to_group_response
 from cactus_orchestrator.artifact import fetch_run_artifact_zip
+from cactus_orchestrator.audit import audit_log
 from cactus_orchestrator.auth import AuthPerm, UserContext, jwt_validator
 from cactus_orchestrator.chart import generate_power_limit_chart
 from cactus_orchestrator.crud import (
@@ -67,7 +68,7 @@ from cactus_orchestrator.crud import (
     update_compliance_request,
 )
 from cactus_orchestrator.filestore import fetch_compliance_finalisation_report, save_compliance_finalisation_report
-from cactus_orchestrator.model import ComplianceRequest, User
+from cactus_orchestrator.model import AuditChangeType, ComplianceRequest, User
 from cactus_orchestrator.pod.models import PodResources, PodRoutes
 from cactus_orchestrator.reporting.compliance import determine_compliance
 from cactus_orchestrator.reporting.compliance_reporting import pdf_report_as_bytes
@@ -338,6 +339,7 @@ async def admin_regenerate_report_and_get_run_artifact(
             f"Failed to assume new user context ({run_id=},"
             f" assumed_user_context={user_context}, {original_user_context=})"
         )
+    admin = await select_user_or_raise(db.session, original_user_context)
     user, run_group, run = await select_user_run_group_run_or_raise(db.session, user_context, run_id)
     settings = get_current_settings()
 
@@ -345,6 +347,17 @@ async def admin_regenerate_report_and_get_run_artifact(
     zip_bytes = await fetch_run_artifact_zip(db.session, settings, run, force_regenerate=True)
     if zip_bytes is None:
         raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Run artifact data does not exist.")
+
+    # The report lives in the file store (not the DB) - but it's still a change worth auditing
+    audit_log(
+        db.session,
+        admin.user_id,
+        AuditChangeType.RUN_REPORT_REGENERATED,
+        run.run_id,
+        f"Admin forced regeneration of the report for run of {run.testprocedure_id!r} owned by user {user.user_id}",
+    )
+    await db.session.commit()
+
     return generate_run_zip_response_for_user(user, run, run_group, zip_bytes)
 
 
@@ -677,6 +690,14 @@ async def admin_update_compliance_request(
 
     await update_compliance_request(session=db.session, updated_by=updated_by, compliance_request=request, **params)
 
+    audit_log(
+        db.session,
+        admin.user_id,
+        AuditChangeType.COMPLIANCE_REQUEST_UPDATED,
+        compliance_request_id,
+        f"Updated compliance request fields: {', '.join(sorted(params))}",
+    )
+
     await db.session.commit()
     return await map_to_compliance_request_response(request)
 
@@ -686,6 +707,8 @@ async def admin_delete_compliance_request_endpoint(
     compliance_request_id: int,
     user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.admin_all}))],
 ) -> Response:
+    # Get admin user
+    admin = await select_user_or_raise(db.session, user_context)
 
     # get compliance request
     try:
@@ -700,7 +723,7 @@ async def admin_delete_compliance_request_endpoint(
     try:
         request_deletable = await safe_delete_compliance_request(session=db.session, compliance_request=request)
     except Exception as exc:
-        logger.debug(exc)
+        logger.error(f"Failed to delete {compliance_request_id=} for admin user {admin.user_id}", exc_info=exc)
         raise HTTPException(
             status_code=HTTPStatus.INTERNAL_SERVER_ERROR, detail="Failed to delete compliance request"
         ) from exc
@@ -710,6 +733,13 @@ async def admin_delete_compliance_request_endpoint(
             status_code=HTTPStatus.BAD_REQUEST, detail="Compliance Request has been finalised. Unable to delete."
         )
 
+    audit_log(
+        db.session,
+        admin.user_id,
+        AuditChangeType.COMPLIANCE_REQUEST_DELETED,
+        compliance_request_id,
+        "Deleted compliance request",
+    )
     await db.session.commit()
     return Response(status_code=HTTPStatus.OK)
 
@@ -804,11 +834,20 @@ async def admin_finalise_compliance_request(
             compliance_report_file_data,
         )
     except Exception as err:
+        logger.error(f"Failed to finalise {compliance_request_id=} for admin user {requester_id}", exc_info=err)
         raise HTTPException(
             status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
             detail=(f"Unable to update ComplianceRecord with compliance file data for {compliance_request_id=}"),
         ) from err
 
+    audit_log(
+        db.session,
+        requester_id,
+        AuditChangeType.COMPLIANCE_REQUEST_FINALISED,
+        compliance_request_id,
+        "Finalised compliance request with finalisation record"
+        f" {finalisation_record.compliance_request_finalisation_id}",
+    )
     await db.session.commit()
 
     return Response(

@@ -12,7 +12,9 @@ from cactus_schema.orchestrator import (
 )
 
 from cactus_orchestrator.filestore import save_compliance_finalisation_report
+from cactus_orchestrator.model import AuditChangeType
 from cactus_orchestrator.settings import get_current_settings
+from tests.utils.audit import assert_audit_logs
 
 
 @pytest.mark.parametrize(
@@ -123,6 +125,8 @@ async def test_create_compliance_request(client, pg_compliance_config, valid_jwt
     for field in dataclasses.fields(request_params):
         assert getattr(request_params, field.name) == getattr(request, field.name)
 
+    await assert_audit_logs(pg_compliance_config, [(1, AuditChangeType.COMPLIANCE_REQUEST_CREATED, [5])])
+
 
 @pytest.mark.asyncio
 async def test_update_compliance_request(client, pg_compliance_config, valid_jwt_user1):
@@ -144,6 +148,8 @@ async def test_update_compliance_request(client, pg_compliance_config, valid_jwt
 
     # Assert
     assert res.status_code == HTTPStatus.OK
+
+    await assert_audit_logs(pg_compliance_config, [(1, AuditChangeType.COMPLIANCE_REQUEST_UPDATED, [1])])
 
 
 @pytest.mark.parametrize(
@@ -167,6 +173,9 @@ async def test_delete_compliance_request(
     # Assert
     assert res.status_code == expected_status_code
 
+    expected = [(1, AuditChangeType.COMPLIANCE_REQUEST_DELETED, [compliance_request_id])]
+    await assert_audit_logs(pg_compliance_config, expected if expected_status_code == HTTPStatus.OK else [])
+
 
 @pytest.mark.asyncio
 async def test_delete_compliance_request_for_wrong_user(client, pg_compliance_config, valid_jwt_user2):
@@ -181,3 +190,5 @@ async def test_delete_compliance_request_for_wrong_user(client, pg_compliance_co
 
     # Assert
     assert res.status_code == HTTPStatus.NOT_FOUND
+
+    await assert_audit_logs(pg_compliance_config, [])

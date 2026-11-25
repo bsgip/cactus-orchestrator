@@ -17,6 +17,9 @@ from sqlalchemy import select
 
 from cactus_orchestrator.crud import insert_run_for_run_group, select_active_runs_for_user
 from cactus_orchestrator.model import (
+    AUDIT_SYSTEM_USER_ID,
+    AuditChangeType,
+    AuditLog,
     Run,
     RunGroup,
     RunStatus,
@@ -292,6 +295,17 @@ async def test_destroy_idle_pods_and_orphans(podman_mock: MockedPodman, pg_base_
         assert len(await select_active_runs_for_user(session, 1)) == 3, (
             "Playlist 1/2 run entries shouldnt have been touched by idle checks"
         )
+
+        # Each teststack shutdown is audited once, as an automated process (task iteration order isn't deterministic)
+        audit_logs = (await session.execute(select(AuditLog))).scalars().all()
+        expected_audit_logs = {(AuditChangeType.RUN_FINALISED, (run_id,)) for run_id in expected_finalised_run_ids} | {
+            (AuditChangeType.RUN_FINALISED, (dead_pod_run_id,)),
+            (AuditChangeType.RUN_FINALISED, (crashed_pod_run_id,)),
+            (AuditChangeType.RUN_FINALISED, tuple(sorted([p3_run_id, p3_r3_run_id]))),
+        }
+        assert len(audit_logs) == len(expected_audit_logs)
+        assert {(log.change_type, tuple(sorted(log.record_ids))) for log in audit_logs} == expected_audit_logs
+        assert all(log.user_id == AUDIT_SYSTEM_USER_ID for log in audit_logs)
 
     # Check we tore down each teststack
     assert podman_mock.last_interaction.call_count > 0, "We should be checking IDLE status on runs"
