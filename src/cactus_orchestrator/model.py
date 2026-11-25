@@ -13,7 +13,7 @@ from sqlalchemy import (
     desc,
     func,
 )
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -278,3 +278,56 @@ class DeployRelease(Base):
     deploy_release_id: Mapped[int] = mapped_column(name="id", primary_key=True, autoincrement=True)
     release_tag: Mapped[str] = mapped_column(String, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+AUDIT_SYSTEM_USER_ID = -1  # AuditLog.user_id for changes made by automated processes (eg background tasks)
+
+
+class AuditChangeType(IntEnum):
+    """Roughly categorises an AuditLog entry. Implicitly defines what AuditLog.record_ids is referencing.
+
+    Values are persisted - don't change/reuse existing values."""
+
+    # record_ids is User.user_id
+    USER_CREATED = 100
+    USER_UPDATED = 101
+
+    # record_ids is RunGroup.run_group_id
+    RUN_GROUP_CREATED = 200
+    RUN_GROUP_UPDATED = 201
+    RUN_GROUP_DELETED = 202
+    RUN_GROUP_CERTIFICATE_GENERATED = 203
+
+    # record_ids is Run.run_id
+    RUN_CREATED = 300
+    RUN_UPDATED = 301
+    RUN_DELETED = 302
+    RUN_STARTED = 303
+    RUN_FINALISED = 304
+    RUN_REPORT_REGENERATED = 305  # The PDF report (stored in the file store) was regenerated
+
+    # record_ids is ComplianceRequest.compliance_request_id
+    COMPLIANCE_REQUEST_CREATED = 400
+    COMPLIANCE_REQUEST_UPDATED = 401
+    COMPLIANCE_REQUEST_DELETED = 402
+    COMPLIANCE_REQUEST_FINALISED = 403
+
+
+class AuditLog(Base):
+    """Append only record of the (committed) write operations made to the DB. Use cactus_orchestrator.audit.audit_log
+    to create these.
+
+    Deliberately has NO foreign keys - entries must outlive the records that they reference."""
+
+    __tablename__ = "audit_log"
+
+    audit_log_id: Mapped[int] = mapped_column(name="id", primary_key=True, autoincrement=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+    user_id: Mapped[int] = mapped_column(
+        Integer, nullable=False
+    )  # The user that triggered the change (NOT necessarily the owner of the records) or AUDIT_SYSTEM_USER_ID
+    change_type: Mapped[AuditChangeType] = mapped_column(Integer, nullable=False)
+    record_ids: Mapped[list[int]] = mapped_column(
+        ARRAY(Integer), nullable=False
+    )  # What records were affected - change_type identifies the type of record
+    description: Mapped[str] = mapped_column(String, nullable=False)

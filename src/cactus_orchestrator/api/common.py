@@ -9,6 +9,7 @@ from envoy_schema.server.schema.uri import DeviceCapabilityUri
 from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from cactus_orchestrator.audit import audit_log
 from cactus_orchestrator.auth import UserContext
 from cactus_orchestrator.crud import (
     insert_user,
@@ -18,7 +19,7 @@ from cactus_orchestrator.crud import (
     select_user,
 )
 from cactus_orchestrator.filestore import run_zip_exists
-from cactus_orchestrator.model import ComplianceRequest, Run, RunGroup, RunStatus, User
+from cactus_orchestrator.model import AuditChangeType, ComplianceRequest, Run, RunGroup, RunStatus, User
 from cactus_orchestrator.pod.models import PodRoutes
 from cactus_orchestrator.procedures import get_filtered_test_procedures
 from cactus_orchestrator.settings import CactusOrchestratorSettings
@@ -109,13 +110,27 @@ async def map_to_compliance_request_response(request: ComplianceRequest) -> Comp
 
 
 async def select_user_or_create(session: AsyncSession, user_context: UserContext) -> User:
-    """Fetches the user associated with user_context - creating one as required."""
+    """Fetches the user associated with user_context - creating (and audit logging) one as required."""
     user = await select_user(session, user_context)
     if user is not None:
         return user
 
     user = await insert_user(session, user_context)
     logger.info(f"Created new user {user.user_id} for user context {user_context}")
+    audit_log(
+        session,
+        user.user_id,
+        AuditChangeType.USER_CREATED,
+        user.user_id,
+        f"Created user for subject {user.subject_id!r} issuer {user.issuer_id!r}",
+    )
+    audit_log(
+        session,
+        user.user_id,
+        AuditChangeType.RUN_GROUP_CREATED,
+        [rg.run_group_id for rg in user.run_groups],
+        "Created default run group for new user",
+    )
     return user
 
 

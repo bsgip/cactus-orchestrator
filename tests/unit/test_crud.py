@@ -1138,12 +1138,14 @@ async def test_delete_upcoming_playlist_runs(pg_base_config):
         )
         # Mark the active run (order 0) as started - it's the currently-running test
         active_run_id = runs[0].run_id
+        upcoming_run_ids = {r.run_id for r in runs[1:]}
         active_run = (await session.execute(select(Run).where(Run.run_id == active_run_id))).scalar_one()
         active_run.run_status = RunStatus.started
         await session.commit()
 
     async with generate_async_session(pg_base_config) as session:
-        await delete_upcoming_playlist_runs(session, playlist_execution_id, active_order=0)
+        deleted_run_ids = await delete_upcoming_playlist_runs(session, playlist_execution_id, active_order=0)
+        assert set(deleted_run_ids) == upcoming_run_ids
         await session.commit()
 
     async with generate_async_session(pg_base_config) as session:

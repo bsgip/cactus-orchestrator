@@ -54,6 +54,7 @@ from cactus_orchestrator.api.common import (
 )
 from cactus_orchestrator.api.pagination import PageParams, build_page
 from cactus_orchestrator.artifact import fetch_run_artifact_zip, fetch_run_reporting_data_json
+from cactus_orchestrator.audit import audit_log
 from cactus_orchestrator.auth import AuthPerm, UserContext, jwt_validator
 from cactus_orchestrator.chart import generate_power_limit_chart
 from cactus_orchestrator.crud import (
@@ -78,7 +79,7 @@ from cactus_orchestrator.crud import (
 from cactus_orchestrator.filestore import (
     save_run_finalisation,
 )
-from cactus_orchestrator.model import Run, RunGroup, RunStatus, User
+from cactus_orchestrator.model import AuditChangeType, Run, RunGroup, RunStatus, User
 from cactus_orchestrator.pod.manager import create_pod_run, destroy_pod_resources, ensure_images
 from cactus_orchestrator.pod.models import PodPKI, PodResources, PodRoutes
 from cactus_orchestrator.reporting.generate import parse_reporting_data
@@ -347,6 +348,14 @@ async def spawn_teststack_and_init_run(  # noqa: C901
     await update_run_run_status(db.session, first_run.run_id, new_run_status)
     for run in runs:
         run.pod_name = pod_name
+    audit_log(
+        db.session,
+        user.user_id,
+        AuditChangeType.RUN_CREATED,
+        [run.run_id for run in runs],
+        f"Created {f'playlist {playlist_execution_id}' if is_playlist else 'run'} in run group {run_group_id}"
+        f" for {[str(p) for p in procedure_ids]}. Run {first_run.run_id} is {new_run_status.name}",
+    )
     await db.session.commit()
 
     # set location header
@@ -441,6 +450,9 @@ async def start_run(
 
     # update status
     await update_run_run_status(session=db.session, run_id=run.run_id, run_status=RunStatus.started)
+    audit_log(
+        db.session, user.user_id, AuditChangeType.RUN_STARTED, run.run_id, f"Started run of {run.testprocedure_id!r}"
+    )
     await db.session.commit()
 
     return StartRunResponse(test_url=envoy_dcap_uri(pod_routes))
@@ -547,11 +559,21 @@ async def delete_individual_run(
         await destroy_pod_resources(settings.podman_socket, pod_resources)
         # Delete all runs in the playlist
         await delete_runs(db.session, list(playlist_runs))
+        audit_log(
+            db.session,
+            user.user_id,
+            AuditChangeType.RUN_DELETED,
+            run_ids,
+            f"Deleted all runs in playlist {run.playlist_execution_id}",
+        )
         logger.info(f"Deleted playlist runs {run_ids} for user {user.subject_id}")
     else:
         if run.run_status in ACTIVE_RUN_STATUSES:
             await destroy_pod_resources(settings.podman_socket, pod_resources)
         await delete_runs(db.session, [run])
+        audit_log(
+            db.session, user.user_id, AuditChangeType.RUN_DELETED, run_id, f"Deleted run of {run.testprocedure_id!r}"
+        )
         logger.info(f"Deleted run {run_id} for user {user.subject_id}")
 
     await db.session.commit()
@@ -599,6 +621,13 @@ async def finalise_run_and_teardown_teststack(  # noqa: C901
             datetime.now(UTC),
             settings.comms_timeout_seconds,
         )
+        audit_log(
+            db.session,
+            user.user_id,
+            AuditChangeType.RUN_FINALISED,
+            run.run_id,
+            f"Finalised run of {run.testprocedure_id!r} all_criteria_met={run.all_criteria_met}",
+        )
         await db.session.commit()
 
         # Handle playlist advancement or teardown
@@ -617,6 +646,14 @@ async def finalise_run_and_teardown_teststack(  # noqa: C901
                         next_test_result = await RunnerClient.next_test(session, next_run_request)
                         new_status = RunStatus.started if next_test_result.is_started else RunStatus.initialised
                         await update_run_run_status(db.session, next_run.run_id, new_status)
+                        audit_log(
+                            db.session,
+                            user.user_id,
+                            AuditChangeType.RUN_UPDATED,
+                            next_run.run_id,
+                            f"Playlist {run.playlist_execution_id} advanced from run {run.run_id} to run"
+                            f" {next_run.run_id} ({new_status.name})",
+                        )
                         await db.session.commit()
                         should_teardown = False
                         logger.info(
@@ -678,12 +715,27 @@ async def finalise_playlist(
             datetime.now(UTC),
             settings.comms_timeout_seconds,
         )
+        audit_log(
+            db.session,
+            user.user_id,
+            AuditChangeType.RUN_FINALISED,
+            run.run_id,
+            f"Finalised run of {run.testprocedure_id!r} all_criteria_met={run.all_criteria_met}",
+        )
 
     # Mark all remaining initialised runs as skipped (lock rows so a playlist update can't interleave)
     playlist_runs = await select_playlist_runs_for_update(db.session, run.playlist_execution_id)
-    for playlist_run in playlist_runs:
-        if playlist_run.run_status == RunStatus.initialised:
-            await update_run_run_status(db.session, playlist_run.run_id, RunStatus.skipped)
+    skipped_run_ids = [r.run_id for r in playlist_runs if r.run_status == RunStatus.initialised]
+    for skipped_run_id in skipped_run_ids:
+        await update_run_run_status(db.session, skipped_run_id, RunStatus.skipped)
+    if skipped_run_ids:
+        audit_log(
+            db.session,
+            user.user_id,
+            AuditChangeType.RUN_UPDATED,
+            skipped_run_ids,
+            f"Skipped remaining runs in playlist {run.playlist_execution_id}",
+        )
     await db.session.commit()
 
     # Teardown the teststack
@@ -712,7 +764,7 @@ async def update_playlist(
     NOTE: pre-creating Run rows for upcoming tests (and editing via delete-and-recreate) is slightly
     janky - a future rework would likely replace this with a first-class Playlist table.
     """
-    _, _, run = await select_user_run_group_run_or_raise(db.session, user_context, run_id)
+    user, _, run = await select_user_run_group_run_or_raise(db.session, user_context, run_id)
 
     if not run.playlist_execution_id:
         raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail="Run is not part of a playlist")
@@ -738,8 +790,10 @@ async def update_playlist(
             detail="The playlist has advanced since it was last fetched. Refresh and try again.",
         )
 
-    await delete_upcoming_playlist_runs(db.session, run.playlist_execution_id, current_active_run.playlist_order)
-    await insert_playlist_tail_runs(
+    deleted_run_ids = await delete_upcoming_playlist_runs(
+        db.session, run.playlist_execution_id, current_active_run.playlist_order
+    )
+    inserted_runs = await insert_playlist_tail_runs(
         db.session,
         current_active_run.run_group_id,
         run.playlist_execution_id,
@@ -748,6 +802,17 @@ async def update_playlist(
         current_active_run.pod_name,
         current_active_run.playlist_order + 1,
     )
+    audit_description = f"Replaced upcoming tests in playlist {run.playlist_execution_id}"
+    if deleted_run_ids:
+        audit_log(db.session, user.user_id, AuditChangeType.RUN_DELETED, deleted_run_ids, audit_description)
+    if inserted_runs:
+        audit_log(
+            db.session,
+            user.user_id,
+            AuditChangeType.RUN_CREATED,
+            [r.run_id for r in inserted_runs],
+            audit_description,
+        )
     await db.session.commit()
 
     updated_runs = await select_playlist_runs(db.session, run.playlist_execution_id)

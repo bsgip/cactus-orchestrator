@@ -17,6 +17,7 @@ from sqlalchemy.exc import NoResultFound
 
 from cactus_orchestrator.api.common import map_to_compliance_request_response, select_user_or_raise
 from cactus_orchestrator.api.pagination import PageParams, build_page
+from cactus_orchestrator.audit import audit_log
 from cactus_orchestrator.auth import AuthPerm, UserContext, jwt_validator
 from cactus_orchestrator.crud import (
     count_user_compliance_requests,
@@ -28,6 +29,7 @@ from cactus_orchestrator.crud import (
     update_compliance_request,
 )
 from cactus_orchestrator.filestore import fetch_compliance_finalisation_report
+from cactus_orchestrator.model import AuditChangeType
 from cactus_orchestrator.settings import get_current_settings
 
 logger = logging.getLogger(__name__)
@@ -149,6 +151,14 @@ async def create_compliance_request(
         onsite_hardware_details=body.onsite_hardware_details,
     )
 
+    audit_log(
+        db.session,
+        user.user_id,
+        AuditChangeType.COMPLIANCE_REQUEST_CREATED,
+        request.compliance_request_id,
+        f"Created compliance request for run(s) {sorted(body.runs)}",
+    )
+
     await db.session.commit()
 
     return await map_to_compliance_request_response(request)
@@ -183,6 +193,14 @@ async def update_compliance_request_endpoint(
 
     await update_compliance_request(session=db.session, updated_by=user.user_id, compliance_request=request, **params)
 
+    audit_log(
+        db.session,
+        user.user_id,
+        AuditChangeType.COMPLIANCE_REQUEST_UPDATED,
+        compliance_request_id,
+        f"Updated compliance request fields: {', '.join(sorted(params))}",
+    )
+
     await db.session.commit()
     return await map_to_compliance_request_response(request)
 
@@ -209,7 +227,7 @@ async def delete_compliance_request_endpoint(
     try:
         request_deletable = await safe_delete_compliance_request(session=db.session, compliance_request=request)
     except Exception as exc:
-        logger.debug(exc)
+        logger.error(f"Failed to delete {compliance_request_id=} for user {user.user_id}", exc_info=exc)
         raise HTTPException(
             status_code=HTTPStatus.INTERNAL_SERVER_ERROR, detail="Failed to delete compliance request"
         ) from exc
@@ -219,5 +237,12 @@ async def delete_compliance_request_endpoint(
             status_code=HTTPStatus.BAD_REQUEST, detail="Compliance Request has been finalised. Unable to delete."
         )
 
+    audit_log(
+        db.session,
+        user.user_id,
+        AuditChangeType.COMPLIANCE_REQUEST_DELETED,
+        compliance_request_id,
+        "Deleted compliance request",
+    )
     await db.session.commit()
     return Response(status_code=HTTPStatus.OK)

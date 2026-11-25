@@ -5,7 +5,8 @@ from assertical.fixtures.postgres import generate_async_session
 from cactus_schema.orchestrator import UserConfigurationRequest, UserConfigurationResponse
 from sqlalchemy import select
 
-from cactus_orchestrator.model import User
+from cactus_orchestrator.model import AuditChangeType, RunGroup, User
+from tests.utils.audit import assert_audit_logs
 
 
 @pytest.mark.parametrize(
@@ -99,3 +100,41 @@ async def test_update_existing_config(
             assert user.subscription_domain is None
         else:
             assert user.subscription_domain == expected_domain
+
+    # Only actual changes get audited
+    original_domain = user_vals.subscription_domain
+    is_changed = (expected_domain or None) != original_domain or expected_pen != user_vals.pen
+    await assert_audit_logs(pg_base_config, [(1, AuditChangeType.USER_UPDATED, [1])] if is_changed else [])
+
+
+@pytest.mark.asyncio
+async def test_fetch_config_audits_user_creation(client, pg_base_config, valid_jwt_no_user):
+    """Fetching config implicitly creates the user (once)"""
+    for _ in range(2):
+        res = await client.get("/config", headers={"Authorization": f"Bearer {valid_jwt_no_user}"})
+        assert res.status_code == HTTPStatus.OK
+
+    async with generate_async_session(pg_base_config) as session:
+        user = (await session.execute(select(User).where(User.subject_id == "user-dne"))).scalar_one()
+        run_group = (await session.execute(select(RunGroup).where(RunGroup.user_id == user.user_id))).scalar_one()
+
+    await assert_audit_logs(
+        pg_base_config,
+        [
+            (user.user_id, AuditChangeType.USER_CREATED, [user.user_id]),
+            (user.user_id, AuditChangeType.RUN_GROUP_CREATED, [run_group.run_group_id]),
+        ],
+    )
+
+
+@pytest.mark.asyncio
+async def test_update_config_rollback_not_audited(client, pg_base_config, valid_jwt_no_user, caplog):
+    """If the request fails after the implicit user creation then everything should be rolled back"""
+    req = UserConfigurationRequest(subscription_domain="://", pen=None)
+    res = await client.post("/config", headers={"Authorization": f"Bearer {valid_jwt_no_user}"}, content=req.to_json())
+
+    assert res.status_code == HTTPStatus.BAD_REQUEST
+    assert "Audit: ROLLED BACK USER_CREATED" in caplog.text
+    await assert_audit_logs(pg_base_config, [])
+    async with generate_async_session(pg_base_config) as session:
+        assert (await session.execute(select(User).where(User.subject_id == "user-dne"))).scalar_one_or_none() is None

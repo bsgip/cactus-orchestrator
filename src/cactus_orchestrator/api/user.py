@@ -6,8 +6,10 @@ from cactus_schema.orchestrator import UserUpdateRequest, uri
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi_async_sqlalchemy import db
 
+from cactus_orchestrator.audit import audit_log
 from cactus_orchestrator.auth import AuthPerm, UserContext, jwt_validator
 from cactus_orchestrator.crud import select_user, update_user_name
+from cactus_orchestrator.model import AuditChangeType
 
 logger = logging.getLogger(__name__)
 
@@ -32,9 +34,10 @@ async def patch_user_name(
 
     try:
         await update_user_name(session=db.session, user_id=user.user_id, user_name=body.user_name)
+        audit_log(db.session, user.user_id, AuditChangeType.USER_UPDATED, user.user_id, "Updated user name")
         await db.session.commit()
     except Exception as err:
-        logger.error("Exception occurred when updating user name")
+        logger.error(f"Exception occurred when updating user name for user {user.user_id}", exc_info=err)
         raise HTTPException(
             status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
             detail=f"Unable to update username of '{user_context.subject_id}.",

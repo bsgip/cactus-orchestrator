@@ -17,7 +17,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import undefer
 
 from cactus_orchestrator.api.certificate import MEDIA_TYPE_PEM_CRT
-from cactus_orchestrator.model import RunGroup
+from cactus_orchestrator.model import AuditChangeType, RunGroup
+from tests.utils.audit import assert_audit_logs
 
 
 @dataclass
@@ -126,6 +127,8 @@ async def test_generate_new_certificate_and_fetch(
     assert res.content and len(res.content)
     assert res.headers["content-type"] == MEDIA_TYPE_PEM_CRT
     assert res.content == cert_chain_bytes
+
+    await assert_audit_logs(pg_base_config, [(1, AuditChangeType.RUN_GROUP_CERTIFICATE_GENERATED, [run_group_id])])
 
 
 @pytest.mark.parametrize("run_group_id", [3, 99])
@@ -275,3 +278,5 @@ async def test_generate_shared_aggregator_certificate_and_fetch(
         assert res.content and len(res.content)
         assert res.headers["content-type"] == MEDIA_TYPE_PEM_CRT
         assert res.content == cert_chain_bytes
+
+    await assert_audit_logs(pg_base_config, [(user_id, AuditChangeType.RUN_GROUP_CERTIFICATE_GENERATED, run_group_ids)])

@@ -14,10 +14,11 @@ from fastapi.responses import Response
 from fastapi_async_sqlalchemy import db
 
 from cactus_orchestrator.api.common import select_user_run_group_or_raise, select_user_run_groups_or_raise
+from cactus_orchestrator.audit import audit_log
 from cactus_orchestrator.auth import AuthPerm, UserContext, jwt_validator
 from cactus_orchestrator.certificate.create import generate_aggregator_certificate, generate_device_certificate
 from cactus_orchestrator.certificate.fetch import fetch_certificate_key_pair, fetch_certificate_only, fetch_pem_bundle
-from cactus_orchestrator.model import User
+from cactus_orchestrator.model import AuditChangeType, User
 from cactus_orchestrator.settings import CactusOrchestratorSettings, get_current_settings
 
 logger = logging.getLogger(__name__)
@@ -229,6 +230,13 @@ async def generate_shared_aggregator_certificate(
         run_group.is_device_cert = False  # Must be an aggregator certificate
         run_group.certificate_pem = client_cert_pem
         run_group.certificate_id = cert_counter
+    audit_log(
+        db.session,
+        user.user_id,
+        AuditChangeType.RUN_GROUP_CERTIFICATE_GENERATED,
+        [run_group.run_group_id for run_group in run_groups],
+        f"Generated shared {cert_label} certificate {identifier}",
+    )
     await db.session.commit()
 
     return Response(
@@ -282,6 +290,13 @@ async def generate_client_certificate(
     run_group.is_device_cert = body.is_device_cert
     run_group.certificate_pem = client_cert_pem
     run_group.certificate_id = cert_counter
+    audit_log(
+        db.session,
+        user.user_id,
+        AuditChangeType.RUN_GROUP_CERTIFICATE_GENERATED,
+        run_group_id,
+        f"Generated {cert_label} certificate {identifier}",
+    )
     await db.session.commit()
 
     return Response(
