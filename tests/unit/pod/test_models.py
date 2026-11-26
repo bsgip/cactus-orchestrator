@@ -8,7 +8,7 @@ from cactus_orchestrator.pod.models import DEV_RUNNER_PORT_RANGE, PodResources, 
 @pytest.mark.parametrize("is_static_uri", [True, False])
 def test_from_run_without_dev_port_base_uses_pod_dns(is_static_uri: bool):
     run = generate_class_instance(Run, run_id=11, run_group_id=22, pod_name=None, warnings=None)
-    run_group = generate_class_instance(RunGroup, is_static_uri=is_static_uri, certificate_pem=bytes([1]))
+    run_group = generate_class_instance(RunGroup, is_static_uri=is_static_uri)
     resources = PodResources.from_run("cactus-net", run)
 
     routes = PodRoutes.from_run("cactus.example.com", "/envoy", 8080, resources, run_group, run)
@@ -20,7 +20,7 @@ def test_from_run_without_dev_port_base_uses_pod_dns(is_static_uri: bool):
 @pytest.mark.parametrize("is_static_uri", [True, False])
 def test_from_run_with_dev_port_base_uses_localhost(is_static_uri: bool):
     run = generate_class_instance(Run, run_id=11, run_group_id=22, pod_name=None, warnings=None)
-    run_group = generate_class_instance(RunGroup, is_static_uri=is_static_uri, certificate_pem=bytes([1]))
+    run_group = generate_class_instance(RunGroup, is_static_uri=is_static_uri)
     resources = PodResources.from_run("cactus-net", run)
 
     routes = PodRoutes.from_run(
@@ -48,7 +48,7 @@ def test_dev_runner_localhost_port_deterministic_on_pod_name():
     shared_pod_run_b = generate_class_instance(
         Run, seed=2, run_id=99, run_group_id=22, pod_name="shared-pod", warnings=None
     )
-    run_group = generate_class_instance(RunGroup, is_static_uri=True, certificate_pem=bytes([1]))
+    run_group = generate_class_instance(RunGroup, is_static_uri=True)
 
     routes_a = PodRoutes.from_run(
         "cactus.example.com",

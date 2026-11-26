@@ -8,12 +8,18 @@ VALUES
 ('admin2', 'https://test-cactus-issuer.example.com', 64, 'admin2@cactus.example.com');
 
 -- Run Groups
-INSERT INTO run_group (user_id, name, csip_aus_version, is_device_cert, certificate_pem, certificate_generated_at, certificate_id, is_static_uri)
+INSERT INTO certificate (user_id, name, is_device_cert, certificate_pem, generated_at, generation)
 VALUES
-(1, 'user-1-device-1', 'v1.2', TRUE, '\x01', '2023-01-01T00:01:00Z', 11, FALSE),
-(1, 'user-1-device-2', 'v1.3-beta/storage', NULL, NULL, NULL, 0, TRUE),
-(2, 'user-2-device-1', 'v1.2', TRUE, '\x01', '2023-01-01T00:01:00Z', 11, FALSE),
-(3, 'user-3-device-1', 'v1.2', TRUE, '\x01', '2023-01-01T00:01:00Z', 11, TRUE);
+(1, 'user-1-cert-1', TRUE, '\x01', '2023-01-01T00:01:00Z', 11), -- certificate_id 1
+(2, 'user-2-cert-1', TRUE, '\x01', '2023-01-01T00:01:00Z', 11), -- certificate_id 2
+(3, 'user-3-cert-1', TRUE, '\x01', '2023-01-01T00:01:00Z', 11); -- certificate_id 3
+
+INSERT INTO run_group (user_id, name, csip_aus_version, certificate_id, is_static_uri)
+VALUES
+(1, 'user-1-device-1', 'v1.2', 1, FALSE),
+(1, 'user-1-device-2', 'v1.3-beta/storage', NULL, TRUE),
+(2, 'user-2-device-1', 'v1.2', 2, FALSE),
+(3, 'user-3-device-1', 'v1.2', 3, TRUE);
 
 -- Runs
 INSERT INTO run (run_group_id, pod_name, testprocedure_id, created_at, finalised_at, run_status, all_criteria_met)

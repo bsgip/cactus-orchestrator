@@ -34,6 +34,8 @@ router = APIRouter()
 def map_group_to_group_response(
     group: RunGroup, cactus_fqdn: str, envoy_href: str, total_runs: int
 ) -> RunGroupResponse:
+    """Requires RunGroup.certificate to be populated"""
+    cert = group.certificate
     if group.is_static_uri:
         static_uri = envoy_dcap_uri_for_host(
             generate_static_uri_external_host(cactus_fqdn, group.run_group_id), envoy_href
@@ -46,9 +48,10 @@ def map_group_to_group_response(
         csip_aus_version=group.csip_aus_version,
         created_at=group.created_at,
         total_runs=total_runs,
-        certificate_id=group.certificate_id,
-        certificate_created_at=group.certificate_generated_at,
-        is_device_cert=group.is_device_cert,
+        assigned_certificate_id=cert.certificate_id if cert else None,
+        certificate_name=cert.name if cert else None,
+        is_device_cert=cert.is_device_cert if cert else None,
+        certificate_created_at=cert.generated_at if cert else None,
         is_static_uri=group.is_static_uri,
         static_uri=static_uri,
     )

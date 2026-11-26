@@ -5,12 +5,12 @@ from fastapi.exceptions import HTTPException
 
 from cactus_orchestrator.api.common import (
     map_run_to_run_response,
+    select_user_certificate_or_raise,
     select_user_run_group_or_raise,
     select_user_run_group_run_or_raise,
-    select_user_run_groups_or_raise,
 )
 from cactus_orchestrator.auth import AuthPerm, UserContext
-from cactus_orchestrator.model import Run, RunGroup, User
+from cactus_orchestrator.model import Certificate, Run, RunGroup, User
 from cactus_orchestrator.pod.models import PodRoutes
 from cactus_orchestrator.settings import get_current_settings
 
@@ -71,38 +71,49 @@ async def test_select_user_run_group_or_raise__raises_exception(
 
 
 @pytest.mark.parametrize(
-    "user_context, user_id, run_group_ids",
+    "user_context, certificate_id, user_id, expected_run_group_ids",
     [
-        (user_1_context, 1, [1, 2]),  # user 1 run group 1,2
-        (user_2_context, 2, [3]),  # user 2 run group 3
+        (user_1_context, 1, 1, [1]),
+        (user_1_context, 3, 1, []),
+        (user_2_context, 2, 2, [3]),
     ],
 )
+@pytest.mark.parametrize("for_update", [True, False])
 @pytest.mark.asyncio
-async def test_select_user_run_groups_or_raise(
-    user_context: UserContext, user_id: int, run_group_ids: list[int], pg_base_config
+async def test_select_user_certificate_or_raise(
+    user_context: UserContext,
+    certificate_id: int,
+    user_id: int,
+    expected_run_group_ids: list[int],
+    for_update: bool,
+    pg_base_config,
 ):
     async with generate_async_session(pg_base_config) as session:
-        user, run_groups = await select_user_run_groups_or_raise(session=session, user_context=user_context)
+        user, certificate = await select_user_certificate_or_raise(session, user_context, certificate_id, for_update)
         assert isinstance(user, User)
         assert user.user_id == user_id
-        assert isinstance(run_groups, list)
-        assert all([isinstance(r, RunGroup) for r in run_groups])
-        assert [r.run_group_id for r in run_groups] == run_group_ids
+        assert isinstance(certificate, Certificate)
+        assert certificate.certificate_id == certificate_id
+        assert certificate.user_id == user_id
+        assert [rg.run_group_id for rg in certificate.run_groups] == expected_run_group_ids
 
 
 @pytest.mark.parametrize(
-    "user_context",
+    "user_context, certificate_id",
     [
-        user_3_context,  # user 3 doesn't have any run groups
-        non_existent_user_context,  # user doesn't exist
+        (user_1_context, 2),  # belongs to user 2
+        (user_2_context, 1),  # belongs to user 1
+        (user_1_context, 99),  # doesn't exist
+        (non_existent_user_context, 1),  # user doesn't exist
     ],
 )
 @pytest.mark.asyncio
-async def test_select_user_run_groups_or_raise__raises_exception(user_context: UserContext, pg_base_config):
-
+async def test_select_user_certificate_or_raise__raises_exception(
+    user_context: UserContext, certificate_id: int, pg_base_config
+):
     async with generate_async_session(pg_base_config) as session:
         with pytest.raises(HTTPException):
-            _ = await select_user_run_groups_or_raise(session=session, user_context=user_context)
+            _ = await select_user_certificate_or_raise(session, user_context, certificate_id)
 
 
 @pytest.mark.parametrize(

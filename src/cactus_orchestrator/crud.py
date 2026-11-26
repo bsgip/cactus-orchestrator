@@ -14,6 +14,7 @@ from sqlalchemy.orm import joinedload, selectinload, undefer
 
 from cactus_orchestrator.auth import UserContext
 from cactus_orchestrator.model import (
+    Certificate,
     ComplianceRequest,
     ComplianceRequestClass,
     ComplianceRequestFinalisation,
@@ -39,7 +40,11 @@ async def insert_run_group(session: AsyncSession, user_id: int, csip_aus_version
     """Inserts a new RunGroup with the specified csip_aus_version. Returns the inserted RunGroup."""
 
     new_group = RunGroup(
-        name="New Group", csip_aus_version=csip_aus_version, user_id=user_id, is_static_uri=is_static_uri
+        name="New Group",
+        csip_aus_version=csip_aus_version,
+        user_id=user_id,
+        is_static_uri=is_static_uri,
+        certificate=None,  # Explicitly set so the (lazy="raise") relationship is considered loaded
     )
     session.add(new_group)
     await session.flush()
@@ -109,13 +114,17 @@ async def insert_run_for_run_group(
     testprocedure_id: str,
     run_status: RunStatus,
     is_device_cert: bool,
+    *,
+    certificate_id: int | None,
 ) -> Run:
+    """certificate_id should be the run group's currently assigned certificate"""
     run = Run(
         run_group_id=run_group_id,
         pod_name=None,
         testprocedure_id=testprocedure_id,
         run_status=run_status,
         is_device_cert=is_device_cert,
+        certificate_id=certificate_id,
     )
     session.add(run)
     await session.flush()
@@ -123,8 +132,9 @@ async def insert_run_for_run_group(
 
 
 async def select_run_groups_by_user(session: AsyncSession) -> dict[int, list[RunGroup]]:
-    """Returns all run groups associated with each user, keyed by their user_id"""
-    stmt = select(RunGroup)
+    """Returns all run groups associated with each user, keyed by their user_id. RunGroup.certificate will be
+    populated (but Certificate.certificate_pem will remain deferred)"""
+    stmt = select(RunGroup).options(selectinload(RunGroup.certificate))
     result = await session.execute(stmt)
     run_groups_by_user = defaultdict(list)
     for run_group in result.scalars().all():
@@ -155,17 +165,19 @@ async def _count(session: AsyncSession, stmt: Select[Any]) -> int:
 async def select_run_groups_for_user(
     session: AsyncSession,
     user_id: int,
-    for_update: bool = False,
     offset: int | None = None,
     limit: int | None = None,
 ) -> Sequence[RunGroup]:
     """Selects RunGroups for user_id ordered by run_group_id ascending. offset/limit are optional pagination
-    parameters (None = no limit)."""
-    stmt = select(RunGroup).where(RunGroup.user_id == user_id).order_by(RunGroup.run_group_id)
+    parameters (None = no limit). RunGroup.certificate will be populated (but Certificate.certificate_pem will remain
+    deferred)"""
+    stmt = (
+        select(RunGroup)
+        .where(RunGroup.user_id == user_id)
+        .order_by(RunGroup.run_group_id)
+        .options(selectinload(RunGroup.certificate))
+    )
     stmt = _apply_limit_offset(stmt, offset, limit)
-    if for_update:
-        # Lock the rows so concurrent certificate generation serialises on certificate_id
-        stmt = stmt.with_for_update()
     resp = await session.execute(stmt)
     return resp.scalars().all()
 
@@ -189,14 +201,15 @@ async def select_run_group_counts_for_user(session: AsyncSession, run_group_ids:
 
 
 async def select_run_group_for_user(
-    session: AsyncSession, user_id: int, run_group_id: int, with_cert: bool = False, for_update: bool = False
+    session: AsyncSession, user_id: int, run_group_id: int, with_cert: bool = False
 ) -> RunGroup | None:
+    """Selects a RunGroup owned by user_id. RunGroup.certificate will always be populated, with_cert will additionally
+    undefer Certificate.certificate_pem"""
     stmt = select(RunGroup).where((RunGroup.user_id == user_id) & (RunGroup.run_group_id == run_group_id)).limit(1)
     if with_cert:
-        stmt = stmt.options(undefer(RunGroup.certificate_pem))
-    if for_update:
-        # Lock the row so concurrent certificate generation serialises on certificate_id
-        stmt = stmt.with_for_update()
+        stmt = stmt.options(selectinload(RunGroup.certificate).undefer(Certificate.certificate_pem))
+    else:
+        stmt = stmt.options(selectinload(RunGroup.certificate))
 
     resp = await session.execute(stmt)
     return resp.scalar_one_or_none()
@@ -210,12 +223,81 @@ async def select_run_with_run_group_for_user(
     stmt = select(Run).join(RunGroup).where((Run.run_id == run_id) & (RunGroup.user_id == user_id))
 
     if with_cert:
-        stmt = stmt.options(selectinload(Run.run_group).undefer(RunGroup.certificate_pem))
+        stmt = stmt.options(
+            selectinload(Run.run_group).selectinload(RunGroup.certificate).undefer(Certificate.certificate_pem)
+        )
     else:
-        stmt = stmt.options(selectinload(Run.run_group))
+        stmt = stmt.options(selectinload(Run.run_group).selectinload(RunGroup.certificate))
 
     resp = await session.execute(stmt)
     return resp.scalar_one_or_none()
+
+
+async def select_certificates_for_user(
+    session: AsyncSession, user_id: int, offset: int | None = None, limit: int | None = None
+) -> Sequence[Certificate]:
+    """Selects Certificates for user_id ordered by certificate_id ascending (with certificate_pem and run_groups
+    populated). offset/limit are optional pagination parameters (None = no limit)."""
+    stmt = (
+        select(Certificate)
+        .where(Certificate.user_id == user_id)
+        .order_by(Certificate.certificate_id)
+        .options(undefer(Certificate.certificate_pem), selectinload(Certificate.run_groups))
+    )
+    stmt = _apply_limit_offset(stmt, offset, limit)
+    resp = await session.execute(stmt)
+    return resp.scalars().all()
+
+
+async def count_certificates_for_user(session: AsyncSession, user_id: int) -> int:
+    """Counts the Certificates that select_certificates_for_user would return (ignoring pagination)."""
+    return await _count(session, select(Certificate.certificate_id).where(Certificate.user_id == user_id))
+
+
+async def select_certificate_for_user(
+    session: AsyncSession, user_id: int, certificate_id: int, for_update: bool = False
+) -> Certificate | None:
+    """Selects a Certificate owned by user_id (with certificate_pem and run_groups populated). Set for_update to lock
+    the certificate row for the duration of the transaction (used to serialise regeneration/assignment changes)."""
+    stmt = (
+        select(Certificate)
+        .where((Certificate.user_id == user_id) & (Certificate.certificate_id == certificate_id))
+        .options(undefer(Certificate.certificate_pem), selectinload(Certificate.run_groups))
+        .limit(1)
+    )
+    if for_update:
+        stmt = stmt.with_for_update()
+    resp = await session.execute(stmt)
+    return resp.scalar_one_or_none()
+
+
+async def select_certificate(session: AsyncSession, certificate_id: int) -> Certificate | None:
+    """Selects a Certificate by ID (with certificate_pem populated). No user filtering is performed - callers must
+    ensure that the certificate_id came from a trusted source (eg a Run belonging to the user)."""
+    resp = await session.execute(
+        select(Certificate)
+        .where(Certificate.certificate_id == certificate_id)
+        .options(undefer(Certificate.certificate_pem))
+    )
+    return resp.scalar_one_or_none()
+
+
+async def select_active_run_ids_for_certificate(session: AsyncSession, certificate_id: int) -> list[int]:
+    """Returns the IDs of all active (non finalised) runs that are using certificate_id (ordered by run_id)"""
+    resp = await session.execute(
+        select(Run.run_id)
+        .where((Run.certificate_id == certificate_id) & Run.run_status.in_(ACTIVE_RUN_STATUSES))
+        .order_by(Run.run_id)
+    )
+    return list(resp.scalars().all())
+
+
+async def unlink_runs_from_certificate(session: AsyncSession, certificate_id: int) -> list[int]:
+    """Clears Run.certificate_id for every run using certificate_id. Returns the affected run IDs (ordered)."""
+    resp = await session.execute(
+        update(Run).where(Run.certificate_id == certificate_id).values(certificate_id=None).returning(Run.run_id)
+    )
+    return sorted(resp.scalars().all())
 
 
 async def delete_runs(session: AsyncSession, runs: Sequence[Run]) -> None:
@@ -718,6 +800,8 @@ async def insert_playlist_runs(
     test_procedure_ids: list[str],
     is_device_cert: bool,
     start_index: int = 0,
+    *,
+    certificate_id: int | None,
 ) -> list[Run]:
     """Create all Run records for a playlist execution.
 
@@ -729,6 +813,7 @@ async def insert_playlist_runs(
     Args:
         start_index: The index to start execution from. Runs before this index
                      will be marked as skipped.
+        certificate_id: The run group's currently assigned certificate - shared by every run in the playlist
     """
     runs = []
     now = datetime.now(UTC)
@@ -741,6 +826,7 @@ async def insert_playlist_runs(
                 testprocedure_id=procedure_id,
                 run_status=RunStatus.skipped,
                 is_device_cert=is_device_cert,
+                certificate_id=certificate_id,
                 playlist_execution_id=playlist_execution_id,
                 playlist_order=order,
                 finalised_at=now,
@@ -753,6 +839,7 @@ async def insert_playlist_runs(
                 testprocedure_id=procedure_id,
                 run_status=RunStatus.provisioning,
                 is_device_cert=is_device_cert,
+                certificate_id=certificate_id,
                 playlist_execution_id=playlist_execution_id,
                 playlist_order=order,
             )
@@ -764,6 +851,7 @@ async def insert_playlist_runs(
                 testprocedure_id=procedure_id,
                 run_status=RunStatus.initialised,
                 is_device_cert=is_device_cert,
+                certificate_id=certificate_id,
                 playlist_execution_id=playlist_execution_id,
                 playlist_order=order,
             )
@@ -857,9 +945,12 @@ async def insert_playlist_tail_runs(
     is_device_cert: bool,
     pod_name: str | None,
     start_order: int,
+    *,
+    certificate_id: int | None,
 ) -> list[Run]:
     """Insert 'initialised' Run rows for a playlist tail, numbered contiguously from start_order.
-    Callers must delete the old tail rows first (delete_upcoming_playlist_runs)."""
+    Callers must delete the old tail rows first (delete_upcoming_playlist_runs). is_device_cert/certificate_id should
+    be copied from the existing playlist runs (NOT the run group - its assignment may have changed)."""
     runs = []
     for offset, procedure_id in enumerate(test_procedure_ids):
         run = Run(
@@ -868,6 +959,7 @@ async def insert_playlist_tail_runs(
             testprocedure_id=procedure_id,
             run_status=RunStatus.initialised,
             is_device_cert=is_device_cert,
+            certificate_id=certificate_id,
             playlist_execution_id=playlist_execution_id,
             playlist_order=start_order + offset,
         )

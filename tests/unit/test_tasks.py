@@ -123,20 +123,36 @@ async def test_destroy_idle_pods_and_orphans(podman_mock: MockedPodman, pg_base_
     async with generate_async_session(pg_base_config) as session:
         # Create some single runs
         provisioning_run_id = (
-            await insert_run_for_run_group(session, RUN_GROUP_ID, "ALL-01", RunStatus.provisioning, False)
+            await insert_run_for_run_group(
+                session, RUN_GROUP_ID, "ALL-01", RunStatus.provisioning, False, certificate_id=None
+            )
         ).run_id
-        started_run_id = (await insert_run_for_run_group(session, 1, "ALL-02", RunStatus.started, False)).run_id
-        terminated_run_id = (await insert_run_for_run_group(session, 1, "ALL-02", RunStatus.terminated, False)).run_id
+        started_run_id = (
+            await insert_run_for_run_group(session, 1, "ALL-02", RunStatus.started, False, certificate_id=None)
+        ).run_id
+        terminated_run_id = (
+            await insert_run_for_run_group(session, 1, "ALL-02", RunStatus.terminated, False, certificate_id=None)
+        ).run_id
         finalised_run_id = (
-            await insert_run_for_run_group(session, RUN_GROUP_ID, "ALL-02", RunStatus.finalised_by_timeout, False)
+            await insert_run_for_run_group(
+                session, RUN_GROUP_ID, "ALL-02", RunStatus.finalised_by_timeout, False, certificate_id=None
+            )
         ).run_id
         grace_period_run_id = 98
 
         # Create an active playlist
-        p1_r1 = await insert_run_for_run_group(session, RUN_GROUP_ID, "ALL-01", RunStatus.skipped, False)
-        p1_r2 = await insert_run_for_run_group(session, RUN_GROUP_ID, "ALL-01", RunStatus.finalised_by_client, False)
-        p1_r3 = await insert_run_for_run_group(session, RUN_GROUP_ID, "ALL-01", RunStatus.started, False)
-        p1_r4 = await insert_run_for_run_group(session, RUN_GROUP_ID, "ALL-01", RunStatus.initialised, False)
+        p1_r1 = await insert_run_for_run_group(
+            session, RUN_GROUP_ID, "ALL-01", RunStatus.skipped, False, certificate_id=None
+        )
+        p1_r2 = await insert_run_for_run_group(
+            session, RUN_GROUP_ID, "ALL-01", RunStatus.finalised_by_client, False, certificate_id=None
+        )
+        p1_r3 = await insert_run_for_run_group(
+            session, RUN_GROUP_ID, "ALL-01", RunStatus.started, False, certificate_id=None
+        )
+        p1_r4 = await insert_run_for_run_group(
+            session, RUN_GROUP_ID, "ALL-01", RunStatus.initialised, False, certificate_id=None
+        )
         p1_r1.playlist_execution_id = "abc123"
         p1_r2.playlist_execution_id = "abc123"
         p1_r3.playlist_execution_id = "abc123"
@@ -144,28 +160,44 @@ async def test_destroy_idle_pods_and_orphans(podman_mock: MockedPodman, pg_base_
         p1_run_id = p1_r1.run_id
 
         # Create an inactive playlist
-        p2_r1 = await insert_run_for_run_group(session, RUN_GROUP_ID, "ALL-01", RunStatus.skipped, False)
-        p2_r2 = await insert_run_for_run_group(session, RUN_GROUP_ID, "ALL-01", RunStatus.finalised_by_client, False)
-        p2_r3 = await insert_run_for_run_group(session, RUN_GROUP_ID, "ALL-01", RunStatus.finalised_by_timeout, False)
+        p2_r1 = await insert_run_for_run_group(
+            session, RUN_GROUP_ID, "ALL-01", RunStatus.skipped, False, certificate_id=None
+        )
+        p2_r2 = await insert_run_for_run_group(
+            session, RUN_GROUP_ID, "ALL-01", RunStatus.finalised_by_client, False, certificate_id=None
+        )
+        p2_r3 = await insert_run_for_run_group(
+            session, RUN_GROUP_ID, "ALL-01", RunStatus.finalised_by_timeout, False, certificate_id=None
+        )
         p2_r1.playlist_execution_id = "def456"
         p2_r2.playlist_execution_id = "def456"
         p2_r3.playlist_execution_id = "def456"
         p2_run_id = p2_r1.run_id
 
         # Active single run whose pod was deleted out-of-band (entirely missing from podman)
-        dead_pod_run = await insert_run_for_run_group(session, RUN_GROUP_ID, "ALL-01", RunStatus.started, False)
+        dead_pod_run = await insert_run_for_run_group(
+            session, RUN_GROUP_ID, "ALL-01", RunStatus.started, False, certificate_id=None
+        )
         dead_pod_run.pod_name = f"run-{dead_pod_run.run_id}"
         dead_pod_run_id = dead_pod_run.run_id
 
         # Active single run whose pod is still present in podman but has crashed/exited (is_running=False)
-        crashed_pod_run = await insert_run_for_run_group(session, RUN_GROUP_ID, "ALL-01", RunStatus.started, False)
+        crashed_pod_run = await insert_run_for_run_group(
+            session, RUN_GROUP_ID, "ALL-01", RunStatus.started, False, certificate_id=None
+        )
         crashed_pod_run.pod_name = f"run-{crashed_pod_run.run_id}"
         crashed_pod_run_id = crashed_pod_run.run_id
 
         # Active playlist whose active run's pod was deleted out-of-band - all active siblings should terminate too
-        p3_r1 = await insert_run_for_run_group(session, RUN_GROUP_ID, "ALL-01", RunStatus.finalised_by_client, False)
-        p3_r2 = await insert_run_for_run_group(session, RUN_GROUP_ID, "ALL-01", RunStatus.started, False)
-        p3_r3 = await insert_run_for_run_group(session, RUN_GROUP_ID, "ALL-01", RunStatus.initialised, False)
+        p3_r1 = await insert_run_for_run_group(
+            session, RUN_GROUP_ID, "ALL-01", RunStatus.finalised_by_client, False, certificate_id=None
+        )
+        p3_r2 = await insert_run_for_run_group(
+            session, RUN_GROUP_ID, "ALL-01", RunStatus.started, False, certificate_id=None
+        )
+        p3_r3 = await insert_run_for_run_group(
+            session, RUN_GROUP_ID, "ALL-01", RunStatus.initialised, False, certificate_id=None
+        )
         p3_r1.playlist_execution_id = "ghi789"
         p3_r2.playlist_execution_id = "ghi789"
         p3_r3.playlist_execution_id = "ghi789"
@@ -178,8 +210,12 @@ async def test_destroy_idle_pods_and_orphans(podman_mock: MockedPodman, pg_base_
         # but not yet started - only 'initialised' (active, not-yet-started) + 'finalised' rows, no
         # 'provisioning'/'started' row present. This should NOT be treated as orphaned (regression coverage for
         # the playlist migration's orphan-pod rule).
-        p4_r1 = await insert_run_for_run_group(session, RUN_GROUP_ID, "ALL-01", RunStatus.finalised_by_client, False)
-        p4_r2 = await insert_run_for_run_group(session, RUN_GROUP_ID, "ALL-01", RunStatus.initialised, False)
+        p4_r1 = await insert_run_for_run_group(
+            session, RUN_GROUP_ID, "ALL-01", RunStatus.finalised_by_client, False, certificate_id=None
+        )
+        p4_r2 = await insert_run_for_run_group(
+            session, RUN_GROUP_ID, "ALL-01", RunStatus.initialised, False, certificate_id=None
+        )
         p4_r1.playlist_execution_id = "jkl012"
         p4_r2.playlist_execution_id = "jkl012"
         p4_run_id = p4_r1.run_id
@@ -343,7 +379,7 @@ async def test_destroy_idle_pods_with_playlist(
             run_status=RunStatus.started,
             playlist_execution_id=playlist_execution_id,
             playlist_order=0,
-            run_group=generate_class_instance(RunGroup, certificate_pem=bytes([1])),
+            run_group=generate_class_instance(RunGroup),
         ),
     ]
 

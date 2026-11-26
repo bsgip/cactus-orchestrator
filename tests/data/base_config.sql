@@ -7,13 +7,21 @@ VALUES ('user2', 'https://test-cactus-issuer.example.com', 64, 'user2@cactus.exa
 INSERT INTO user_ (subject_id, issuer_id, pen, user_name)
 VALUES ('user3', 'https://test-cactus-issuer.example.com', 64, NULL);
 
+-- Certificates
+INSERT INTO certificate (user_id, name, is_device_cert, certificate_pem, created_at, generated_at, generation)
+VALUES (1, 'cert-1', TRUE, E'\\x01', '2023-01-01T00:00:01Z', '2023-01-01T00:01:00Z', 11); -- certificate_id 1
+INSERT INTO certificate (user_id, name, is_device_cert, certificate_pem, created_at, generated_at, generation)
+VALUES (2, 'cert-2', FALSE, E'\\x03', '2023-01-01T00:00:02Z', '2023-01-01T00:03:00Z', 33); -- certificate_id 2
+INSERT INTO certificate (user_id, name, is_device_cert, certificate_pem, created_at, generated_at, generation)
+VALUES (1, 'cert-3', FALSE, E'\\x04', '2023-01-01T00:00:03Z', '2023-01-01T00:04:00Z', 4); -- certificate_id 3 (unassigned)
+
 -- Run Groups
-INSERT INTO run_group (user_id, name, csip_aus_version, is_device_cert, certificate_pem, certificate_generated_at, certificate_id, is_static_uri)
-VALUES (1, 'name-1', 'v1.2', TRUE, E'\\x01', '2023-01-01T00:01:00Z', 11, FALSE);
-INSERT INTO run_group (user_id, name, csip_aus_version, is_device_cert, certificate_pem, certificate_generated_at, certificate_id, is_static_uri)
-VALUES (1, 'name-2', 'v1.3-beta/storage', NULL, NULL, NULL, 0, TRUE);
-INSERT INTO run_group (user_id, name, csip_aus_version, is_device_cert, certificate_pem, certificate_generated_at, certificate_id, is_static_uri)
-VALUES (2, 'name-3', 'v1.2', FALSE, E'\\x03', '2023-01-01T00:03:00Z', 33, FALSE);
+INSERT INTO run_group (user_id, name, csip_aus_version, certificate_id, is_static_uri)
+VALUES (1, 'name-1', 'v1.2', 1, FALSE);
+INSERT INTO run_group (user_id, name, csip_aus_version, certificate_id, is_static_uri)
+VALUES (1, 'name-2', 'v1.3-beta/storage', NULL, TRUE);
+INSERT INTO run_group (user_id, name, csip_aus_version, certificate_id, is_static_uri)
+VALUES (2, 'name-3', 'v1.2', 2, FALSE);
 
 
 INSERT INTO run (run_group_id, pod_name, testprocedure_id, created_at, finalised_at, run_status, all_criteria_met)

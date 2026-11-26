@@ -22,6 +22,7 @@ from cactus_schema.orchestrator import (
     InitRunRequest,
     InitRunResponse,
     ProceedResponse,
+    RunGroupCertificateAssignRequest,
     RunResponse,
     StartRunResponse,
     UpdatePlaylistRequest,
@@ -47,10 +48,11 @@ from cactus_orchestrator.filestore import (
     run_report_exists,
     run_zip_exists,
 )
-from cactus_orchestrator.model import AuditChangeType, DeployRelease, Run, RunGroup, RunStatus, User
+from cactus_orchestrator.model import AuditChangeType, Certificate, DeployRelease, Run, RunGroup, RunStatus, User
 from cactus_orchestrator.pod.models import generate_dynamic_uri_external_host, generate_static_uri_external_host
 from cactus_orchestrator.settings import get_current_settings
 from tests.utils.audit import assert_audit_logs
+from tests.utils.certificate import assign_test_certificate
 from tests.utils.filestore import load_file_store_for_test
 from tests.utils.pdf import assert_pdf_file
 from tests.utils.runner import TEST_FINALISATION_DATA, create_runner_finalisation_zip
@@ -157,8 +159,7 @@ async def test_spawn_teststack_and_init_run_dynamic_uris(
         user.subscription_domain = subscription_domain
 
         run_group = (await session.execute(select(RunGroup).where(RunGroup.run_group_id == run_group_id))).scalar_one()
-        run_group.certificate_pem = client_cert_pem_bytes
-        run_group.is_device_cert = is_device_cert
+        await assign_test_certificate(session, run_group, client_cert_pem_bytes, is_device_cert)
         run_group.is_static_uri = False
 
         await session.commit()
@@ -211,6 +212,16 @@ async def test_spawn_teststack_and_init_run_dynamic_uris(
         assert new_run.pod_name is not None and str(response_model.run_id) in new_run.pod_name
         assert_nowish(new_run.created_at)
 
+    async with generate_async_session(pg_base_config) as session:
+        new_run = (await session.execute(select(Run).where(Run.run_id == response_model.run_id))).scalar_one()
+        run_group = (await session.execute(select(RunGroup).where(RunGroup.run_group_id == run_group_id))).scalar_one()
+        assert run_group.certificate_id is not None
+        assert new_run.certificate_id == run_group.certificate_id
+        assert new_run.is_device_cert is is_device_cert
+
+    run_response = await _get_playlist_run_response(client, valid_jwt_user1, response_model.run_id)
+    assert run_response.certificate_id == new_run.certificate_id
+
     await assert_audit_logs(pg_base_config, [(1, AuditChangeType.RUN_CREATED, [response_model.run_id])])
 
 
@@ -246,8 +257,7 @@ async def test_spawn_teststack_and_init_run_static_uri(
 
         run_group = (await session.execute(select(RunGroup).where(RunGroup.run_group_id == run_group_id))).scalar_one()
         run_group.is_static_uri = True
-        run_group.certificate_pem = client_cert_pem_bytes
-        run_group.is_device_cert = is_device_cert
+        await assign_test_certificate(session, run_group, client_cert_pem_bytes, is_device_cert)
 
         await session.commit()
 
@@ -326,7 +336,7 @@ async def test_spawn_teststack_and_init_failure_from_create(
         user.subscription_domain = subscription_domain
 
         run_group = (await session.execute(select(RunGroup).where(RunGroup.run_group_id == run_group_id))).scalar_one()
-        run_group.certificate_pem = client_cert_pem_bytes
+        await assign_test_certificate(session, run_group, client_cert_pem_bytes)
         run_group.is_static_uri = False
 
         initial_run_count = (await session.execute(select(func.count()).select_from(Run))).scalar_one()
@@ -378,7 +388,7 @@ async def test_spawn_teststack_and_init_failure_from_init(
         user.subscription_domain = subscription_domain
 
         run_group = (await session.execute(select(RunGroup).where(RunGroup.run_group_id == run_group_id))).scalar_one()
-        run_group.certificate_pem = client_cert_pem_bytes
+        await assign_test_certificate(session, run_group, client_cert_pem_bytes)
         run_group.is_static_uri = False
 
         initial_run_count = (await session.execute(select(func.count()).select_from(Run))).scalar_one()
@@ -434,8 +444,7 @@ async def test_spawn_teststack_and_init_run_static_uri_collision(
         user.subscription_domain = subscription_domain
 
         run_group = (await session.execute(select(RunGroup).where(RunGroup.run_group_id == run_group_id))).scalar_one()
-        run_group.certificate_pem = client_cert_pem_bytes
-        run_group.is_device_cert = is_device_cert
+        await assign_test_certificate(session, run_group, client_cert_pem_bytes, is_device_cert)
         run_group.is_static_uri = True
 
         await session.commit()
@@ -496,8 +505,7 @@ async def test_spawn_teststack_and_init_run_expired_certs(
     # Arrange
     async with generate_async_session(pg_base_config) as session:
         run_group = (await session.execute(select(RunGroup).where(RunGroup.run_group_id == run_group_id))).scalar_one()
-        run_group.certificate_pem = client_cert_expired_pem_bytes
-        run_group.is_device_cert = is_device_cert
+        await assign_test_certificate(session, run_group, client_cert_expired_pem_bytes, is_device_cert)
         await session.commit()
 
     # Act
@@ -1272,8 +1280,7 @@ async def test_spawn_teststack_with_playlist(
         user.subscription_domain = subscription_domain
 
         run_group = (await session.execute(select(RunGroup).where(RunGroup.run_group_id == run_group_id))).scalar_one()
-        run_group.certificate_pem = client_cert_pem_bytes
-        run_group.is_device_cert = True
+        await assign_test_certificate(session, run_group, client_cert_pem_bytes, True)
         run_group.is_static_uri = False
 
         await session.commit()
@@ -1316,6 +1323,9 @@ async def test_spawn_teststack_with_playlist(
         assert playlist_runs[1].run_status == RunStatus.initialised  # Second run
         assert playlist_runs[0].pod_name
         assert all(r.pod_name == playlist_runs[0].pod_name for r in playlist_runs)  # Same pod
+        run_group = (await session.execute(select(RunGroup).where(RunGroup.run_group_id == run_group_id))).scalar_one()
+        assert run_group.certificate_id is not None
+        assert all(r.certificate_id == run_group.certificate_id for r in playlist_runs)
 
     await assert_audit_logs(
         pg_base_config, [(1, AuditChangeType.RUN_CREATED, [r.run_id for r in response_model.playlist_runs])]
@@ -1337,8 +1347,7 @@ async def test_backwards_compatibility_single_run(
         user.subscription_domain = subscription_domain
 
         run_group = (await session.execute(select(RunGroup).where(RunGroup.run_group_id == run_group_id))).scalar_one()
-        run_group.certificate_pem = client_cert_pem_bytes
-        run_group.is_device_cert = True
+        await assign_test_certificate(session, run_group, client_cert_pem_bytes, True)
         run_group.is_static_uri = False
 
         await session.commit()
@@ -1386,8 +1395,7 @@ async def create_playlist_for_test(
         user.subscription_domain = "playlist.test"
 
         run_group = (await session.execute(select(RunGroup).where(RunGroup.run_group_id == run_group_id))).scalar_one()
-        run_group.certificate_pem = client_cert_pem_bytes
-        run_group.is_device_cert = True
+        await assign_test_certificate(session, run_group, client_cert_pem_bytes, True)
         run_group.is_static_uri = False
 
         await session.commit()
@@ -1724,6 +1732,130 @@ async def test_update_playlist_replaces_upcoming_tail(
     )
 
 
+async def _reassign_run_group_1_to_new_certificate(pg_config, client, valid_jwt: str) -> int:
+    """Creates a new (device) certificate for user 1 and assigns it to run group 1 via the API. Returns its id"""
+    async with generate_async_session(pg_config) as session:
+        new_cert = Certificate(
+            user_id=1,
+            name="replacement",
+            is_device_cert=True,
+            certificate_pem=b"replacement-pem",
+            generated_at=datetime.now(UTC),
+        )
+        session.add(new_cert)
+        await session.flush()
+        new_cert_id = new_cert.certificate_id
+        await session.commit()
+
+    # Allowed even though run group 1 has active runs
+    res = await client.put(
+        "/run_group/1/certificate",
+        content=RunGroupCertificateAssignRequest(certificate_id=new_cert_id).to_json(),
+        headers={"Authorization": f"Bearer {valid_jwt}"},
+    )
+    assert res.status_code == HTTPStatus.OK, res.text
+    return new_cert_id
+
+
+@pytest.mark.parametrize("unassign", [True, False])
+@pytest.mark.asyncio
+async def test_playlist_uses_run_certificate_after_run_group_reassignment(
+    client,
+    mocked_pod: MockedPod,
+    finalisation_zip_bytes,
+    pg_base_config,
+    client_cert_pem_bytes,
+    valid_jwt_user1,
+    unassign: bool,
+):
+    """Changing a run group's certificate mid playlist should NOT affect the playlist's remaining runs (advancement OR
+    updates to the upcoming tail)"""
+    response_model = await create_playlist_for_test(
+        client,
+        mocked_pod,
+        pg_base_config,
+        client_cert_pem_bytes,
+        valid_jwt_user1,
+        [TestProcedureId.ALL_01, TestProcedureId.ALL_02, TestProcedureId.ALL_03],
+    )
+    assert response_model.playlist_runs is not None
+    first_run_id = response_model.playlist_runs[0].run_id
+    async with generate_async_session(pg_base_config) as session:
+        original_cert_id = (
+            await session.execute(select(Run.certificate_id).where(Run.run_id == first_run_id))
+        ).scalar_one()
+        await session.execute(update(Run).where(Run.run_id == first_run_id).values(run_status=RunStatus.started))
+        await session.commit()
+    assert original_cert_id is not None
+
+    if unassign:
+        res = await client.delete("/run_group/1/certificate", headers={"Authorization": f"Bearer {valid_jwt_user1}"})
+        assert res.status_code == HTTPStatus.OK, res.text
+    else:
+        new_cert_id = await _reassign_run_group_1_to_new_certificate(pg_base_config, client, valid_jwt_user1)
+        assert new_cert_id != original_cert_id
+
+    # Replace the upcoming tail - the new runs should still use the playlist's certificate
+    req = UpdatePlaylistRequest(test_procedure_ids=[TestProcedureId.ALL_04], expected_active_run_id=first_run_id)
+    response = await client.post(
+        f"/run/{first_run_id}/playlist", content=req.to_json(), headers={"Authorization": f"Bearer {valid_jwt_user1}"}
+    )
+    assert response.status_code == HTTPStatus.OK, response.text
+    playlist_runs = UpdatePlaylistResponse.from_json(response.text).playlist_runs
+    second_run_id = playlist_runs[1].run_id
+    run_response = await _get_playlist_run_response(client, valid_jwt_user1, second_run_id)
+    assert run_response.certificate_id == original_cert_id
+
+    # Advance the playlist - the original certificate should be sent to the runner
+    mocked_pod.finalize.return_value = finalisation_zip_bytes
+    mocked_pod.status.return_value = generate_class_instance(RunnerStatus, step_status={})
+    mocked_pod.next_test.return_value = generate_class_instance(InitResponseBody, is_started=True)
+    response = await client.post(
+        f"/run/{first_run_id}/finalise", headers={"Authorization": f"Bearer {valid_jwt_user1}"}
+    )
+    assert response.status_code == HTTPStatus.OK
+
+    mocked_pod.destroy_pod_resources.assert_not_awaited()
+    mocked_pod.next_test.assert_awaited_once()
+    next_run_request = mocked_pod.next_test.call_args_list[0].args[1]
+    assert next_run_request.run_id == str(second_run_id)
+    assert next_run_request.test_definition.test_procedure_id == TestProcedureId.ALL_04
+    assert next_run_request.run_group.test_certificates.device == client_cert_pem_bytes.decode()
+    assert next_run_request.run_group.test_certificates.aggregator is None
+
+
+@pytest.mark.asyncio
+async def test_playlist_finalize_next_run_without_certificate_falls_back_to_teardown(
+    client, mocked_pod: MockedPod, finalisation_zip_bytes, pg_base_config, client_cert_pem_bytes, valid_jwt_user1
+):
+    """If the next run has lost its certificate (eg legacy data) - advancement isn't possible so teardown"""
+    response_model = await create_playlist_for_test(
+        client,
+        mocked_pod,
+        pg_base_config,
+        client_cert_pem_bytes,
+        valid_jwt_user1,
+        [TestProcedureId.ALL_01, TestProcedureId.ALL_02],
+    )
+    assert response_model.playlist_runs is not None
+    first_run_id = response_model.playlist_runs[0].run_id
+    second_run_id = response_model.playlist_runs[1].run_id
+    async with generate_async_session(pg_base_config) as session:
+        await session.execute(update(Run).where(Run.run_id == first_run_id).values(run_status=RunStatus.started))
+        await session.execute(update(Run).where(Run.run_id == second_run_id).values(certificate_id=None))
+        await session.commit()
+
+    mocked_pod.finalize.return_value = finalisation_zip_bytes
+    mocked_pod.status.return_value = generate_class_instance(RunnerStatus, step_status={})
+
+    response = await client.post(
+        f"/run/{first_run_id}/finalise", headers={"Authorization": f"Bearer {valid_jwt_user1}"}
+    )
+    assert response.status_code == HTTPStatus.OK
+    mocked_pod.next_test.assert_not_awaited()
+    mocked_pod.destroy_pod_resources.assert_awaited_once()
+
+
 @pytest.mark.asyncio
 async def test_update_playlist_stale_expected_active_run_id_returns_409(
     client, mocked_pod: MockedPod, pg_base_config, client_cert_pem_bytes, valid_jwt_user1
@@ -1763,8 +1895,7 @@ async def test_update_playlist_non_playlist_run_returns_400(
 
     async with generate_async_session(pg_base_config) as session:
         run_group = (await session.execute(select(RunGroup).where(RunGroup.run_group_id == 1))).scalar_one()
-        run_group.certificate_pem = client_cert_pem_bytes
-        run_group.is_device_cert = True
+        await assign_test_certificate(session, run_group, client_cert_pem_bytes, True)
         run_group.is_static_uri = False
         await session.commit()
 

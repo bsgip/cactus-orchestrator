@@ -13,13 +13,13 @@ from cactus_orchestrator.audit import audit_log
 from cactus_orchestrator.auth import UserContext
 from cactus_orchestrator.crud import (
     insert_user,
+    select_certificate_for_user,
     select_run_group_for_user,
-    select_run_groups_for_user,
     select_run_with_run_group_for_user,
     select_user,
 )
 from cactus_orchestrator.filestore import run_zip_exists
-from cactus_orchestrator.model import AuditChangeType, ComplianceRequest, Run, RunGroup, RunStatus, User
+from cactus_orchestrator.model import AuditChangeType, Certificate, ComplianceRequest, Run, RunGroup, RunStatus, User
 from cactus_orchestrator.pod.models import PodRoutes
 from cactus_orchestrator.procedures import get_filtered_test_procedures
 from cactus_orchestrator.settings import CactusOrchestratorSettings
@@ -80,6 +80,7 @@ def map_run_to_run_response(
         immediate_start=bool(definition and definition.preconditions and definition.preconditions.immediate_start),
         run_group_id=run.run_group_id,
         warnings=[WarningEntry.from_dict(w) for w in run.warnings] if run.warnings is not None else None,
+        certificate_id=run.certificate_id,
     )
 
 
@@ -152,21 +153,17 @@ async def select_user_run_group_or_raise(
     user_context: UserContext,
     run_group_id: int,
     with_cert: bool = False,
-    for_update: bool = False,
 ) -> tuple[User, RunGroup]:
     """Selects a user for the specific user context AND their associated run_group_id or raises a HTTPException if none
     can be found.
 
-    Can optionally include deferred certificate values on the RunGroup. Set for_update to lock the run_group row for
-    the duration of the transaction (used by certificate generation to serialise the certificate_id counter)."""
+    RunGroup.certificate will be populated - with_cert will additionally undefer Certificate.certificate_pem."""
     user = await select_user_or_raise(
         session,
         user_context,
     )
 
-    run_group = await select_run_group_for_user(
-        session, user.user_id, run_group_id, with_cert=with_cert, for_update=for_update
-    )
+    run_group = await select_run_group_for_user(session, user.user_id, run_group_id, with_cert=with_cert)
     if run_group is None:
         logger.error(f"Cannot find run_group {run_group_id} for user {user.user_id}")
         raise HTTPException(
@@ -199,22 +196,19 @@ async def select_user_run_group_run_or_raise(
     return (user, run.run_group, run)
 
 
-async def select_user_run_groups_or_raise(
-    session: AsyncSession, user_context: UserContext, for_update: bool = False
-) -> tuple[User, list[RunGroup]]:
-    """Selects a user for the specific user context AND their associated run_groups.
-
-    Set for_update to lock the run_group rows for the duration of the transaction (used by certificate generation to
-    serialise the certificate_id counter). Raises if the user not found."""
-
+async def select_user_certificate_or_raise(
+    session: AsyncSession, user_context: UserContext, certificate_id: int, for_update: bool = False
+) -> tuple[User, Certificate]:
+    """Selects a user for the specific user context AND their associated certificate (with certificate_pem and
+    run_groups populated) or raises a HTTPException if none can be found. Set for_update to lock the certificate row
+    for the duration of the transaction."""
     user = await select_user_or_raise(session, user_context)
 
-    run_groups = await select_run_groups_for_user(session, user.user_id, for_update=for_update)
-
-    if not run_groups:
-        logger.error(f"No run groups found for user {user.user_id}")
+    certificate = await select_certificate_for_user(session, user.user_id, certificate_id, for_update=for_update)
+    if certificate is None:
+        logger.error(f"Cannot find certificate {certificate_id} for user {user.user_id}")
         raise HTTPException(
-            status_code=HTTPStatus.FORBIDDEN, detail=f"Cannot find any run groups for user {user.user_id}"
+            status_code=HTTPStatus.NOT_FOUND, detail=f"Cannot find certificate {certificate_id} for user {user.user_id}"
         )
 
-    return (user, list(run_groups))
+    return (user, certificate)

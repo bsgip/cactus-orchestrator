@@ -405,7 +405,7 @@ requires-dist = [
     { name = "asyncpg" },
     { name = "bandit", marker = "extra == 'dev'" },
     { name = "cactus-runner", git = "https://github.com/bsgip/cactus-runner.git?rev=v2.12.1" },
-    { name = "cactus-schema", specifier = "==1.4.0" },
+    { name = "cactus-schema", specifier = "==1.5.0" },
     { name = "cactus-test-definitions", specifier = "==1.20.0" },
     { name = "coverage", marker = "extra == 'dev'" },
     { name = "cryptography" },
@@ -462,14 +462,14 @@ dependencies = [
 
 [[package]]
 name = "cactus-schema"
-version = "1.4.0"
+version = "1.5.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "dataclass-wizard" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/ee/c4/02b0867c813d5a65a70537bce9529276e30d0c6a2bc221a21bad30280607/cactus_schema-1.4.0.tar.gz", hash = "sha256:e4788a0102ddd8a0fa2f89160adaf99fe58c0b9138cc21f998b44f6eac67ddb9", size = 12103, upload-time = "2026-09-24T03:16:43.231Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/2e/85/746a074b2a3799f77599257a74d10b911f2d92836904967d306afb599d9e/cactus_schema-1.5.0.tar.gz", hash = "sha256:e97c61db4308c5791e5c52dd634672f08314629f07da4febe0ec946101eca003", size = 12507, upload-time = "2026-11-26T04:50:57.224Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/2b/43/510d619569517f558545414dce4d2ac03e85858733f9ba4e77617322091d/cactus_schema-1.4.0-py3-none-any.whl", hash = "sha256:f6d36f94a9abb20265224da2261b8f4aff9e507828107852e3e9dadfa4420a16", size = 13943, upload-time = "2026-09-24T03:16:41.974Z" },
+    { url = "https://files.pythonhosted.org/packages/a9/ca/7580cc0de91c0b6b4a74359debb4a2a06328e0eeccb3229a8872407706dd/cactus_schema-1.5.0-py3-none-any.whl", hash = "sha256:cef97d0fa3c8ffd956cbccf6d92474b8682f5b43654626e2f4012e24d83501c8", size = 14257, upload-time = "2026-11-26T04:50:56.075Z" },
 ]
 
 [[package]]
