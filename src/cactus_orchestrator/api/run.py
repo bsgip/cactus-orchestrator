@@ -65,6 +65,7 @@ from cactus_orchestrator.crud import (
     insert_playlist_runs,
     insert_playlist_tail_runs,
     insert_run_for_run_group,
+    select_certificate,
     select_deploy_release_at,
     select_next_playlist_run,
     select_passed_runs_for_user,
@@ -79,7 +80,7 @@ from cactus_orchestrator.crud import (
 from cactus_orchestrator.filestore import (
     save_run_finalisation,
 )
-from cactus_orchestrator.model import AuditChangeType, Run, RunGroup, RunStatus, User
+from cactus_orchestrator.model import AuditChangeType, Certificate, Run, RunGroup, RunStatus, User
 from cactus_orchestrator.pod.manager import create_pod_run, destroy_pod_resources, ensure_images
 from cactus_orchestrator.pod.models import PodPKI, PodResources, PodRoutes
 from cactus_orchestrator.reporting.generate import parse_reporting_data
@@ -91,10 +92,17 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-def _build_run_request(run: Run, run_group: RunGroup, user: User) -> RunRequest:
-    """Build the RunRequest for a specific run - used both at init and at each playlist advancement."""
-    if run_group.certificate_pem is None:
-        raise CactusOrchestratorError("RunGroup certificate must be set before building a RunRequest")
+def _build_run_request(run: Run, run_group: RunGroup, user: User, cert: Certificate | None) -> RunRequest:
+    """Build the RunRequest for a specific run - used both at init and at each playlist advancement.
+
+    cert must be the Certificate referenced by run.certificate_id (with certificate_pem populated)"""
+    if cert is None or run.certificate_id is None:
+        raise CactusOrchestratorError(f"Run {run.run_id} has no certificate - cannot build a RunRequest")
+    if cert.certificate_id != run.certificate_id:
+        raise CactusOrchestratorError(
+            f"Run {run.run_id} uses certificate {run.certificate_id} but was given {cert.certificate_id}"
+        )
+    cert_pem = cert.certificate_pem.decode()
     test_procedure_id = TestProcedureId(run.testprocedure_id)
     yaml_definition = get_yaml_contents(test_procedure_id)
     return RunRequest(
@@ -105,8 +113,8 @@ def _build_run_request(run: Run, run_group: RunGroup, user: User) -> RunRequest:
             name=run_group.name,
             csip_aus_version=CSIPAusVersion(run_group.csip_aus_version),
             test_certificates=TestCertificates(
-                aggregator=None if run_group.is_device_cert else run_group.certificate_pem.decode(),
-                device=run_group.certificate_pem.decode() if run_group.is_device_cert else None,
+                aggregator=None if cert.is_device_cert else cert_pem,
+                device=cert_pem if cert.is_device_cert else None,
             ),
         ),
         test_config=TestConfig(
@@ -233,12 +241,13 @@ async def spawn_teststack_and_init_run(  # noqa: C901
 
     # get user and the preferred certificate
     user, run_group = await select_user_run_group_or_raise(db.session, user_context, run_group_id, with_cert=True)
-    if run_group.certificate_pem is None or run_group.is_device_cert is None:
+    cert = run_group.certificate
+    if cert is None:
         raise HTTPException(
             HTTPStatus.EXPECTATION_FAILED,
-            detail=f"Your certificate for {run_group_id} {run_group.name} must be generated before making a test run.",
+            detail=f"A certificate must be assigned to {run_group_id} {run_group.name} before making a test run.",
         )
-    client_cert = x509.load_pem_x509_certificate(run_group.certificate_pem)
+    client_cert = x509.load_pem_x509_certificate(cert.certificate_pem)
     if client_cert.not_valid_after_utc < datetime.now(UTC):
         raise HTTPException(
             HTTPStatus.EXPECTATION_FAILED,
@@ -278,8 +287,9 @@ async def spawn_teststack_and_init_run(  # noqa: C901
             run_group_id,
             playlist_execution_id,  # type: ignore  # We know it's not None when is_playlist
             [p for p in procedure_ids],
-            run_group.is_device_cert,
+            cert.is_device_cert,
             start_index,
+            certificate_id=cert.certificate_id,
         )
         # First active run is at start_index
         first_run = runs[start_index]
@@ -289,7 +299,8 @@ async def spawn_teststack_and_init_run(  # noqa: C901
             run_group_id,
             procedure_ids[0],
             RunStatus.provisioning,
-            run_group.is_device_cert,
+            cert.is_device_cert,
+            certificate_id=cert.certificate_id,
         )
         runs = [first_run]
 
@@ -335,7 +346,7 @@ async def spawn_teststack_and_init_run(  # noqa: C901
             base_url=pod_routes.internal_base_url,
             timeout=ClientTimeout(settings.comms_timeout_seconds),
         ) as session:
-            run_request = _build_run_request(first_run, run_group, user)
+            run_request = _build_run_request(first_run, run_group, user, cert)
             init_result = await RunnerClient.initialise(session=session, run_request=run_request)
 
     except (CactusOrchestratorError, RunnerClientError) as exc:
@@ -354,7 +365,8 @@ async def spawn_teststack_and_init_run(  # noqa: C901
         AuditChangeType.RUN_CREATED,
         [run.run_id for run in runs],
         f"Created {f'playlist {playlist_execution_id}' if is_playlist else 'run'} in run group {run_group_id}"
-        f" for {[str(p) for p in procedure_ids]}. Run {first_run.run_id} is {new_run_status.name}",
+        f" for {[str(p) for p in procedure_ids]} using certificate {cert.certificate_id}."
+        f" Run {first_run.run_id} is {new_run_status.name}",
     )
     await db.session.commit()
 
@@ -591,8 +603,7 @@ async def finalise_run_and_teardown_teststack(  # noqa: C901
     For playlist runs, this will finalize the current test and advance to the next test in the playlist.
     The teststack is only torn down after the last test in the playlist completes.
     """
-    # get user (with cert - needed to build the next RunRequest on playlist advancement)
-    user, run_group, run = await select_user_run_group_run_or_raise(db.session, user_context, run_id, with_cert=True)
+    user, run_group, run = await select_user_run_group_run_or_raise(db.session, user_context, run_id)
     logger.info(f"Finalise requested for run {run_id} by user {user.subject_id}")
 
     settings = get_current_settings()
@@ -642,7 +653,13 @@ async def finalise_run_and_teardown_teststack(  # noqa: C901
                     timeout=ClientTimeout(settings.comms_timeout_seconds),
                 ) as session:
                     try:
-                        next_run_request = _build_run_request(next_run, run_group, user)
+                        # The next run uses the certificate it was created with (NOT the run group's current one)
+                        next_cert = (
+                            await select_certificate(db.session, next_run.certificate_id)
+                            if next_run.certificate_id is not None
+                            else None
+                        )
+                        next_run_request = _build_run_request(next_run, run_group, user, next_cert)
                         next_test_result = await RunnerClient.next_test(session, next_run_request)
                         new_status = RunStatus.started if next_test_result.is_started else RunStatus.initialised
                         await update_run_run_status(db.session, next_run.run_id, new_status)
@@ -801,8 +818,12 @@ async def update_playlist(
         current_active_run.is_device_cert,
         current_active_run.pod_name,
         current_active_run.playlist_order + 1,
+        certificate_id=current_active_run.certificate_id,  # NOT the run group's current assignment
     )
-    audit_description = f"Replaced upcoming tests in playlist {run.playlist_execution_id}"
+    audit_description = (
+        f"Replaced upcoming tests in playlist {run.playlist_execution_id}"
+        f" (using certificate {current_active_run.certificate_id})"
+    )
     if deleted_run_ids:
         audit_log(db.session, user.user_id, AuditChangeType.RUN_DELETED, deleted_run_ids, audit_description)
     if inserted_runs:

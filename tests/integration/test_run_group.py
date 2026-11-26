@@ -11,7 +11,7 @@ from cactus_test_definitions import CSIPAusVersion
 from sqlalchemy import func, select
 
 from cactus_orchestrator.filestore import run_report_exists, run_zip_exists
-from cactus_orchestrator.model import AuditChangeType, Run, RunGroup
+from cactus_orchestrator.model import AuditChangeType, Certificate, Run, RunGroup
 from cactus_orchestrator.settings import get_current_settings
 from tests.utils.audit import assert_audit_logs
 from tests.utils.filestore import load_file_store_for_test
@@ -43,8 +43,10 @@ async def test_get_groups_paginated(client, pg_base_config, valid_jwt_user1):
     assert items[1].is_device_cert is None
     assert items[0].certificate_created_at == datetime(2023, 1, 1, 0, 1, 0, tzinfo=UTC)
     assert items[1].certificate_created_at is None
-    assert items[0].certificate_id == 11
-    assert items[1].certificate_id == 0
+    assert items[0].assigned_certificate_id == 1
+    assert items[1].assigned_certificate_id is None
+    assert items[0].certificate_name == "cert-1"
+    assert items[1].certificate_name is None
 
 
 @pytest.mark.parametrize(
@@ -138,6 +140,8 @@ async def test_create_group(client, pg_base_config, valid_jwt_user1, version, is
         assert result.run_group_id > 0
         assert result.csip_aus_version == version
         assert result.is_static_uri is is_static_uri
+        assert result.assigned_certificate_id is None
+        assert result.is_device_cert is None
         assert_nowish(result.created_at)
 
         async with generate_async_session(pg_base_config) as session:
@@ -205,6 +209,7 @@ async def test_delete_group(
     async with generate_async_session(pg_base_config) as session:
         after_run_group_count = (await session.execute(select(func.count()).select_from(RunGroup))).scalar_one()
         after_run_count = (await session.execute(select(func.count()).select_from(Run))).scalar_one()
+        after_cert_count = (await session.execute(select(func.count()).select_from(Certificate))).scalar_one()
         remaining_run_ids = (
             (await session.execute(select(Run.run_id).where(Run.run_id.in_(expected_run_ids)))).scalars().all()
         )
@@ -232,6 +237,8 @@ async def test_delete_group(
 
         mock_destroy_pod_resources.assert_not_awaited()
         await assert_audit_logs(pg_base_config, [])
+
+    assert after_cert_count == 3, "Certificates live independently of run groups - they should never be deleted"
 
     # No changes to the file store
     for run_id in run_ids_with_storage:

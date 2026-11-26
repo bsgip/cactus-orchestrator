@@ -7,12 +7,13 @@ from assertical.asserts.type import assert_dict_type, assert_list_type
 from assertical.fixtures.postgres import generate_async_session
 from cactus_test_definitions import CSIPAusVersion
 from cactus_test_definitions.client import TestProcedureId, get_all_test_procedures
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import IntegrityError, NoResultFound
 
 from cactus_orchestrator.auth import UserContext
 from cactus_orchestrator.crud import (
     ProcedureRunAggregated,
+    count_certificates_for_user,
     count_compliance_requests,
     count_group_runs_for_procedure,
     count_playlist_runs,
@@ -30,8 +31,12 @@ from cactus_orchestrator.crud import (
     insert_run_group,
     insert_user,
     safe_delete_compliance_request,
+    select_active_run_ids_for_certificate,
     select_active_runs_for_user,
     select_admin_stats,
+    select_certificate,
+    select_certificate_for_user,
+    select_certificates_for_user,
     select_compliance_request,
     select_compliance_request_finalisation,
     select_compliance_requests,
@@ -58,6 +63,7 @@ from cactus_orchestrator.crud import (
     select_user_from_run_group,
     select_user_run,
     select_users,
+    unlink_runs_from_certificate,
     update_compliance_request,
     update_run_as_finalised,
     update_run_run_status,
@@ -326,11 +332,15 @@ async def test_select_run_with_run_group_for_user(
                 assert run.run_group_id == expected_run_group_id
                 assert run.run_group.run_group_id == expected_run_group_id
 
-                if with_cert:
-                    assert run.run_group.certificate_pem == expected_cert_bytes
+                if expected_cert_bytes is None:
+                    assert run.run_group.certificate is None
+                elif with_cert:
+                    assert run.run_group.certificate is not None
+                    assert run.run_group.certificate.certificate_pem == expected_cert_bytes
                 else:
+                    assert run.run_group.certificate is not None
                     with pytest.raises(Exception):  # noqa: B017
-                        _ = run.run_group.certificate_pem
+                        _ = run.run_group.certificate.certificate_pem
 
 
 @pytest.mark.parametrize("with_cert", [True, False])
@@ -346,34 +356,107 @@ async def test_select_run_group_user(pg_base_config, with_cert: bool):
         run_group_1 = await select_run_group_for_user(session, 1, 1, with_cert)
         assert isinstance(run_group_1, RunGroup)
         assert run_group_1.run_group_id == 1
-        assert run_group_1.is_device_cert is True
-        assert run_group_1.certificate_id == 11
+        assert run_group_1.certificate_id == 1
+        assert run_group_1.certificate is not None
+        assert run_group_1.certificate.is_device_cert is True
+        assert run_group_1.certificate.generation == 11
         run_group_2 = await select_run_group_for_user(session, 1, 2, with_cert)
         assert isinstance(run_group_2, RunGroup)
         assert run_group_2.run_group_id == 2
-        assert run_group_2.is_device_cert is None
+        assert run_group_2.certificate_id is None
+        assert run_group_2.certificate is None
         run_group_3 = await select_run_group_for_user(session, 2, 3, with_cert)
         assert isinstance(run_group_3, RunGroup)
         assert run_group_3.run_group_id == 3
-        assert run_group_3.is_device_cert is False
-        assert run_group_3.certificate_id == 33
-        run_group_3 = await select_run_group_for_user(session, 2, 3, with_cert)
-        assert isinstance(run_group_3, RunGroup)
-        assert run_group_3.run_group_id == 3
-        assert run_group_3.is_device_cert is False
-        assert run_group_3.certificate_id == 33
+        assert run_group_3.certificate_id == 2
+        assert run_group_3.certificate is not None
+        assert run_group_3.certificate.is_device_cert is False
+        assert run_group_3.certificate.generation == 33
 
         if with_cert:
-            assert run_group_1.certificate_pem == bytes([1])
-            assert run_group_2.certificate_pem is None
-            assert run_group_3.certificate_pem == bytes([3])
+            assert run_group_1.certificate.certificate_pem == bytes([1])
+            assert run_group_3.certificate.certificate_pem == bytes([3])
         else:
             with pytest.raises(Exception):  # noqa: B017
-                _ = run_group_1.certificate_pem
+                _ = run_group_1.certificate.certificate_pem
             with pytest.raises(Exception):  # noqa: B017
-                _ = run_group_2.certificate_pem
-            with pytest.raises(Exception):  # noqa: B017
-                _ = run_group_3.certificate_pem
+                _ = run_group_3.certificate.certificate_pem
+
+
+@pytest.mark.asyncio
+async def test_select_certificates_for_user(pg_base_config):
+    async with generate_async_session(pg_base_config) as session:
+        certs = await select_certificates_for_user(session, 1)
+        assert [c.certificate_id for c in certs] == [1, 3]
+        assert certs[0].certificate_pem == bytes([1])
+        assert [rg.run_group_id for rg in certs[0].run_groups] == [1]
+        assert certs[1].run_groups == []
+        assert await count_certificates_for_user(session, 1) == 2
+
+        page = await select_certificates_for_user(session, 1, offset=1, limit=5)
+        assert [c.certificate_id for c in page] == [3]
+
+        assert [c.certificate_id for c in await select_certificates_for_user(session, 2)] == [2]
+        assert await select_certificates_for_user(session, 3) == []
+        assert await count_certificates_for_user(session, 3) == 0
+
+
+@pytest.mark.parametrize("for_update", [True, False])
+@pytest.mark.asyncio
+async def test_select_certificate_for_user(pg_base_config, for_update: bool):
+    async with generate_async_session(pg_base_config) as session:
+        assert await select_certificate_for_user(session, 2, 1, for_update) is None, "Wrong user"
+        assert await select_certificate_for_user(session, 1, 99, for_update) is None, "Bad ID"
+
+        cert = await select_certificate_for_user(session, 1, 1, for_update)
+        assert cert is not None
+        assert cert.name == "cert-1"
+        assert cert.certificate_pem == bytes([1])
+        assert [rg.run_group_id for rg in cert.run_groups] == [1]
+
+
+@pytest.mark.asyncio
+async def test_select_certificate(pg_base_config):
+    async with generate_async_session(pg_base_config) as session:
+        assert await select_certificate(session, 99) is None
+        cert = await select_certificate(session, 2)
+        assert cert is not None
+        assert cert.user_id == 2
+        assert cert.certificate_pem == bytes([3])
+
+
+async def link_runs_to_certificate(pg_config, run_ids: list[int], certificate_id: int) -> None:
+    async with generate_async_session(pg_config) as session:
+        await session.execute(update(Run).where(Run.run_id.in_(run_ids)).values(certificate_id=certificate_id))
+        await session.commit()
+
+
+@pytest.mark.asyncio
+async def test_select_active_run_ids_for_certificate(pg_base_config):
+    # Runs 1, 5, 8 are active, run 2 is finalised (base_config)
+    await link_runs_to_certificate(pg_base_config, [1, 2, 8], 1)
+    await link_runs_to_certificate(pg_base_config, [5], 3)
+
+    async with generate_async_session(pg_base_config) as session:
+        assert await select_active_run_ids_for_certificate(session, 1) == [1, 8]
+        assert await select_active_run_ids_for_certificate(session, 3) == [5]
+        assert await select_active_run_ids_for_certificate(session, 2) == []
+        assert await select_active_run_ids_for_certificate(session, 99) == []
+
+
+@pytest.mark.asyncio
+async def test_unlink_runs_from_certificate(pg_base_config):
+    await link_runs_to_certificate(pg_base_config, [1, 2, 8], 1)
+    await link_runs_to_certificate(pg_base_config, [5], 3)
+
+    async with generate_async_session(pg_base_config) as session:
+        assert await unlink_runs_from_certificate(session, 1) == [1, 2, 8]
+        assert await unlink_runs_from_certificate(session, 99) == []
+        await session.commit()
+
+    async with generate_async_session(pg_base_config) as session:
+        linked = dict((await session.execute(select(Run.run_id, Run.certificate_id))).all())
+        assert {run_id: cert_id for run_id, cert_id in linked.items() if cert_id is not None} == {5: 3}
 
 
 @pytest.mark.asyncio
@@ -440,8 +523,9 @@ async def test_insert_run_for_run_group(pg_base_config):
 
     # Act
     async with generate_async_session(pg_base_config) as session:
-        run = await insert_run_for_run_group(session, 2, "ALL_20", RunStatus.initialised, True)
+        run = await insert_run_for_run_group(session, 2, "ALL_20", RunStatus.initialised, True, certificate_id=1)
         assert isinstance(run, Run)
+        assert run.certificate_id == 1
         run_id = run.run_id
         await session.commit()
 
@@ -975,6 +1059,7 @@ async def test_insert_playlist_runs(pg_base_config):
             playlist_execution_id=playlist_execution_id,
             test_procedure_ids=test_procedure_ids,
             is_device_cert=True,
+            certificate_id=1,
         )
 
         assert len(runs) == 3
@@ -986,6 +1071,7 @@ async def test_insert_playlist_runs(pg_base_config):
         assert all(r.pod_name is None for r in runs)
         assert [r.testprocedure_id for r in runs] == test_procedure_ids
         assert all(r.is_device_cert is True for r in runs)
+        assert all(r.certificate_id == 1 for r in runs)
 
         await session.commit()
 
@@ -1002,6 +1088,7 @@ async def test_select_playlist_runs(pg_base_config):
             playlist_execution_id=playlist_execution_id,
             test_procedure_ids=["ALL-03", "ALL-02", "ALL-01"],  # Insert in mixed order
             is_device_cert=False,
+            certificate_id=1,
         )
         await session.commit()
 
@@ -1025,6 +1112,7 @@ async def test_count_playlist_runs(pg_base_config):
             playlist_execution_id=playlist_execution_id,
             test_procedure_ids=["ALL-01", "ALL-02", "ALL-03", "ALL-04"],
             is_device_cert=False,
+            certificate_id=1,
         )
         await session.commit()
 
@@ -1045,6 +1133,7 @@ async def test_select_next_playlist_run(pg_base_config):
             playlist_execution_id=playlist_execution_id,
             test_procedure_ids=["ALL-01", "ALL-02", "ALL-03"],
             is_device_cert=False,
+            certificate_id=1,
         )
         # Access run_ids within session context
         run_ids = [r.run_id for r in runs]
@@ -1084,6 +1173,7 @@ async def test_select_next_playlist_run_tolerates_gaps(pg_base_config):
             playlist_execution_id=playlist_execution_id,
             test_procedure_ids=["ALL-01"],
             is_device_cert=False,
+            certificate_id=1,
         )
         # Simulate a tail mutation that replaced the old order-1 row with a fresh row at order 3 (gap at 1, 2)
         tail_runs = await insert_playlist_tail_runs(
@@ -1092,6 +1182,7 @@ async def test_select_next_playlist_run_tolerates_gaps(pg_base_config):
             playlist_execution_id=playlist_execution_id,
             test_procedure_ids=["ALL-05"],
             is_device_cert=False,
+            certificate_id=1,
             pod_name="pod-1",
             start_order=3,
         )
@@ -1116,6 +1207,7 @@ async def test_select_playlist_runs_for_update(pg_base_config):
             playlist_execution_id=playlist_execution_id,
             test_procedure_ids=["ALL-02", "ALL-01"],
             is_device_cert=False,
+            certificate_id=1,
         )
         await session.commit()
 
@@ -1135,6 +1227,7 @@ async def test_delete_upcoming_playlist_runs(pg_base_config):
             playlist_execution_id=playlist_execution_id,
             test_procedure_ids=["ALL-01", "ALL-02", "ALL-03"],
             is_device_cert=False,
+            certificate_id=1,
         )
         # Mark the active run (order 0) as started - it's the currently-running test
         active_run_id = runs[0].run_id
@@ -1168,6 +1261,7 @@ async def test_delete_upcoming_playlist_runs_active_still_initialised(pg_base_co
             playlist_execution_id=playlist_execution_id,
             test_procedure_ids=["ALL-01", "ALL-02", "ALL-03"],
             is_device_cert=False,
+            certificate_id=1,
             start_index=1,  # order 0 -> skipped, order 1 -> provisioning, order 2 -> initialised
         )
         active_run_id = runs[1].run_id
@@ -1196,6 +1290,7 @@ async def test_insert_playlist_tail_runs(pg_base_config):
             playlist_execution_id=playlist_execution_id,
             test_procedure_ids=["ALL-02", "ALL-03"],
             is_device_cert=True,
+            certificate_id=1,
             pod_name="pod-42",
             start_order=1,
         )
@@ -1205,6 +1300,7 @@ async def test_insert_playlist_tail_runs(pg_base_config):
         assert all(r.run_status == RunStatus.initialised for r in runs)
         assert all(r.pod_name == "pod-42" for r in runs)
         assert all(r.is_device_cert is True for r in runs)
+        assert all(r.certificate_id == 1 for r in runs)
         assert all(r.playlist_execution_id == playlist_execution_id for r in runs)
         await session.commit()
 
@@ -1220,10 +1316,13 @@ async def test_select_playlist_position_label(pg_base_config):
             playlist_execution_id=playlist_execution_id,
             test_procedure_ids=["ALL-01", "ALL-02", "ALL-03"],
             is_device_cert=False,
+            certificate_id=1,
         )
         first_run_id = runs[0].run_id
         second_run_id = runs[1].run_id
-        single_run = await insert_run_for_run_group(session, 1, "ALL-01", RunStatus.provisioning, False)
+        single_run = await insert_run_for_run_group(
+            session, 1, "ALL-01", RunStatus.provisioning, False, certificate_id=1
+        )
         single_run_id = single_run.run_id
         await session.commit()
 
@@ -1246,6 +1345,7 @@ async def test_playlist_backward_compatibility_single_runs(pg_base_config):
             testprocedure_id="ALL-01",
             run_status=RunStatus.initialised,
             is_device_cert=True,
+            certificate_id=1,
         )
         run_id = run.run_id
         await session.commit()

@@ -1,11 +1,19 @@
 import io
 import logging
+import re
 import zipfile
 from datetime import UTC, datetime
 from http import HTTPStatus
 from typing import Annotated
 
-from cactus_schema.orchestrator import GenerateClientCertificateRequest, uri
+from cactus_schema.orchestrator import (
+    CertificateRequest,
+    CertificateResponse,
+    Pagination,
+    RunGroupCertificateAssignRequest,
+    RunGroupResponse,
+    uri,
+)
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.serialization import pkcs12
@@ -13,12 +21,25 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
 from fastapi_async_sqlalchemy import db
 
-from cactus_orchestrator.api.common import select_user_run_group_or_raise, select_user_run_groups_or_raise
+from cactus_orchestrator.api.common import (
+    select_user_certificate_or_raise,
+    select_user_or_raise,
+    select_user_run_group_or_raise,
+)
+from cactus_orchestrator.api.pagination import PageParams, build_page
+from cactus_orchestrator.api.run_group import map_group_to_group_response
 from cactus_orchestrator.audit import audit_log
 from cactus_orchestrator.auth import AuthPerm, UserContext, jwt_validator
 from cactus_orchestrator.certificate.create import generate_aggregator_certificate, generate_device_certificate
 from cactus_orchestrator.certificate.fetch import fetch_certificate_key_pair, fetch_certificate_only, fetch_pem_bundle
-from cactus_orchestrator.model import AuditChangeType, User
+from cactus_orchestrator.crud import (
+    count_certificates_for_user,
+    select_active_run_ids_for_certificate,
+    select_certificates_for_user,
+    select_run_group_counts_for_user,
+    unlink_runs_from_certificate,
+)
+from cactus_orchestrator.model import AuditChangeType, Certificate, RunGroup, User
 from cactus_orchestrator.settings import CactusOrchestratorSettings, get_current_settings
 
 logger = logging.getLogger(__name__)
@@ -33,8 +54,53 @@ MEDIA_TYPE_PEM_KEY = "application/pkcs8"
 
 
 def _filename_safe(value: str) -> str:
-    """csip_aus_version values can contain a slash (e.g. 'v1.3-beta/storage') - flatten it for use in a filename."""
-    return value.replace("/", "-")
+    """Certificate names are user supplied - flatten anything unusual so it's safe to use in a filename/header."""
+    return re.sub(r"[^A-Za-z0-9._-]", "_", value)
+
+
+def _cert_label(is_device_cert: bool) -> str:
+    return "Device" if is_device_cert else "Aggregator"
+
+
+def _cert_identifier(certificate: Certificate) -> str:
+    """Unique identifier (encoded into the EE certificate hwSerialNum) for the current generation of certificate"""
+    return f"c-{certificate.certificate_id}-{_cert_label(certificate.is_device_cert)}-{certificate.generation}"
+
+
+def _validate_name(name: str) -> str:
+    name = name.strip()
+    if not name:
+        raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail="Certificate name must not be empty.")
+    return name
+
+
+def _map_certificate_response(certificate: Certificate) -> CertificateResponse:
+    """Requires Certificate.certificate_pem and Certificate.run_groups to be populated"""
+    client_cert = x509.load_pem_x509_certificate(certificate.certificate_pem)
+    return CertificateResponse(
+        certificate_id=certificate.certificate_id,
+        name=certificate.name,
+        is_device_cert=certificate.is_device_cert,
+        created_at=certificate.created_at,
+        generated_at=certificate.generated_at,
+        expires_at=client_cert.not_valid_after_utc,
+        generation=certificate.generation,
+        run_group_ids=sorted(rg.run_group_id for rg in certificate.run_groups),
+    )
+
+
+def _certificate_zip_response(certificate: Certificate, zip_bytes: bytes, status_code: HTTPStatus) -> Response:
+    label = _cert_label(certificate.is_device_cert)
+    filename = f"{_filename_safe(certificate.name)}-{label}-certificates-{certificate.generation}.zip"
+    return Response(
+        status_code=status_code,
+        content=zip_bytes,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f"attachment; filename={filename}",
+            "Location": uri.Certificate.format(certificate_id=certificate.certificate_id),
+        },
+    )
 
 
 def _chain_certs_for(settings: CactusOrchestratorSettings, is_device_cert: bool) -> list[x509.Certificate]:
@@ -53,12 +119,12 @@ def _chain_certs_for(settings: CactusOrchestratorSettings, is_device_cert: bool)
     return [ica_cert, fetch_certificate_only(settings.cert_agg_pca_path)]
 
 
-def _issue_run_group_certificate(
+def _issue_certificate(
     settings: CactusOrchestratorSettings, user: User, is_device_cert: bool, cert_identifier: str
 ) -> tuple[bytes, bytes]:
-    """Mints a new EE certificate for a run group on the appropriate chain.
+    """Mints a new EE certificate on the appropriate chain.
 
-    Returns (client_cert_pem, zip_bytes): the EE certificate PEM to persist on the run group, and the downloadable ZIP
+    Returns (client_cert_pem, zip_bytes): the EE certificate PEM to persist on the Certificate, and the downloadable ZIP
     bundle (see _build_certificate_zip).
     """
     if is_device_cert:
@@ -147,35 +213,86 @@ async def fetch_utility_server_certificates(
     )
 
 
+@router.get(uri.CertificateList, status_code=HTTPStatus.OK)
+async def get_certificates_paginated(
+    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.user_all}))],
+    page_params: Annotated[PageParams, Depends()],
+) -> Pagination[CertificateResponse]:
+    """Lists the certificates owned by the current user (and which run groups they are assigned to)"""
+    user = await select_user_or_raise(db.session, user_context)
+    total = await count_certificates_for_user(db.session, user.user_id)
+    certificates = await select_certificates_for_user(
+        db.session, user.user_id, offset=page_params.offset, limit=page_params.limit
+    )
+    return build_page([_map_certificate_response(c) for c in certificates], total, page_params)
+
+
+@router.post(
+    uri.CertificateList,
+    status_code=HTTPStatus.CREATED,
+    response_class=Response,
+)
+async def create_certificate(
+    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.user_all}))],
+    body: CertificateRequest,
+) -> Response:
+    """Generates a brand new certificate for the current user (not assigned to any run groups).
+
+    Will return a ZIP stream of bytes (see _build_certificate_zip). The Location header will reference the new
+    certificate. The private key is NOT stored - this (and regeneration) are the only opportunities to obtain it.
+    """
+    user = await select_user_or_raise(db.session, user_context)
+    name = _validate_name(body.name)
+
+    # Insert first (with a placeholder PEM) so the certificate_id can be encoded into the certificate identifier
+    certificate = Certificate(
+        user_id=user.user_id,
+        name=name,
+        is_device_cert=body.is_device_cert,
+        certificate_pem=b"",
+        generated_at=datetime.now(UTC),
+        generation=1,
+    )
+    db.session.add(certificate)
+    await db.session.flush()
+
+    identifier = _cert_identifier(certificate)
+    client_cert_pem, zip_bytes = _issue_certificate(
+        get_current_settings(), user, body.is_device_cert, cert_identifier=identifier
+    )
+    certificate.certificate_pem = client_cert_pem
+
+    audit_log(
+        db.session,
+        user.user_id,
+        AuditChangeType.CERTIFICATE_CREATED,
+        certificate.certificate_id,
+        f"Created {_cert_label(body.is_device_cert)} certificate {identifier} {name!r}",
+    )
+    await db.session.commit()
+
+    return _certificate_zip_response(certificate, zip_bytes, HTTPStatus.CREATED)
+
+
 @router.get(
-    uri.CertificateRunGroup,
+    uri.Certificate,
     status_code=HTTPStatus.OK,
     response_class=Response,
     responses={HTTPStatus.OK: {"content": {MEDIA_TYPE_PEM_CRT: {}}}},
 )
-async def fetch_client_certificate(
+async def fetch_certificate(
     user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.user_all}))],
-    run_group_id: int,
+    certificate_id: int,
 ) -> Response:
-    """Fetches the most recent run group's certificate as a raw binary response. This will also contain the intermediate
-    CA signing chain (device or aggregator depending on the stored certificate). Certificate will be PEM encoded."""
-    user, run_group = await select_user_run_group_or_raise(db.session, user_context, run_group_id, with_cert=True)
+    """Fetches the certificate as a raw binary response. This will also contain the intermediate CA signing chain
+    (device or aggregator depending on the certificate). Certificate will be PEM encoded."""
+    _, certificate = await select_user_certificate_or_raise(db.session, user_context, certificate_id)
 
-    if run_group.certificate_pem is None or run_group.is_device_cert is None:
-        logger.info(f"user {user.user_id} run_group {run_group_id} does NOT have a certificate yet.")
-        return Response(
-            status_code=HTTPStatus.BAD_REQUEST,
-            content=f"No certificate stored for run group {run_group_id}. Generate a certificate first.",
-            media_type="text/plain",
-        )
-
-    # cert downloads include the intermediate CA signing chain for the relevant cert type
-    settings = get_current_settings()
-    chain_certs = _chain_certs_for(settings, run_group.is_device_cert)
-    client_cert = x509.load_pem_x509_certificate(run_group.certificate_pem)
+    chain_certs = _chain_certs_for(get_current_settings(), certificate.is_device_cert)
+    client_cert = x509.load_pem_x509_certificate(certificate.certificate_pem)
 
     # We just concatenate our PEM encodings together
-    filename = f"{run_group.name}-fullchain-{run_group.certificate_id}.pem"
+    filename = f"{_filename_safe(certificate.name)}-fullchain-{certificate.generation}.pem"
     return Response(
         status_code=HTTPStatus.OK,
         content=client_cert.public_bytes(serialization.Encoding.PEM)
@@ -186,127 +303,148 @@ async def fetch_client_certificate(
 
 
 @router.put(
-    uri.CertificateRunGroups,
+    uri.Certificate,
     status_code=HTTPStatus.OK,
     response_class=Response,
 )
-async def generate_shared_aggregator_certificate(
+async def regenerate_certificate(
     user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.user_all}))],
+    certificate_id: int,
 ) -> Response:
-    """Generates an aggregator certificate and assigns it to all the users run groups
-    replacing all existing certificates.
+    """Regenerates an existing certificate (same name/type), replacing the existing certificate for every run group it
+    is assigned to.
 
     Will return a ZIP stream of bytes (see _build_certificate_zip).
     """
-
-    # Get the user / run_groups - lock the rows so concurrent generation serialises the certificate_id counter
-    user, run_groups = await select_user_run_groups_or_raise(db.session, user_context, for_update=True)
-
-    now = datetime.now(UTC)
-
-    # Determine the certificate counter
-    # note: different run groups might have different cert counters so bring them all to the
-    # level of the run group with the maximum certificate counter
-    max_cert_counter = max([run_group.certificate_id for run_group in run_groups])
-    cert_counter = max_cert_counter + 1
-
-    # Determine csip aus version identifier - run groups may differ, so collapse to a single value or "MIXED"
-    csip_aus_versions = {run_group.csip_aus_version for run_group in run_groups}
-    csip_aus_version = csip_aus_versions.pop() if len(csip_aus_versions) == 1 else "MIXED"
-
-    # Generate the aggregator certificate
-    cert_label = "Aggregator"
-    run_group_name = "ALL"
-    run_group_id = run_group_name
-    identifier = f"rg-{run_group_id}-{cert_label}-{cert_counter}"
-    settings = get_current_settings()
-    client_cert_pem, zip_bytes = _issue_run_group_certificate(
-        settings, user, is_device_cert=False, cert_identifier=identifier
+    # Lock the row so concurrent regeneration serialises the generation counter
+    user, certificate = await select_user_certificate_or_raise(
+        db.session, user_context, certificate_id, for_update=True
     )
 
-    # update the certificate details for each run group
-    for run_group in run_groups:
-        run_group.certificate_generated_at = now
-        run_group.is_device_cert = False  # Must be an aggregator certificate
-        run_group.certificate_pem = client_cert_pem
-        run_group.certificate_id = cert_counter
+    certificate.generation = certificate.generation + 1
+    identifier = _cert_identifier(certificate)
+    client_cert_pem, zip_bytes = _issue_certificate(
+        get_current_settings(), user, certificate.is_device_cert, cert_identifier=identifier
+    )
+    certificate.certificate_pem = client_cert_pem
+    certificate.generated_at = datetime.now(UTC)
+
     audit_log(
         db.session,
         user.user_id,
-        AuditChangeType.RUN_GROUP_CERTIFICATE_GENERATED,
-        [run_group.run_group_id for run_group in run_groups],
-        f"Generated shared {cert_label} certificate {identifier}",
+        AuditChangeType.CERTIFICATE_REGENERATED,
+        certificate.certificate_id,
+        f"Regenerated {_cert_label(certificate.is_device_cert)} certificate {identifier}",
     )
     await db.session.commit()
 
-    return Response(
-        status_code=HTTPStatus.OK,
-        content=zip_bytes,
-        media_type="application/zip",
-        headers={
-            "Content-Disposition": (
-                f"attachment; "
-                f"filename={run_group_name}-{cert_label}-certificates-{cert_counter}-{_filename_safe(csip_aus_version)}.zip"
-            )
-        },
+    return _certificate_zip_response(certificate, zip_bytes, HTTPStatus.OK)
+
+
+@router.delete(uri.Certificate, status_code=HTTPStatus.NO_CONTENT)
+async def delete_certificate(
+    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.user_all}))],
+    certificate_id: int,
+) -> None:
+    """Deletes a certificate - any run groups it's assigned to will be left without a certificate and any (finalised)
+    runs that used it will no longer reference it. Will fail with CONFLICT if any active runs are using it."""
+    # Lock the row - run creation (FK on run.certificate_id) will block behind this until we commit/rollback
+    user, certificate = await select_user_certificate_or_raise(
+        db.session, user_context, certificate_id, for_update=True
+    )
+
+    active_run_ids = await select_active_run_ids_for_certificate(db.session, certificate_id)
+    if active_run_ids:
+        raise HTTPException(
+            status_code=HTTPStatus.CONFLICT,
+            detail=f"Cannot delete certificate {certificate_id} while it's in use by active run(s) "
+            f"{', '.join(str(i) for i in active_run_ids)}. Finalise those runs first.",
+        )
+
+    # Historical runs - the FK is ON DELETE SET NULL but it's done explicitly so the change can be audited
+    unlinked_run_ids = await unlink_runs_from_certificate(db.session, certificate_id)
+    if unlinked_run_ids:
+        audit_log(
+            db.session,
+            user.user_id,
+            AuditChangeType.RUN_UPDATED,
+            unlinked_run_ids,
+            f"Unlinked certificate {certificate_id} from finalised runs (certificate deleted)",
+        )
+
+    run_group_ids = sorted(rg.run_group_id for rg in certificate.run_groups)
+    for run_group in certificate.run_groups:
+        run_group.certificate_id = None
+    if run_group_ids:
+        await db.session.flush()  # Ensure the FK references are cleared before deleting
+        audit_log(
+            db.session,
+            user.user_id,
+            AuditChangeType.RUN_GROUP_CERTIFICATE_ASSIGNED,
+            run_group_ids,
+            f"Unassigned certificate {certificate_id} (certificate deleted)",
+        )
+
+    await db.session.delete(certificate)
+    audit_log(
+        db.session,
+        user.user_id,
+        AuditChangeType.CERTIFICATE_DELETED,
+        certificate_id,
+        f"Deleted certificate {certificate_id} {certificate.name!r}",
+    )
+    await db.session.commit()
+
+
+async def _set_run_group_certificate(
+    user: User, run_group: RunGroup, certificate: Certificate | None
+) -> RunGroupResponse:
+    """Updates the assigned certificate for run_group, commits and returns the updated RunGroupResponse."""
+    old_certificate_id = run_group.certificate_id
+    new_certificate_id = certificate.certificate_id if certificate else None
+    if old_certificate_id != new_certificate_id:
+        # Existing runs keep the certificate they were created with - this only affects runs created from now on
+        run_group.certificate = certificate
+        audit_log(
+            db.session,
+            user.user_id,
+            AuditChangeType.RUN_GROUP_CERTIFICATE_ASSIGNED,
+            run_group.run_group_id,
+            f"Certificate assignment {old_certificate_id} -> {new_certificate_id}",
+        )
+    await db.session.commit()
+
+    run_counts = await select_run_group_counts_for_user(db.session, [run_group.run_group_id])
+    settings = get_current_settings()
+    return map_group_to_group_response(
+        run_group, settings.cactus_fqdn, settings.envoy_prefix, run_counts.get(run_group.run_group_id, 0)
     )
 
 
-@router.put(
-    uri.CertificateRunGroup,
-    status_code=HTTPStatus.OK,
-    response_class=Response,
-)
-async def generate_client_certificate(
+@router.put(uri.RunGroupCertificate, status_code=HTTPStatus.OK)
+async def assign_run_group_certificate(
     user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.user_all}))],
     run_group_id: int,
-    body: GenerateClientCertificateRequest,
-) -> Response:
-    """Generates a user's certificate based on GenerateClientCertificateRequest. Replacing any existing certificate
-    details.
-
-    Will return a ZIP stream of bytes (see _build_certificate_zip).
-    """
-
-    cert_label = "Device" if body.is_device_cert else "Aggregator"
-
-    # Get the user / run_group - lock the row so concurrent generation serialises the certificate_id counter
-    user, run_group = await select_user_run_group_or_raise(
-        db.session, user_context, run_group_id, with_cert=True, for_update=True
-    )
-
-    now = datetime.now(UTC)
-
-    # Generate the cert
-    cert_counter = run_group.certificate_id + 1
-    identifier = f"rg-{run_group_id}-{cert_label}-{cert_counter}"
-    settings = get_current_settings()
-    client_cert_pem, zip_bytes = _issue_run_group_certificate(
-        settings, user, body.is_device_cert, cert_identifier=identifier
-    )
-
-    # update the certificate details on the run group
-    run_group.certificate_generated_at = now
-    run_group.is_device_cert = body.is_device_cert
-    run_group.certificate_pem = client_cert_pem
-    run_group.certificate_id = cert_counter
-    audit_log(
+    body: RunGroupCertificateAssignRequest,
+) -> RunGroupResponse:
+    """Assigns an existing certificate (owned by the same user) to a run group, replacing any existing assignment.
+    Existing runs (including in progress playlists) will continue to use the certificate they were created with."""
+    user, run_group = await select_user_run_group_or_raise(db.session, user_context, run_group_id)
+    _, certificate = await select_user_certificate_or_raise(
         db.session,
-        user.user_id,
-        AuditChangeType.RUN_GROUP_CERTIFICATE_GENERATED,
-        run_group_id,
-        f"Generated {cert_label} certificate {identifier}",
+        user_context,
+        body.certificate_id,
+        for_update=True,  # Lock - prevents a concurrent delete
     )
-    await db.session.commit()
+    return await _set_run_group_certificate(user, run_group, certificate)
 
-    return Response(
-        status_code=HTTPStatus.OK,
-        content=zip_bytes,
-        media_type="application/zip",
-        headers={
-            "Content-Disposition": (
-                f"attachment; filename={run_group.name}-{cert_label}-certificates-{cert_counter}"
-                f"-{_filename_safe(run_group.csip_aus_version)}.zip"
-            )
-        },
-    )
+
+@router.delete(uri.RunGroupCertificate, status_code=HTTPStatus.OK)
+async def unassign_run_group_certificate(
+    user_context: Annotated[UserContext, Depends(jwt_validator.verify_jwt_and_check_perms({AuthPerm.user_all}))],
+    run_group_id: int,
+) -> RunGroupResponse:
+    """Removes any certificate assignment from a run group (the certificate itself is NOT deleted). Existing runs
+    (including in progress playlists) will continue to use the certificate they were created with."""
+    user, run_group = await select_user_run_group_or_raise(db.session, user_context, run_group_id)
+    return await _set_run_group_certificate(user, run_group, None)

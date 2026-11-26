@@ -5,6 +5,7 @@ from sqlalchemy import (
     BOOLEAN,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     LargeBinary,
@@ -48,13 +49,54 @@ class User(Base):
         Integer, nullable=False, default=0
     )  # 0 is the only reserved PEN so can be used as the NULL value.
 
-    run_groups: Mapped[list["RunGroup"]] = relationship(lazy="raise", back_populates="user")
+    run_groups: Mapped[list["RunGroup"]] = relationship(
+        lazy="raise", back_populates="user", foreign_keys="RunGroup.user_id"
+    )
+    certificates: Mapped[list["Certificate"]] = relationship(lazy="raise")
+
+
+class Certificate(Base):
+    """A TLS client certificate (device or aggregator) owned by a User. A single Certificate can be assigned to many
+    RunGroups (owned by the same User) to allow a client to reuse the same certificate across multiple groups.
+
+    Only the public certificate is stored - the private key is only ever returned to the user at generation time."""
+
+    __tablename__ = "certificate"
+    __table_args__ = (
+        UniqueConstraint("id", "user_id", name="certificate_id_user_id_key"),  # Target for RunGroup's composite FK
+        Index("certificate_user_id_idx", "user_id", "id"),
+    )
+
+    certificate_id: Mapped[int] = mapped_column(name="id", primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("user_.id"), nullable=False)  # User who owns this certificate
+
+    name: Mapped[str] = mapped_column(String, nullable=False)  # descriptive name
+    is_device_cert: Mapped[bool] = mapped_column(
+        BOOLEAN, nullable=False
+    )  # If True - certificate_pem represents a device certificate. Otherwise it's an aggregator certificate
+    certificate_pem: Mapped[bytes] = mapped_column(
+        LargeBinary, nullable=False, deferred=True
+    )  # PEM encoded EE certificate (no chain)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    generated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )  # When certificate_pem was most recently (re)generated
+    generation: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default="0"
+    )  # Monotonic regeneration counter; regeneration locks the row (SELECT FOR UPDATE) to serialise increments
+
+    run_groups: Mapped[list["RunGroup"]] = relationship(
+        lazy="raise",
+        back_populates="certificate",
+        primaryjoin="Certificate.certificate_id == RunGroup.certificate_id",
+        foreign_keys="RunGroup.certificate_id",
+    )
 
 
 class RunGroup(Base):
-    """A RunGroup is so users can organise their runs under the label of a specific device/client. Contains the TLS
-    certs that will be utilised by runs under this group. Contains some settings that are unique to all runs in this
-    group."""
+    """A RunGroup is so users can organise their runs under the label of a specific device/client. References the
+    (optional) Certificate that will be utilised by runs under this group. Contains some settings that are unique to all
+    runs in this group."""
 
     __tablename__ = "run_group"
     __table_args__ = (
@@ -62,6 +104,14 @@ class RunGroup(Base):
             "run_group_user_id_idx",
             "user_id",
             "id",
+        ),
+        Index("run_group_certificate_id_idx", "certificate_id"),
+        # Composite FK ensures a RunGroup can only ever reference a Certificate owned by the same User.
+        # (MATCH SIMPLE semantics - a NULL certificate_id is not checked)
+        ForeignKeyConstraint(
+            ["certificate_id", "user_id"],
+            ["certificate.id", "certificate.user_id"],
+            name="run_group_certificate_id_user_id_fkey",
         ),
     )
 
@@ -74,23 +124,22 @@ class RunGroup(Base):
     )  # What test cases are used in this group - should be treated as immutable
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
-    is_device_cert: Mapped[bool | None] = mapped_column(
-        BOOLEAN, nullable=True
-    )  # If True - certificate_pem/key_pem represents a device certificate. Otherwise it's a aggregator certificate
-    certificate_pem: Mapped[bytes | None] = mapped_column(
-        LargeBinary, nullable=True, unique=False, deferred=True
-    )  # PEM encoded - Aggregator certificate (the certificate bundled in the aggregator_certificate_p12_bundle)
-    certificate_generated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    certificate_id: Mapped[int] = mapped_column(
-        Integer, server_default="0"
-    )  # Monotonic per-group cert counter; generation locks the row (SELECT FOR UPDATE) to serialise increments
+    certificate_id: Mapped[int | None] = mapped_column(
+        Integer, nullable=True
+    )  # The assigned Certificate (if any). None means no certificate - runs cannot be started
 
     is_static_uri: Mapped[bool] = mapped_column(
         BOOLEAN
     )  # If True - always use the same URI for all spawned instances (this will limit users to a single run at a time)
 
     runs: Mapped[list["Run"]] = relationship(lazy="raise", back_populates="run_group")
-    user: Mapped["User"] = relationship(lazy="raise")
+    user: Mapped["User"] = relationship(lazy="raise", foreign_keys=[user_id])
+    certificate: Mapped["Certificate | None"] = relationship(
+        lazy="raise",
+        back_populates="run_groups",
+        primaryjoin="RunGroup.certificate_id == Certificate.certificate_id",
+        foreign_keys=[certificate_id],
+    )
 
 
 class RunStatus(IntEnum):
@@ -123,6 +172,7 @@ class Run(Base):
             "testprocedure_id",
             desc("id"),
         ),
+        Index("run_certificate_id_idx", "certificate_id"),
     )
 
     run_id: Mapped[int] = mapped_column(name="id", primary_key=True, autoincrement=True)
@@ -148,6 +198,10 @@ class Run(Base):
     is_device_cert: Mapped[bool] = mapped_column(
         BOOLEAN, server_default="0"
     )  # If True - this run was initialised using device certificate. Otherwise initialised using aggregator certificate
+    certificate_id: Mapped[int | None] = mapped_column(
+        ForeignKey("certificate.id", ondelete="SET NULL"), nullable=True
+    )  # The Certificate this run uses - copied from the RunGroup at creation so that later changes to the RunGroup's
+    # certificate assignment don't affect in progress runs/playlists. None if the certificate has since been deleted
 
     # Playlist support - nullable for single-run executions
     playlist_execution_id: Mapped[str | None] = mapped_column(
@@ -296,7 +350,8 @@ class AuditChangeType(IntEnum):
     RUN_GROUP_CREATED = 200
     RUN_GROUP_UPDATED = 201
     RUN_GROUP_DELETED = 202
-    RUN_GROUP_CERTIFICATE_GENERATED = 203
+    RUN_GROUP_CERTIFICATE_GENERATED = 203  # Legacy (pre Certificate model) - no longer generated
+    RUN_GROUP_CERTIFICATE_ASSIGNED = 204  # The assigned certificate changed (description has details)
 
     # record_ids is Run.run_id
     RUN_CREATED = 300
@@ -305,6 +360,11 @@ class AuditChangeType(IntEnum):
     RUN_STARTED = 303
     RUN_FINALISED = 304
     RUN_REPORT_REGENERATED = 305  # The PDF report (stored in the file store) was regenerated
+
+    # record_ids is Certificate.certificate_id
+    CERTIFICATE_CREATED = 500
+    CERTIFICATE_REGENERATED = 501
+    CERTIFICATE_DELETED = 502
 
     # record_ids is ComplianceRequest.compliance_request_id
     COMPLIANCE_REQUEST_CREATED = 400
