@@ -277,7 +277,7 @@ class DeployRelease(Base):
 
     deploy_release_id: Mapped[int] = mapped_column(name="id", primary_key=True, autoincrement=True)
     release_tag: Mapped[str] = mapped_column(String, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
 
 
 AUDIT_SYSTEM_USER_ID = -1  # AuditLog.user_id for changes made by automated processes (eg background tasks)
