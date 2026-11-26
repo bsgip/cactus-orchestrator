@@ -214,7 +214,7 @@ async def test_spawn_teststack_and_init_run_dynamic_uris(
     await assert_audit_logs(pg_base_config, [(1, AuditChangeType.RUN_CREATED, [response_model.run_id])])
 
 
-@pytest.mark.parametrize("is_device_cert, is_started_response", product([True, False], [True, False]))
+@pytest.mark.parametrize("is_device_cert, is_started_response", list(product([True, False], [True, False])))
 @pytest.mark.asyncio
 async def test_spawn_teststack_and_init_run_static_uri(
     client,

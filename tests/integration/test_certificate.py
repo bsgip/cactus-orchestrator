@@ -42,7 +42,7 @@ def k8s_mock() -> Generator[MockedCertFetch, None, None]:
         )
 
 
-@pytest.mark.parametrize("run_group_id, is_device_cert", product([1, 2], [True, False]))
+@pytest.mark.parametrize("run_group_id, is_device_cert", list(product([1, 2], [True, False])))
 async def test_generate_new_certificate_and_fetch(
     client,
     pg_base_config,

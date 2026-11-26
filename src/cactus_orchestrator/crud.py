@@ -8,6 +8,7 @@ from cactus_schema.orchestrator import AdminStatsResponse
 from cactus_test_definitions import CSIPAusVersion
 from cactus_test_definitions.client import TestProcedureId
 from sqlalchemy import ColumnElement, Select, String, and_, case, cast, delete, func, select, update
+from sqlalchemy.dialects.postgresql import distinct_on
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload, selectinload, undefer
 
@@ -184,7 +185,7 @@ async def select_run_group_counts_for_user(session: AsyncSession, run_group_ids:
     resp = await session.execute(
         select(Run.run_group_id, func.count()).group_by(Run.run_group_id).where(Run.run_group_id.in_(run_group_ids))
     )
-    return dict(resp.tuples().all())
+    return dict(resp.all())
 
 
 async def select_run_group_for_user(
@@ -406,17 +407,17 @@ async def select_group_runs_aggregated_by_procedure(
         )
         .group_by(Run.testprocedure_id)
     )
-    raw_counts = dict(r._tuple() for r in count_resp.all())
+    raw_counts = dict(count_resp.all())
 
     # Do the "distinct on" query for the latest runs by type
     stmt = (
         select(Run.testprocedure_id, Run.all_criteria_met, Run.run_status, Run.run_id, Run.finalised_at)
-        .distinct(Run.testprocedure_id)
+        .ext(distinct_on(Run.testprocedure_id))
         .order_by(Run.testprocedure_id, Run.run_id.desc())
         .where(Run.run_group_id == run_group_id)
     )
     distinct_resp = await session.execute(stmt)
-    raw_criteria = {r._tuple()[0]: r._tuple() for r in distinct_resp.all()}
+    raw_criteria = {r[0]: r for r in distinct_resp.all()}
 
     return [
         ProcedureRunAggregated(
@@ -918,14 +919,14 @@ async def select_admin_stats(
     )
     version_counts: dict[str, int] = {}
     total_run_groups = 0
-    for version, count in version_result.tuples().all():
+    for version, count in version_result.all():
         version_counts[version] = count
         total_run_groups += count
 
     # 4. Runs per ISO week
     iso_week = func.to_char(Run.created_at, 'IYYY-"W"IW').label("iso_week")
     week_result = await session.execute(select(iso_week, func.count()).group_by(iso_week))
-    runs_per_week = dict(week_result.tuples().all())
+    runs_per_week: dict[str, int] = dict(week_result.all())
 
     # 5. Runs per user (join through run_group)
     user_run_result = await session.execute(
@@ -938,7 +939,7 @@ async def select_admin_stats(
         .join(User, RunGroup.user_id == User.user_id)
         .group_by(User.user_id, User.user_name)
     )
-    runs_per_user = dict(user_run_result.tuples().all())
+    runs_per_user = dict(user_run_result.all())
 
     # 6. Per-procedure historical totals (pass/fail across all runs)
     proc_result = await session.execute(
@@ -956,7 +957,7 @@ async def select_admin_stats(
     #    Grouped by procedure; top-level total_passed/total_failed derived in Python
     latest_by_proc = (
         select(Run.testprocedure_id, Run.all_criteria_met)
-        .distinct(Run.run_group_id, Run.testprocedure_id)
+        .ext(distinct_on(Run.run_group_id, Run.testprocedure_id))
         .order_by(Run.run_group_id, Run.testprocedure_id, Run.run_id.desc())
     ).subquery()
     latest_proc_result = await session.execute(
